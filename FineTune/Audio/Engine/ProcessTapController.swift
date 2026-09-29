@@ -99,18 +99,19 @@ final class ProcessTapController: ProcessTapControlling {
     ///   0 = armed (output muted, waiting for first non-silent input)
     ///   1 = ramping (half-cosine fade-in over `_outputGateRampSamples`)
     ///   2 = open   (passthrough)
-    /// After sustained input silence ≥ `_outputGateSilenceHoldSamples`, re-arms to 0.
-    /// UInt8 / Float / Int32 reads/writes are atomic on Apple ARM64/x86-64. Only the
+    /// Re-armed to 0 by the callback on a real resume (IOProc gap) or unmute, not silence.
+    /// UInt8 / Float reads/writes are atomic on Apple ARM64/x86-64. Only the
     /// primary callback advances this state; the secondary callback uses crossfadeState.
     private nonisolated(unsafe) var _outputGateRawPhase: UInt8 = 0
     private nonisolated(unsafe) var _outputGateProgress: Float = 0
-    private nonisolated(unsafe) var _outputGateSilentSamples: Int32 = 0
     /// Sample count for the 40 ms half-cosine ramp (recomputed in activate from device rate).
     private nonisolated(unsafe) var _outputGateRampSamples: Float = 1920
-    /// Sample count for the 200 ms silence-hold before re-arming (recomputed in activate).
-    private nonisolated(unsafe) var _outputGateSilenceHoldSamples: Int32 = 9600
+    /// Previous callback's mute state, to detect the unmute edge.
+    private nonisolated(unsafe) var _outputGateWasMuted: Bool = false
     /// Input below this peak magnitude is treated as silence (≈ -80 dBFS).
     nonisolated private static let outputGateSilenceThreshold: Float = 0.0001
+    /// A callback gap beyond this means CoreAudio idled and restarted the stream.
+    nonisolated private static let outputGateResumeGapNanos: Double = 100_000_000  // 100 ms
 
     // MARK: - Non-RT State (modified only from main thread)
 
@@ -161,7 +162,7 @@ final class ProcessTapController: ProcessTapControlling {
 
     var audioLevel: Float { crossfadeState.isActive ? max(_peakLevel, _secondaryPeakLevel) : _peakLevel }
 
-    private static let hostTimeNanosScale: Double = {
+    nonisolated private static let hostTimeNanosScale: Double = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
         guard info.denom != 0 else { return 1.0 }
@@ -184,6 +185,15 @@ final class ProcessTapController: ProcessTapControlling {
         guard started != 0 else { return false }
         let deltaNanos = Double(mach_absolute_time() &- started) * Self.hostTimeNanosScale
         return deltaNanos >= (minActiveSeconds * 1_000_000_000.0)
+    }
+
+    func hasOutputSampleRateMismatch() -> Bool {
+        guard activated, let primaryUID = currentDeviceUIDs.first,
+              let outputDeviceID = audioDeviceID(for: primaryUID) else { return false }
+        guard let outputRate = try? outputDeviceID.readNominalSampleRate(), outputRate > 0 else { return false }
+        guard let aggregateRate = try? primaryResources.aggregateDeviceID.readNominalSampleRate(),
+              aggregateRate > 0 else { return false }
+        return abs(outputRate - aggregateRate) > 0.5
     }
 
     var currentDeviceVolume: Float {
@@ -418,18 +428,43 @@ final class ProcessTapController: ProcessTapControlling {
         return deviceID.isVirtualDevice()
     }
 
-    /// Recreates the aggregate at the device's new rate on a Bluetooth A2DP↔SCO change. Recreation is
-    /// the only reliable way to re-rate the IOProc — in-place nominal-rate or buffer-size writes
-    /// silence a running aggregate's IOProc, which can't be reconfigured live. Routed through the
-    /// destructive switch with `sourceAlreadySilent: true` so the old aggregate is force-silenced
-    /// first (cutting the rate-mismatched garbage) before the rebuild, then volume ramps back up — a
-    /// brief clean dip rather than a crackle. The switch can't be fully gapless: the BT link itself
-    /// renegotiates across the profile change.
+    /// Rebuilds the aggregate when the output format changes. Recreation is the only reliable way to
+    /// re-rate the IOProc — in-place nominal-rate or buffer-size writes silence a running aggregate's
+    /// IOProc, which can't be reconfigured live. `performFormatChangeSwitch` force-silences first
+    /// (cutting rate-mismatched garbage) before the rebuild for a brief clean dip rather than crackle.
     func recreateForOutputRateChange() async throws {
         guard activated, let primaryUID = currentDeviceUIDs.first else { return }
         guard primaryResources.tapDescription != nil else { throw CrossfadeError.noTapDescription }
         logger.info("[RATE] \(self.app.name): recreating aggregate at new rate")
-        try await performDestructiveDeviceSwitch(to: primaryUID, allDeviceUIDs: currentDeviceUIDs, sourceAlreadySilent: true)
+        try await performFormatChangeSwitch(to: primaryUID, allDeviceUIDs: currentDeviceUIDs)
+    }
+
+    /// Zeroes output on the first HAL notification, before debounce confirms a real format change.
+    func prepareForOutputFormatChange() {
+        _forceSilence = true
+        OSMemoryBarrier()
+    }
+
+    func cancelOutputFormatChangePreparation() {
+        _forceSilence = false
+        OSMemoryBarrier()
+    }
+
+    /// Fast path for format changes: rebuild aggregate devices without the 200 ms stepped crossfade ramp.
+    private func performFormatChangeSwitch(to primaryDeviceUID: String, allDeviceUIDs: [String]? = nil) async throws {
+        let deviceUIDs = allDeviceUIDs ?? [primaryDeviceUID]
+        let targetVolume = _volume
+
+        _forceSilence = true
+        OSMemoryBarrier()
+        defer {
+            _primaryCurrentVolume = targetVolume
+            _forceSilence = false
+            OSMemoryBarrier()
+        }
+
+        try performDeviceSwitch(to: deviceUIDs)
+        try await Task.sleep(for: .milliseconds(30))
     }
 
     private func preferredStereoChannels(for deviceUID: String?) -> (left: Int, right: Int) {
@@ -682,12 +717,11 @@ final class ProcessTapController: ProcessTapControlling {
         // ramps from userVolume→userVolume (no-op) instead of 1.0→userVolume.
         _primaryCurrentVolume = _volume
 
-        // Reset output gate to armed; size the ramp/hold windows from device sample rate.
+        // Reset output gate to armed; size the ramp from device sample rate.
         _outputGateRawPhase = 0
         _outputGateProgress = 0
-        _outputGateSilentSamples = 0
+        _outputGateWasMuted = _isMuted
         _outputGateRampSamples = Float(sampleRate) * 0.040
-        _outputGateSilenceHoldSamples = Int32(sampleRate * 0.200)
 
         err = AudioDeviceStart(primaryResources.aggregateDeviceID, primaryResources.deviceProcID)
         guard err == noErr else {
@@ -1257,6 +1291,13 @@ final class ProcessTapController: ProcessTapControlling {
                 loudnessEqualizerProcessor = newLE
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { _ = oldLE }
             }
+
+            // A rebuilt aggregate must re-arm the soft-start gate for the new format,
+            // while preserving #388's resume/unmute-based gate semantics.
+            _outputGateRawPhase = 0
+            _outputGateProgress = 0
+            _outputGateWasMuted = _isMuted
+            _outputGateRampSamples = Float(deviceSampleRate) * 0.040
         }
     }
 
@@ -1270,47 +1311,31 @@ final class ProcessTapController: ProcessTapControlling {
     ///
     /// Phase encoding: 0 armed (muted), 1 ramping (half-cosine fade-in), 2 open.
     /// Transitions: armed→ramping on first non-silent buffer; ramping→open at progress≥1.
-    /// open→armed after `silenceHoldSamples` of sustained silence (re-arm next wake).
+    /// Re-arming (open→armed) is driven by the callback on a real resume/unmute, not here.
     @inline(__always)
     nonisolated static func advanceOutputGate(
         phase: inout UInt8,
         progress: inout Float,
-        silentSamples: inout Int32,
         maxPeak: Float,
         frameCount: Int,
-        rampSamples: Float,
-        silenceHoldSamples: Int32
+        rampSamples: Float
     ) -> Float {
-        let isSilent = maxPeak <= outputGateSilenceThreshold
         switch phase {
         case 0:  // armed — wait for non-silent input
-            if !isSilent {
+            if maxPeak > outputGateSilenceThreshold {
                 phase = 1
                 progress = 0
-                silentSamples = 0
             }
             return 0
         case 1:  // ramping — half-cosine fade-in
             progress = min(1.0, progress + Float(frameCount) / rampSamples)
             if progress >= 1.0 {
                 phase = 2
-                silentSamples = 0
                 return 1.0
             }
             return 0.5 * (1 - cos(.pi * progress))
-        case 2:  // open — passthrough; track sustained silence for re-arm
-            if isSilent {
-                silentSamples = silentSamples &+ Int32(frameCount)
-                if silentSamples >= silenceHoldSamples {
-                    phase = 0
-                    silentSamples = 0
-                }
-            } else {
-                silentSamples = 0
-            }
+        default:  // open — passthrough
             return 1.0
-        default:
-            return 1.0  // defensive; should be unreachable
         }
     }
 
@@ -1466,8 +1491,18 @@ final class ProcessTapController: ProcessTapControlling {
                 loudnessCompensatorProc.process(input: outputSamples, output: outputSamples, frameCount: frameCount)
             }
 
-            let writtenSampleCount = frameCount * outputChannels
-            SoftLimiter.processBuffer(outputSamples, sampleCount: writtenSampleCount)
+            // Keep the neutral path bit-transparent. The limiter is only needed when
+            // gain or an enabled DSP stage can create samples above unity.
+            let limiterNeeded =
+                targetVol > 1.0
+                || (eq?.isEnabled ?? false)
+                || (autoEQProc?.isEnabled ?? false)
+                || (loudnessEqualizerProc?.isEnabled ?? false)
+                || (loudnessCompensatorProc?.isEnabled ?? false)
+            if limiterNeeded {
+                let writtenSampleCount = frameCount * outputChannels
+                SoftLimiter.processBuffer(outputSamples, sampleCount: writtenSampleCount)
+            }
         }
     }
 
@@ -1493,11 +1528,25 @@ final class ProcessTapController: ProcessTapControlling {
         to outputBufferList: UnsafeMutablePointer<AudioBufferList>,
         callbackID: UInt32
     ) {
-        _lastRenderHostTime = mach_absolute_time()
+        let renderHostTime = mach_absolute_time()
+        let previousRenderHostTime = _lastRenderHostTime
+        _lastRenderHostTime = renderHostTime
         _hasRenderedAudio = true
 
         let isPrimary = (callbackID == _primaryCallbackID)
         let isSecondary = !isPrimary && (callbackID == _secondaryCallbackID)
+
+        // Re-arm the soft-start gate on a real resume (large callback gap) or unmute edge,
+        // not on input silence — that gated every short sound after a brief pause.
+        if isPrimary {
+            let resumed = previousRenderHostTime != 0
+                && Double(renderHostTime &- previousRenderHostTime) * Self.hostTimeNanosScale > Self.outputGateResumeGapNanos
+            if resumed || (_outputGateWasMuted && !_isMuted) {
+                _outputGateRawPhase = 0
+                _outputGateProgress = 0
+            }
+            _outputGateWasMuted = _isMuted
+        }
 
         let outputBuffers = UnsafeMutableAudioBufferListPointer(outputBufferList)
 
@@ -1535,7 +1584,10 @@ final class ProcessTapController: ProcessTapControlling {
             if totalSamplesThisBuffer == 0 {
                 totalSamplesThisBuffer = sampleCount / channels
             }
-            for i in stride(from: 0, to: sampleCount, by: channels) {
+            // Peak detection must inspect every channel. Looking only at the first
+            // sample of each interleaved frame treats hard-right audio as silence and
+            // can incorrectly keep the output gate closed (#429).
+            for i in 0..<sampleCount {
                 let absSample = abs(inputSamples[i])
                 if absSample > maxPeak { maxPeak = absSample }
             }
@@ -1550,22 +1602,17 @@ final class ProcessTapController: ProcessTapControlling {
             _ = crossfadeState.updateProgress(samples: totalSamplesThisBuffer)
         }
 
-        // Advance the gate before the _isMuted early-return: feeding synthetic silence
-        // while muted lets _outputGateSilentSamples accumulate and re-arm the gate after
-        // the silence hold, so unmute after a long mute still gets a fade-in.
-        // _forceSilence is left to the destructive-switch path, which always pairs with
-        // a fresh activate(initial:) and so resets gate state.
+        // Feed silence to the gate while muted so it never ramps on muted output; the
+        // unmute edge re-arms it above so the first sample after unmute still fades in.
         let outputGateMultiplier: Float
         if isPrimary {
             let gateInputPeak: Float = _isMuted ? 0.0 : rawPeak
             outputGateMultiplier = Self.advanceOutputGate(
                 phase: &_outputGateRawPhase,
                 progress: &_outputGateProgress,
-                silentSamples: &_outputGateSilentSamples,
                 maxPeak: gateInputPeak,
                 frameCount: totalSamplesThisBuffer,
-                rampSamples: _outputGateRampSamples,
-                silenceHoldSamples: _outputGateSilenceHoldSamples
+                rampSamples: _outputGateRampSamples
             )
         } else {
             // Secondary tap fades in via crossfadeState; skip the gate to avoid double-attenuation.

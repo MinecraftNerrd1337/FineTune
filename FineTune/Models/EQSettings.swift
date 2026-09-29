@@ -42,6 +42,10 @@ nonisolated struct EQSettings: Codable, Equatable {
         bandGains.map { $0.isFinite ? max(Self.minGainDB, min(Self.maxGainDB, $0)) : 0 }
     }
 
+    /// True when all band gains are at unity (0 dB). In that case the EQ
+    /// transfer function is an identity and processing can be skipped.
+    var isFlat: Bool { clampedGains.allSatisfy { $0 == 0 } }
+
     /// Flat EQ preset
     static let flat = EQSettings()
 }

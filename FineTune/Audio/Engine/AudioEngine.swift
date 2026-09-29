@@ -49,6 +49,8 @@ final class AudioEngine {
     private var staleCleanupTask: Task<Void, Never>?  // Debounced cleanup scheduling
     private var healthMonitorTask: Task<Void, Never>?  // Periodic tap health monitor
     private var tapRecoveryCooldownUntil: [pid_t: Date] = [:]  // Prevents tap recreation thrashing
+    /// UIDs currently undergoing format-change recreation; suppresses false-alarm un-silence and health-monitor re-entry.
+    private var outputFormatChangeInFlight: Set<String> = []
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioEngine")
 
     // MARK: - Priority State Machine
@@ -350,6 +352,7 @@ final class AudioEngine {
         }
 
         processMonitor.onAppsChanged = { [weak self] apps in
+            self?.releaseCallPassthroughTaps()
             self?.applyPersistedSettings()
             self?.scheduleStaleCleanup()
         }
@@ -362,9 +365,15 @@ final class AudioEngine {
             realMonitor.inputPriorityOrder = { [weak self] in
                 self?.settingsManager.inputDevicePriorityOrder ?? []
             }
-            realMonitor.onBTDeviceSampleRateChanged = { [weak self] uid, newRate in
+            realMonitor.onOutputDeviceFormatChanging = { [weak self] uid in
+                self?.prepareTapsForOutputFormatChange(uid: uid)
+            }
+            realMonitor.onOutputDeviceFormatUnchanged = { [weak self] uid in
+                self?.cancelTapsOutputFormatChangePreparation(uid: uid)
+            }
+            realMonitor.onOutputDeviceFormatChanged = { [weak self] uid in
                 Task { @MainActor [weak self] in
-                    await self?.handleBTDeviceSampleRateChanged(uid: uid, newRate: newRate)
+                    await self?.handleOutputDeviceFormatChanged(uid: uid)
                 }
             }
         }
@@ -473,6 +482,44 @@ final class AudioEngine {
         appDeviceRouting.removeValue(forKey: app.id)
         followsDefault.remove(app.id)
         appliedPIDs.remove(app.id)
+    }
+
+    // MARK: - Call Passthrough
+
+    /// True when this app should be left untapped because it is actively
+    /// capturing audio input (i.e. on a call) and call passthrough is enabled.
+    ///
+    /// Tapping a call app re-renders its output through the aggregate device
+    /// with added latency, so what reaches the speaker no longer matches the
+    /// reference signal macOS's acoustic echo canceller was handed. The AEC
+    /// can't subtract what it can't predict: the far end hears themselves and
+    /// the OS ducks the call output to contain feedback (#113, #404). Unlike
+    /// a bundle-ID exclusion list, `isRunningInput` detects any current or
+    /// future call app with no list to maintain.
+    private func isCallPassthrough(_ app: AudioApp) -> Bool {
+        settingsManager.appSettings.callPassthroughEnabled && app.isRunningInput
+    }
+
+    /// Releases live taps for apps that started capturing input, mirroring the
+    /// teardown in `ignoreApp()` minus persistence. Routing state is kept so
+    /// the app re-taps onto the same device after the call; clearing
+    /// `appliedPIDs` lets `applyPersistedSettings()` re-provision it.
+    private func releaseCallPassthroughTaps() {
+        guard settingsManager.appSettings.callPassthroughEnabled else { return }
+        for app in apps where app.isRunningInput {
+            guard let tap = taps.removeValue(forKey: app.id) else { continue }
+            tap.invalidate()
+            appliedPIDs.remove(app.id)
+            logger.info("Call passthrough: released tap for \(app.name) while it captures input")
+        }
+    }
+
+    /// Re-evaluates call passthrough after the user toggles the setting:
+    /// releases taps for in-call apps when enabling, or re-provisions them
+    /// when disabling.
+    func reconcileCallPassthrough() {
+        releaseCallPassthroughTaps()
+        applyPersistedSettings()
     }
 
     /// Unhide an app by its persistence identifier.
@@ -1053,6 +1100,7 @@ final class AudioEngine {
         guard !deviceUIDs.isEmpty else { return }
         guard taps[app.id] == nil else { return }
         guard permission.status == .authorized else { return }
+        guard !isCallPassthrough(app) else { return }
 
         let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
         do {
@@ -1100,6 +1148,10 @@ final class AudioEngine {
         for app in apps {
             guard !appliedPIDs.contains(app.id) else { continue }
             guard !settingsManager.isIgnored(app.persistenceIdentifier) else { continue }
+            // Call passthrough: leave apps capturing input untapped for the
+            // duration of the call. releaseCallPassthroughTaps() cleared
+            // appliedPIDs, so the tap is re-provisioned here once input stops.
+            guard !isCallPassthrough(app) else { continue }
 
             // Load saved device selection mode (single vs multi)
             let savedMode = volumeState.loadSavedDeviceSelectionMode(for: app.id, identifier: app.persistenceIdentifier)
@@ -1214,6 +1266,7 @@ final class AudioEngine {
     private func ensureTapExists(for app: AudioApp, deviceUID: String) {
         guard taps[app.id] == nil else { return }
         guard permission.status == .authorized else { return }
+        guard !isCallPassthrough(app) else { return }
 
         let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: [deviceUID], isFollowsDefault: followsDefault.contains(app.id))
         do {
@@ -1884,6 +1937,7 @@ final class AudioEngine {
         guard healthMonitorTask == nil else { return }
         healthMonitorTask = Task { @MainActor [weak self] in
             var consecutiveMisses: [pid_t: Int] = [:]
+            var consecutiveRateMismatches: [pid_t: Int] = [:]
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
@@ -1909,7 +1963,23 @@ final class AudioEngine {
                     let isActivelyStreaming = self.processMonitor.activeApps.contains { $0.id == pid }
                     guard isActivelyStreaming else {
                         consecutiveMisses[pid] = 0
+                        consecutiveRateMismatches[pid] = 0
                         continue
+                    }
+
+                    // Skip rate-mismatch recovery while a format change is already in flight for this device.
+                    if let uid = tap.currentDeviceUID, self.outputFormatChangeInFlight.contains(uid) {
+                        consecutiveRateMismatches[pid] = 0
+                    } else if tap.hasOutputSampleRateMismatch() {
+                        let mismatches = (consecutiveRateMismatches[pid] ?? 0) + 1
+                        consecutiveRateMismatches[pid] = mismatches
+                        if mismatches >= 2, let uid = tap.currentDeviceUID {
+                            self.logger.warning("Tap for PID \(pid) output rate mismatch (\(mismatches) checks), recreating aggregate")
+                            consecutiveRateMismatches[pid] = 0
+                            await self.handleOutputDeviceFormatChanged(uid: uid)
+                        }
+                    } else {
+                        consecutiveRateMismatches[pid] = 0
                     }
 
                     if tap.hasRecentAudioCallback(within: 3.0) {
@@ -1928,6 +1998,7 @@ final class AudioEngine {
 
                 // Prune entries for PIDs no longer tracked
                 consecutiveMisses = consecutiveMisses.filter { self.taps[$0.key] != nil }
+                consecutiveRateMismatches = consecutiveRateMismatches.filter { self.taps[$0.key] != nil }
                 self.tapRecoveryCooldownUntil = self.tapRecoveryCooldownUntil.filter { self.taps[$0.key] != nil }
             }
         }
@@ -1980,16 +2051,33 @@ final class AudioEngine {
         }
     }
 
-    /// Recreates the aggregate at the device's new rate for every tap on a BT output that changed
-    /// sample rate (A2DP↔SCO), so each tap's IOProc re-rates to match. Falls back to a full tap
-    /// recreate if the in-controller recreation throws.
-    private func handleBTDeviceSampleRateChanged(uid: String, newRate: Double) async {
-        logger.info("[RATE] BT output \(uid, privacy: .public) → \(newRate, format: .fixed(precision: 0)) Hz — recreating affected taps (clean dip)")
+    /// Silence every tap routed to `uid` while the HAL settles (called before debounce confirms the change).
+    private func prepareTapsForOutputFormatChange(uid: String) {
+        for tap in taps.values where tap.currentDeviceUIDs.contains(uid) {
+            tap.prepareForOutputFormatChange()
+        }
+    }
+
+    private func cancelTapsOutputFormatChangePreparation(uid: String) {
+        guard !outputFormatChangeInFlight.contains(uid) else { return }
+        for tap in taps.values where tap.currentDeviceUIDs.contains(uid) {
+            tap.cancelOutputFormatChangePreparation()
+        }
+    }
+
+    /// Recreates the aggregate at the device's new rate/format for every affected tap so each IOProc
+    /// re-rates to match. Falls back to a full tap recreate if in-controller recreation throws.
+    private func handleOutputDeviceFormatChanged(uid: String) async {
+        guard !outputFormatChangeInFlight.contains(uid) else { return }
+        outputFormatChangeInFlight.insert(uid)
+        defer { outputFormatChangeInFlight.remove(uid) }
+
+        logger.info("[RATE] Output device \(uid, privacy: .public) format changed — recreating affected taps (clean dip)")
         let affected = taps.filter { $0.value.currentDeviceUIDs.contains(uid) }
         for (pid, tap) in affected {
             do {
-                logger.info("[RATE] Recreating tap for PID \(pid)")
                 try await tap.recreateForOutputRateChange()
+                tapRecoveryCooldownUntil[pid] = Date().addingTimeInterval(20)
             } catch {
                 logger.error("[RATE] Recreate failed for PID \(pid): \(error.localizedDescription) — falling back to full recreate")
                 await recreateTap(for: pid)
