@@ -7,6 +7,7 @@ import os
 private struct AppFingerprint: Hashable {
     let pid: pid_t
     let objectIDs: [AudioObjectID]
+    let hasRunningProcess: Bool
     let isRunningInput: Bool
 }
 
@@ -15,6 +16,11 @@ private struct AppFingerprint: Hashable {
 final class AudioProcessMonitor: AudioProcessMonitoring {
     private(set) var activeApps: [AudioApp] = []
     var onAppsChanged: (([AudioApp]) -> Void)?
+
+    /// Snapshot of the previous streaming/input state. We cannot derive the
+    /// "old" streaming state from activeApps during refresh because the Core
+    /// Audio object properties already contain the new state by then.
+    private var previousFingerprints: Set<AppFingerprint> = []
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AudioProcessMonitor")
 
@@ -224,8 +230,11 @@ final class AudioProcessMonitor: AudioProcessMonitoring {
 
             for objectID in processIDs {
                 guard let pid = try? objectID.readProcessPID(), pid != myPID else { continue }
-                guard objectID.readProcessIsRunning() else { continue }
 
+                // Keep non-streaming Core Audio process objects in activeApps so
+                // their kAudioProcessPropertyIsRunning transition can be observed.
+                // AudioEngine filters them from the user-facing/processing list
+                // until they actually begin streaming.
                 let isRunningInput = objectID.readProcessIsRunningInput()
 
                 // Try to find the parent app (for helper processes like Safari Graphics and Media)
@@ -293,12 +302,23 @@ final class AudioProcessMonitor: AudioProcessMonitoring {
 
             let sorted = appsByPID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-            // Only fire callback if the app list actually changed (avoids churn from periodic refresh)
-            let oldSet = Set(activeApps.map { AppFingerprint(pid: $0.id, objectIDs: $0.processObjectIDs, isRunningInput: $0.isRunningInput) })
-            let newSet = Set(sorted.map { AppFingerprint(pid: $0.id, objectIDs: $0.processObjectIDs, isRunningInput: $0.isRunningInput) })
+            // Include live Core Audio streaming state in the fingerprint so
+            // silent -> playing and playing -> silent transitions trigger the
+            // engine even when the process/object list itself does not change.
+            // previousFingerprints must be stored separately: recomputing the
+            // "old" value from activeApps would read the already-updated HAL state.
+            let newSet = Set(sorted.map {
+                AppFingerprint(
+                    pid: $0.id,
+                    objectIDs: $0.processObjectIDs,
+                    hasRunningProcess: $0.processObjectIDs.contains { $0.readProcessIsRunning() },
+                    isRunningInput: $0.isRunningInput
+                )
+            })
 
             activeApps = sorted
-            if oldSet != newSet {
+            if previousFingerprints != newSet {
+                previousFingerprints = newSet
                 onAppsChanged?(activeApps)
             }
 

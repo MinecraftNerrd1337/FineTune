@@ -1,4 +1,5 @@
 import AudioToolbox
+import AppKit
 import Testing
 @testable import FineTune
 
@@ -66,5 +67,43 @@ struct OutputFormatChangeTests {
         let old = OutputFormatFingerprint(sampleRate: 48_000, formatID: kAudioFormatLinearPCM, bitsPerChannel: 24)
         let invalid = OutputFormatFingerprint(sampleRate: 0, formatID: 0, bitsPerChannel: 0)
         #expect(!OutputFormatFingerprint.isMeaningfulChange(old: old, new: invalid))
+    }    
+    @Test("Provisional format-change silence self-recovers if debounce never resolves")
+    @MainActor
+    func provisionalSilenceHasFailSafe() async {
+        let app = AudioApp(
+            id: 99881,
+            processObjectIDs: [],
+            name: "FormatFailSafeTest",
+            icon: NSImage(),
+            bundleID: "com.test.formatsilence"
+        )
+        let tap = ProcessTapController(app: app, targetDeviceUID: "test-output")
+
+        tap.prepareForOutputFormatChange()
+        #expect(tap.isForceSilenced)
+
+        try? await Task.sleep(for: .milliseconds(ProcessTapController.formatChangeSilenceFailSafeMs + 150))
+        #expect(!tap.isForceSilenced)
     }
+
+    @Test("Normal format-change cancellation releases silence immediately")
+    @MainActor
+    func provisionalSilenceCancelsImmediately() {
+        let app = AudioApp(
+            id: 99882,
+            processObjectIDs: [],
+            name: "FormatCancelTest",
+            icon: NSImage(),
+            bundleID: "com.test.formatcancel"
+        )
+        let tap = ProcessTapController(app: app, targetDeviceUID: "test-output")
+
+        tap.prepareForOutputFormatChange()
+        #expect(tap.isForceSilenced)
+
+        tap.cancelOutputFormatChangePreparation()
+        #expect(!tap.isForceSilenced)
+    }
+
 }

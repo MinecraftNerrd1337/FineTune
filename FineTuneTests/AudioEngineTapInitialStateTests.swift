@@ -115,8 +115,18 @@ final class RecordingProcessTapController: ProcessTapControlling {
 final class StubProcessMonitor: AudioProcessMonitoring {
     var activeApps: [AudioApp] = []
     var onAppsChanged: (([AudioApp]) -> Void)?
+
+    /// nil preserves the historical stub behavior: every supplied active app
+    /// is considered streaming. Tests that exercise silent monitor entries can
+    /// explicitly provide an empty/subset set.
+    var streamingAppIDs: Set<pid_t>? = nil
+
     func start() {}
     func stop() {}
+
+    func isStreaming(_ app: AudioApp) -> Bool {
+        streamingAppIDs?.contains(app.id) ?? true
+    }
 }
 
 // MARK: - Fixture
@@ -127,6 +137,7 @@ private struct Fixture {
     let settings: SettingsManager
     let deviceMonitor: MockAudioDeviceMonitor
     let deviceVolume: MockDeviceVolumeProviding
+    let processMonitor: StubProcessMonitor
     let app: AudioApp
     let device: AudioDevice
     let lastTap: () -> RecordingProcessTapController?
@@ -195,6 +206,7 @@ private func makeFixture(
         settings: settings,
         deviceMonitor: deviceMonitor,
         deviceVolume: mockVolume,
+        processMonitor: processMonitor,
         app: app,
         device: device,
         lastTap: { box.last }
@@ -337,6 +349,20 @@ struct AudioEngineTapInitialStateTests {
 
         let snap = try #require(capturedInitial(fix))
         #expect(snap.autoEQProfileID == nil)
+    }
+
+    @Test("non-streaming monitor-reported app is excluded from engine apps and not tapped")
+    func silentAppIsNotTappedBeforePlayback() {
+        let fix = makeFixture()
+        fix.deviceVolume.defaultDeviceUID = fix.device.uid
+        fix.processMonitor.streamingAppIDs = []
+
+        // The monitor intentionally retains the app for lifecycle observation
+        // while reporting that it is not currently producing output.
+        fix.engine.applyPersistedSettings()
+
+        #expect(fix.lastTap() == nil)
+        #expect(fix.engine.displayableApps.isEmpty)
     }
 
     // MARK: Ordering / post-activation behaviour

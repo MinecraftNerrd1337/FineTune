@@ -410,8 +410,13 @@ final class AudioEngine {
         }
     }
 
+    /// Audio apps currently streaming. AudioProcessMonitor deliberately keeps
+    /// silent Core Audio process objects around so their later isRunning
+    /// transition can be detected; the engine/UI should still operate only on
+    /// processes that are actually producing output.
     var apps: [AudioApp] {
         processMonitor.activeApps
+            .filter { processMonitor.isStreaming($0) }
     }
 
     // MARK: - Displayable Apps (Active + Pinned Inactive)
@@ -1959,8 +1964,10 @@ final class AudioEngine {
                     guard tap.isHealthCheckEligible(minActiveSeconds: 5.0) else { continue }
 
                     // Only health-check apps that are actively streaming (isRunning=true).
-                    // Paused apps have no callbacks, which is normal — not a health signal.
-                    let isActivelyStreaming = self.processMonitor.activeApps.contains { $0.id == pid }
+                    // AudioProcessMonitor also retains silent process objects for
+                    // transition detection, so ask the monitor for live streaming state.
+                    let isActivelyStreaming = self.processMonitor.activeApps.first { $0.id == pid }
+                        .map { self.processMonitor.isStreaming($0) } ?? false
                     guard isActivelyStreaming else {
                         consecutiveMisses[pid] = 0
                         consecutiveRateMismatches[pid] = 0

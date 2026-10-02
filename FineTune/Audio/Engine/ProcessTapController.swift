@@ -156,11 +156,17 @@ final class ProcessTapController: ProcessTapControlling {
     private var isSwitching = false
     /// Cancellable crossfade task — cancelled when a new switch starts
     private var crossfadeTask: Task<Void, Error>?
+    /// Fail-safe for provisional format-change silence. A HAL notification can be
+    /// cancelled/replaced before debounce resolves; without this watchdog the tap
+    /// could remain permanently force-silenced.
+    private var formatChangeSilenceFailSafeTask: Task<Void, Never>?
+    nonisolated static let formatChangeSilenceFailSafeMs = 1_000
     private var didLogEQBypassForMultichannel = false
 
     // MARK: - Public Properties
 
     var audioLevel: Float { crossfadeState.isActive ? max(_peakLevel, _secondaryPeakLevel) : _peakLevel }
+    var isForceSilenced: Bool { _forceSilence }
 
     nonisolated private static let hostTimeNanosScale: Double = {
         var info = mach_timebase_info_data_t()
@@ -440,12 +446,28 @@ final class ProcessTapController: ProcessTapControlling {
     }
 
     /// Zeroes output on the first HAL notification, before debounce confirms a real format change.
+    /// The silence is provisional and self-clears if the HAL/debounce chain never reaches either
+    /// the confirmed-change or unchanged callback.
     func prepareForOutputFormatChange() {
+        formatChangeSilenceFailSafeTask?.cancel()
+
         _forceSilence = true
         OSMemoryBarrier()
+
+        formatChangeSilenceFailSafeTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Self.formatChangeSilenceFailSafeMs))
+            guard !Task.isCancelled, let self else { return }
+
+            self._forceSilence = false
+            OSMemoryBarrier()
+            self.formatChangeSilenceFailSafeTask = nil
+            self.logger.warning("[RATE] Format-change silence fail-safe released for \(self.app.name)")
+        }
     }
 
     func cancelOutputFormatChangePreparation() {
+        formatChangeSilenceFailSafeTask?.cancel()
+        formatChangeSilenceFailSafeTask = nil
         _forceSilence = false
         OSMemoryBarrier()
     }
@@ -455,6 +477,10 @@ final class ProcessTapController: ProcessTapControlling {
         let deviceUIDs = allDeviceUIDs ?? [primaryDeviceUID]
         let targetVolume = _volume
 
+        // A confirmed format change owns the silence lifecycle from here; do not
+        // let the provisional watchdog unmute while the aggregate is rebuilding.
+        formatChangeSilenceFailSafeTask?.cancel()
+        formatChangeSilenceFailSafeTask = nil
         _forceSilence = true
         OSMemoryBarrier()
         defer {
@@ -876,6 +902,11 @@ final class ProcessTapController: ProcessTapControlling {
         _invalidating = true
         activated = false
 
+        formatChangeSilenceFailSafeTask?.cancel()
+        formatChangeSilenceFailSafeTask = nil
+        _forceSilence = false
+        OSMemoryBarrier()
+
         _lastRenderHostTime = 0
         _activationHostTime = 0
         _hasRenderedAudio = false
@@ -1173,10 +1204,20 @@ final class ProcessTapController: ProcessTapControlling {
         let deviceUIDs = allDeviceUIDs ?? [primaryDeviceUID]
         let originalVolume = _volume
 
+        // If this switch races a provisional format-change notification, this
+        // operation now owns _forceSilence until its defer clears it.
+        formatChangeSilenceFailSafeTask?.cancel()
+        formatChangeSilenceFailSafeTask = nil
         _forceSilence = true
         OSMemoryBarrier()
-        // LIFE-011: Ensure _forceSilence is always cleared, even if switch throws
-        defer { _forceSilence = false; OSMemoryBarrier() }
+        // A cancelled/failed switch must never strand either silence mechanism.
+        // In particular, cancellation during the settle/ramp window used to leave
+        // _volume at 0 even after _forceSilence was cleared.
+        defer {
+            _volume = originalVolume
+            _forceSilence = false
+            OSMemoryBarrier()
+        }
         logger.info("[SWITCH-DESTROY] Enabled _forceSilence=true (sourceAlreadySilent=\(sourceAlreadySilent))")
 
         if !sourceAlreadySilent {
