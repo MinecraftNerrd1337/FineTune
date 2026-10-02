@@ -98,6 +98,32 @@ private func makeFixture(activeApp: AudioApp) -> Fixture {
 @MainActor
 struct AudioEngineCallPassthroughTests {
 
+    @Test("An app first discovered during a call has a displayable passthrough state without a route")
+    func firstDiscoveryDuringCallIsDisplayable() {
+        let app = makeApp(isRunningInput: true)
+        let fix = makeFixture(activeApp: app)
+
+        fix.engine.applyPersistedSettings()
+
+        #expect(fix.engine.displayableApps.contains { $0.id == app.persistenceIdentifier })
+        #expect(fix.engine.getDeviceUID(for: app) == nil)
+        #expect(fix.engine.isCallPassthrough(app))
+        #expect(fix.lastTap() == nil)
+    }
+
+    @Test("The popup passthrough state ends when input stops or the setting is disabled")
+    func passthroughDisplayStateTracksInputAndSetting() {
+        let onCall = makeApp(isRunningInput: true)
+        let fix = makeFixture(activeApp: onCall)
+        #expect(fix.engine.isCallPassthrough(onCall))
+        #expect(!fix.engine.isCallPassthrough(makeApp(isRunningInput: false)))
+
+        var settings = fix.settings.appSettings
+        settings.callPassthroughEnabled = false
+        fix.settings.updateAppSettings(settings)
+        #expect(!fix.engine.isCallPassthrough(onCall))
+    }
+
     @Test("No tap is created for an app capturing input while passthrough is enabled (default)")
     func tapCreationSkippedDuringCall() {
         let app = makeApp(isRunningInput: true)

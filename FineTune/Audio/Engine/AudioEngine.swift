@@ -501,7 +501,7 @@ final class AudioEngine {
     /// the OS ducks the call output to contain feedback (#113, #404). Unlike
     /// a bundle-ID exclusion list, `isRunningInput` detects any current or
     /// future call app with no list to maintain.
-    private func isCallPassthrough(_ app: AudioApp) -> Bool {
+    func isCallPassthrough(_ app: AudioApp) -> Bool {
         settingsManager.appSettings.callPassthroughEnabled && app.isRunningInput
     }
 

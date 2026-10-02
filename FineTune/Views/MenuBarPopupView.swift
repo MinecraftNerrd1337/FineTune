@@ -860,7 +860,16 @@ struct MenuBarPopupView: View {
     /// Row for an active app (currently producing audio)
     @ViewBuilder
     private func activeAppRow(app: AudioApp, displayableApp: DisplayableApp, userPresets: [UserEQPreset], scrollProxy: ScrollViewProxy) -> some View {
-        if let deviceUID = audioEngine.getDeviceUID(for: app) {
+        // Passthrough apps can be discovered before any routing state exists.
+        // Keep them visible without presenting controls that cannot affect their audio.
+        if audioEngine.isCallPassthrough(app) {
+            CallPassthroughAppRow(
+                app: app,
+                isFocused: hasKeyboardEngaged && selectedRow == .app(persistenceID: displayableApp.id),
+                onAppActivate: { activateApp(pid: app.id, bundleID: app.bundleID) }
+            )
+            .id(PopupKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
+        } else if let deviceUID = audioEngine.getDeviceUID(for: app) {
             AppRowWithLevelPolling(
                 app: app,
                 volume: audioEngine.getVolume(for: app),
@@ -1317,6 +1326,7 @@ struct MenuBarPopupView: View {
         switch target {
         case .app(let persistenceID):
             if let app = audioEngine.apps.first(where: { $0.persistenceIdentifier == persistenceID }) {
+                guard !audioEngine.isCallPassthrough(app) else { return .handled }
                 applyAppVolumeStep(
                     currentGain: audioEngine.currentVolume(for: app),
                     currentMute: audioEngine.isMuted(for: app),
@@ -1385,6 +1395,7 @@ struct MenuBarPopupView: View {
         switch target {
         case .app(let persistenceID):
             if let app = audioEngine.apps.first(where: { $0.persistenceIdentifier == persistenceID }) {
+                guard !audioEngine.isCallPassthrough(app) else { return .handled }
                 audioEngine.toggleMute(for: app)
                 return .handled
             }
@@ -1427,6 +1438,11 @@ struct MenuBarPopupView: View {
             NSApp.keyWindow?.resignKey()
             return .handled
         case .app(let persistenceID):
+            if let app = audioEngine.apps.first(where: { $0.persistenceIdentifier == persistenceID }),
+               audioEngine.isCallPassthrough(app) {
+                activateApp(pid: app.id, bundleID: app.bundleID)
+                return .handled
+            }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
                 expandedRowID = (expandedRowID == persistenceID) ? nil : persistenceID
             }
