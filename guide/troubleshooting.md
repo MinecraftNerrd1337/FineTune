@@ -57,7 +57,9 @@ By default, devices are added to the bottom of the list in the order they're fir
 2. **Drag** devices to reorder, or **click the priority number** and type a new position
 3. Click the **checkmark** to exit edit mode — your order is saved
 
-The device at position 1 has the highest priority. FineTune will always prefer the highest-priority device that's currently connected.
+The device at position 1 has the highest priority. FineTune uses this order when selecting newly connected devices and choosing a fallback. A later output change in macOS is respected, even if it selects a lower-priority device.
+
+If you select an output from macOS Sound settings or Control Center, FineTune follows that selection immediately. It does not distinguish manual choices from macOS automatic Bluetooth switches by timing. Apps explicitly routed to a specific device keep their own routing.
 
 Input and output devices have **separate priority lists** — switch between them using the tabs in edit mode.
 

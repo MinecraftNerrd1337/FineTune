@@ -39,12 +39,9 @@ final class AudioEngine {
     private var appliedPIDs: Set<pid_t> = []
     private var appDeviceRouting: [pid_t: String] = [:]  // pid → deviceUID (always explicit)
     private var followsDefault: Set<pid_t> = []  // Apps that follow system default
-    /// The last output default confirmed by FineTune (user change or programmatic switch).
-    /// Used to restore after macOS auto-switches to a lower-priority device.
-    private var lastConfirmedDefaultUID: String?
-    /// Timestamp of the last auto-switch override. Used to distinguish rapid BT auto-switches
-    /// (< 1s apart) from deliberate user changes (> 1s after last override).
-    private var lastAutoSwitchOverrideTime: Date?
+    /// A default-output event can arrive before the device-list event.
+    /// Preserve that system choice until its device becomes available.
+    private var pendingExternalOutputUID: String?
     private var pendingCleanup: [pid_t: Task<Void, Never>] = [:]  // Grace period for stale tap cleanup
     private var staleCleanupTask: Task<Void, Never>?  // Debounced cleanup scheduling
     private var healthMonitorTask: Task<Void, Never>?  // Periodic tap health monitor
@@ -61,7 +58,6 @@ final class AudioEngine {
         case pendingAutoSwitch(connectedDeviceUID: String, timeoutTask: Task<Void, Never>)
     }
 
-    private var outputPriorityState: PriorityState = .stable
     private var inputPriorityState: PriorityState = .stable
 
     /// Grace period for auto-switch detection (wired devices)
@@ -252,7 +248,9 @@ final class AudioEngine {
         }
 
         outputEchoTracker.onTimeout = { [weak self] _ in
-            self?.restoreConfirmedDefault()
+            // HAL can coalesce our acknowledgements. Reconcile the current
+            // system output; a missed echo must never undo a newer selection.
+            self?.reconcileDefaultOutput()
         }
         inputEchoTracker.onTimeout = { [weak self] _ in
             guard let self, self.settingsManager.appSettings.lockInputDevice else { return }
@@ -283,8 +281,6 @@ final class AudioEngine {
 
                 self.applyPersistedSettings()
                 self.registerNewDevicesInPriority()
-                // Seed the confirmed default from whatever macOS has at startup
-                self.lastConfirmedDefaultUID = self.deviceVolumeMonitor.defaultDeviceUID
                 if manager.appSettings.lockInputDevice {
                     self.restoreLockedInputDevice()
                 }
@@ -939,7 +935,7 @@ final class AudioEngine {
         guard deviceVolumeMonitor.setDefaultDevice(deviceID) else { return false }
         if let uid = deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid {
             outputEchoTracker.increment(uid)
-            lastConfirmedDefaultUID = uid
+            pendingExternalOutputUID = nil
             routeFollowsDefaultApps(to: uid)
         }
         return true
@@ -1298,24 +1294,6 @@ final class AudioEngine {
         }
     }
 
-    /// Restores the default to `lastConfirmedDefaultUID` (what the user/FineTune intended).
-    /// Falls back to highest-priority device if the confirmed device is gone.
-    private func restoreConfirmedDefault() {
-        if let restoreUID = lastConfirmedDefaultUID,
-           let device = deviceMonitor.device(for: restoreUID),
-           isAliveCheck(device.id) {
-            if deviceVolumeMonitor.defaultDeviceUID != restoreUID {
-                if deviceVolumeMonitor.setDefaultDevice(device.id) {
-                    outputEchoTracker.increment(restoreUID)
-                    logger.info("Restored default → \(device.name)")
-                }
-            }
-            routeFollowsDefaultApps(to: restoreUID)
-        } else {
-            reEvaluateOutputDefault()
-        }
-    }
-
     /// Ensures system default matches highest-priority alive connected device.
     /// Routes followsDefault apps and switches their taps if default changes.
     /// Returns the resolved target UID.
@@ -1336,7 +1314,6 @@ final class AudioEngine {
             }
         }
 
-        lastConfirmedDefaultUID = target.uid
         routeFollowsDefaultApps(to: target.uid)
         return target.uid
     }
@@ -1396,10 +1373,8 @@ final class AudioEngine {
         // Clean up alive watcher — use UID lookup since device is already removed from monitor
         removeAliveWatcher(forUID: deviceUID)
 
-        // If we were waiting for macOS to auto-switch to this device, cancel — it's gone
-        if case .pendingAutoSwitch(let uid, let task) = outputPriorityState, uid == deviceUID {
-            task.cancel()
-            outputPriorityState = .stable
+        if pendingExternalOutputUID == deviceUID {
+            pendingExternalOutputUID = nil
         }
 
         // Snapshot before async callbacks can update it
@@ -1576,11 +1551,16 @@ final class AudioEngine {
             }
         }
 
-        // Only override the default if the newly connected device IS the highest-priority
-        // device (i.e., a higher-priority device just came back). If a lower-priority device
-        // connects while the user is on a higher-priority device, respect the current default —
-        // the user chose it. We still enter PENDING_AUTOSWITCH to guard against macOS
-        // auto-switching to the new device.
+        // A default event may precede discovery. Honour that system choice
+        // before applying connection-time priorities.
+        if let pendingUID = pendingExternalOutputUID,
+           deviceMonitor.device(for: pendingUID) != nil {
+            acceptDefaultOutput(pendingUID)
+            return
+        }
+
+        // Priority selects newly connected preferred devices once. Subsequent
+        // macOS output changes are authoritative, including Bluetooth changes.
         let currentDefault = deviceVolumeMonitor.defaultDeviceUID
         let isNewDeviceHigherPriority = (deviceUID == Self.resolveHighestPriority(
             priorityOrder: settingsManager.devicePriorityOrder,
@@ -1588,48 +1568,14 @@ final class AudioEngine {
             isAlive: isAliveCheck
         )?.uid)
 
-        // If this device is present but not alive, watch for it to become alive
         if let device = deviceMonitor.device(for: deviceUID),
            !isAliveCheck(device.id) {
             installAliveWatcher(deviceID: device.id, uid: deviceUID, name: deviceName)
         }
 
         if isNewDeviceHigherPriority, deviceUID != currentDefault {
-            // A higher-priority device reconnected — switch to it
             reEvaluateOutputDefault()
-        } else if !isNewDeviceHigherPriority, currentDefault == deviceUID {
-            // macOS already auto-switched to the lower-priority device — restore
-            // what the user was on (not highest priority — they may have chosen a mid-priority device)
-            restoreConfirmedDefault()
         }
-
-        // Cancel any existing PENDING_AUTOSWITCH before entering a new one.
-        if case .pendingAutoSwitch(_, let oldTask) = outputPriorityState {
-            oldTask.cancel()
-            outputPriorityState = .stable
-        }
-
-        // Always enter PENDING_AUTOSWITCH for the newly connected device.
-        // macOS may auto-switch to it multiple times during BT firmware handshake.
-        // Without this grace period, auto-switches would be treated as "genuine user change".
-        let transport = deviceMonitor.device(for: deviceUID)?.id.readTransportType()
-        let timeout = (transport == .bluetooth || transport == .bluetoothLE)
-            ? btAutoSwitchGracePeriod
-            : autoSwitchGracePeriod
-
-        let timeoutTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(timeout))
-            guard let self, !Task.isCancelled else { return }
-            self.outputPriorityState = .stable
-            self.logger.debug("Auto-switch grace period expired, no macOS switch detected")
-        }
-
-        lastAutoSwitchOverrideTime = nil
-        outputPriorityState = .pendingAutoSwitch(
-            connectedDeviceUID: deviceUID,
-            timeoutTask: timeoutTask
-        )
-        logger.debug("Entered PENDING_AUTOSWITCH for \(deviceName) (\(timeout)s grace)")
     }
 
     // MARK: - Alive Watchers
@@ -1733,99 +1679,39 @@ final class AudioEngine {
         }
     }
 
-    /// Called when system default output device changes - switches apps that follow default
+    /// Reconcile a missed acknowledgement with the currently observed system output.
+    func reconcileDefaultOutput() {
+        guard let uid = deviceVolumeMonitor.defaultDeviceUID else { return }
+        acceptDefaultOutput(uid)
+    }
+
+    /// Accept every observed choice without guessing who initiated it. An old
+    /// acknowledgement can share a UID with a newer manual selection, so
+    /// consuming an echo must not skip routing that observed selection.
     private func handleDefaultDeviceChanged(_ newDefaultUID: String) {
-        // State machine: if we're waiting for macOS to auto-switch after a device connect,
-        // check whether this change is the expected auto-switch or user intent.
-        if case .pendingAutoSwitch(let pendingUID, let timeoutTask) = outputPriorityState {
-            // Check echoes FIRST — FineTune's own changes (UI, restoreConfirmedDefault)
-            // create echoes. Consuming before Case 1 ensures FineTune UI changes aren't
-            // mistaken for macOS auto-switches.
-            if outputEchoTracker.consume(newDefaultUID) {
-                return
-            }
+        _ = outputEchoTracker.consume(newDefaultUID)
+        acceptDefaultOutput(newDefaultUID)
+    }
 
-            if newDefaultUID == pendingUID {
-                // Settling heuristic: if >1s since last override, BT auto-switches have
-                // settled. This is likely the user changing via System Settings — accept it.
-                // BT auto-switches happen within ms; user actions take >1s.
-                if let lastOverride = lastAutoSwitchOverrideTime,
-                   Date().timeIntervalSince(lastOverride) > 1.0 {
-                    timeoutTask.cancel()
-                    outputPriorityState = .stable
-                    lastConfirmedDefaultUID = newDefaultUID
-                    lastAutoSwitchOverrideTime = nil
-                    routeFollowsDefaultApps(to: newDefaultUID)
-                    let deviceName = deviceMonitor.device(for: newDefaultUID)?.name ?? newDefaultUID
-                    logger.info("Accepted user change to \(deviceName) (settled >1s)")
-                    return
-                }
-
-                // Case 1: macOS auto-switched to the newly connected device — restore what
-                // the user was on. Re-enter PENDING_AUTOSWITCH for further auto-switches.
-                timeoutTask.cancel()
-                restoreConfirmedDefault()
-                lastAutoSwitchOverrideTime = Date()
-                let transport = deviceMonitor.device(for: pendingUID)?.id.readTransportType()
-                let timeout = (transport == .bluetooth || transport == .bluetoothLE)
-                    ? btAutoSwitchGracePeriod
-                    : autoSwitchGracePeriod
-                let newTimeoutTask = Task { @MainActor [weak self] in
-                    try? await Task.sleep(for: .seconds(timeout))
-                    guard let self, !Task.isCancelled else { return }
-                    self.outputPriorityState = .stable
-                    self.lastAutoSwitchOverrideTime = nil
-                    self.logger.debug("Auto-switch grace period expired after override")
-                }
-                outputPriorityState = .pendingAutoSwitch(
-                    connectedDeviceUID: pendingUID,
-                    timeoutTask: newTimeoutTask
-                )
-                return
-            }
-
-            // Case 3: Genuine user intent (different device, not our echo) — respect it.
-            timeoutTask.cancel()
-            outputPriorityState = .stable
-            lastAutoSwitchOverrideTime = nil
-        }
-
-        // Suppress echo from our own priority-based override (when not in pendingAutoSwitch)
-        if outputEchoTracker.consume(newDefaultUID) {
-            return
-        }
-
-        // If any echo counter is pending, another override is in flight — skip interim routing
-        if outputEchoTracker.hasPending {
-            logger.debug("Skipping followsDefault routing — echo pending")
-            return
-        }
-
-        // Check if the new default device is known and alive.
+    private func acceptDefaultOutput(_ newDefaultUID: String) {
         guard let newDevice = deviceMonitor.device(for: newDefaultUID) else {
-            // Device not yet in monitor's list (e.g., BT device default-changed before device-list
-            // notification). Defer — the upcoming handleDeviceConnected will enforce priority.
-            logger.debug("Default changed to unknown device \(newDefaultUID), deferring to device list refresh")
+            pendingExternalOutputUID = newDefaultUID
+            logger.debug("Default changed before device discovery: \(newDefaultUID)")
             return
         }
 
-        let newDeviceIsAlive = isAliveCheck(newDevice.id)
-
-        if !newDeviceIsAlive {
-            // Dead device became default (race with disconnect) — override to priority fallback
+        pendingExternalOutputUID = nil
+        guard isAliveCheck(newDevice.id) else {
             reEvaluateOutputDefault()
-        } else {
-            // Genuine change to a live device — route followsDefault apps
-            lastConfirmedDefaultUID = newDefaultUID
-            routeFollowsDefaultApps(to: newDefaultUID)
+            return
+        }
 
-            let affectedApps = apps.filter { followsDefault.contains($0.id) }
-            if !affectedApps.isEmpty {
-                let deviceName = deviceMonitor.device(for: newDefaultUID)?.name ?? "Default Output"
-                logger.info("Default changed to \(deviceName), \(affectedApps.count) app(s) following")
-                if settingsManager.appSettings.showDeviceDisconnectAlerts {
-                    showDefaultChangedNotification(newDeviceName: deviceName, affectedApps: affectedApps)
-                }
+        routeFollowsDefaultApps(to: newDefaultUID)
+        let affectedApps = apps.filter { followsDefault.contains($0.id) }
+        if !affectedApps.isEmpty {
+            logger.info("Default changed to \(newDevice.name), \(affectedApps.count) app(s) following")
+            if settingsManager.appSettings.showDeviceDisconnectAlerts {
+                showDefaultChangedNotification(newDeviceName: newDevice.name, affectedApps: affectedApps)
             }
         }
     }
