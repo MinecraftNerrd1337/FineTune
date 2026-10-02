@@ -84,6 +84,16 @@ struct OutputFormatChangeTests {
         #expect(tap.isForceSilenced)
 
         try? await Task.sleep(for: .milliseconds(ProcessTapController.formatChangeSilenceFailSafeMs + 150))
+
+        // The watchdog and this test both resume on MainActor. Under CI load, both
+        // continuations can become runnable well after their deadlines and their
+        // ordering is not guaranteed. Give the earlier watchdog continuation a
+        // bounded opportunity to run instead of asserting on scheduler ordering.
+        for _ in 0..<20 where tap.isForceSilenced {
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
         #expect(!tap.isForceSilenced)
     }
 
