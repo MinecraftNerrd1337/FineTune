@@ -454,9 +454,16 @@ final class ProcessTapController: ProcessTapControlling {
         _forceSilence = true
         OSMemoryBarrier()
 
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(Self.formatChangeSilenceFailSafeMs))
+
         formatChangeSilenceFailSafeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(Self.formatChangeSilenceFailSafeMs))
-            guard !Task.isCancelled, let self else { return }
+            do {
+                try await clock.sleep(until: deadline)
+            } catch {
+                return
+            }
+            guard let self else { return }
 
             self._forceSilence = false
             OSMemoryBarrier()
