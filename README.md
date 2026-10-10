@@ -14,7 +14,7 @@ Control the volume of every app independently, boost quiet ones up to 4x, route 
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-3a3a3c?style=for-the-badge&labelColor=1c1c1e" alt="License: GPL v3"></a>
   <a href="https://ko-fi.com/ronitsingh10"><img src="https://img.shields.io/badge/Tip_on_Ko--fi-FF5E5B?style=for-the-badge&labelColor=1c1c1e&logo=ko-fi&logoColor=white" alt="Tip on
   Ko-fi"></a>
-  <a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-15%2B-3a3a3c?style=for-the-badge&labelColor=1c1c1e&logo=apple&logoColor=white" alt="macOS 15+"></a>
+  <a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-14.2%2B-3a3a3c?style=for-the-badge&labelColor=1c1c1e&logo=apple&logoColor=white" alt="macOS 14.2+"></a>
 </p>
 
 <p align="center">
@@ -115,7 +115,7 @@ open FineTune.xcodeproj
 
 ## Requirements
 
-- macOS 15.0 (Sequoia) or later
+- macOS 14.2 (Sonoma) or later
 - Audio capture permission (prompted on first launch)
 
 ## Support
