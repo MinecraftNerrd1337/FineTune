@@ -11,7 +11,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     private let popupVisibility: PopupVisibilityService
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "HUDWindowController")
 
-    private var panel: NSPanel?
+    // Read from the nonisolated deinit, which hands them to the main thread.
+    private nonisolated(unsafe) var panel: NSPanel?
     private var hostingView: NSHostingView<AnyView>?
     private var hideTask: Task<Void, Never>?
     private var styleAtLastShow: HUDStyle = .tahoe
@@ -22,7 +23,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     // MARK: - Suppression-degraded tracking
 
     private var lastSwallowedKeyTime: DispatchTime?
-    private var settingsChangedObserver: NSObjectProtocol?
+    private nonisolated(unsafe) var settingsChangedObserver: NSObjectProtocol?
 
     var hideDelayOverride: Duration?
     var frameProvider: () -> NSRect? = { NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame }
@@ -40,14 +41,16 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         subscribeToSettingsChangedNotification()
     }
 
-    isolated deinit {
-        if let observer = settingsChangedObserver {
-            DistributedNotificationCenter.default().removeObserver(observer)
-        }
+    deinit {
         // Prefer shutdown() for synchronous teardown during willTerminate; this
         // deinit safety-net only fires for objects released without that call.
-        if let panel {
-            panel.orderOut(nil)
+        let observer = settingsChangedObserver
+        let panel = panel
+        MainThreadCleanup.run {
+            if let observer {
+                DistributedNotificationCenter.default().removeObserver(observer)
+            }
+            panel?.orderOut(nil)
         }
     }
 

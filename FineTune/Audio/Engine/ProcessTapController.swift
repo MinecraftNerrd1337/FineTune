@@ -146,11 +146,12 @@ final class ProcessTapController: ProcessTapControlling {
     var currentDeviceUID: String? { currentDeviceUIDs.first }
 
     // Core Audio resources (primary tap) — TapResources enforces correct teardown order
-    private var primaryResources = TapResources()
+    // `nonisolated(unsafe)`: also read from the nonisolated deinit, where no other reference exists.
+    private nonisolated(unsafe) var primaryResources = TapResources()
     private var activated = false
 
     // Secondary tap for crossfade
-    private var secondaryResources = TapResources()
+    private nonisolated(unsafe) var secondaryResources = TapResources()
 
     /// Guard against re-entrant crossfade (ORCH-001)
     private var isSwitching = false
@@ -939,8 +940,17 @@ final class ProcessTapController: ProcessTapControlling {
         _invalidating = false
     }
 
-    isolated deinit {
-        invalidate()
+    /// Plain deinit (not `isolated deinit`, which needs macOS 15.4). It can run on any thread:
+    /// the IO proc blocks briefly hold a strong reference taken from their weak capture, so the
+    /// last release may happen on the audio thread. Hence no `MainActor.assumeIsolated` here.
+    /// `destroyAsync()` only needs the Core Audio IDs, copied by value, and dispatches the
+    /// blocking teardown to a background queue; it is a no-op if the IDs are already cleared.
+    deinit {
+        var secondary = secondaryResources
+        var primary = primaryResources
+        secondary.destroyAsync()
+        primary.destroyAsync()
+        logger.info("Tap deallocated")
     }
 
     // MARK: - Crossfade Operations

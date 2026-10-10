@@ -60,9 +60,10 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
         @Binding var isPresented: Bool
         var panel: NSPanel?
         var hostingView: NSHostingView<AnyView>?
-        var localEventMonitor: Any?
-        var globalEventMonitor: Any?
-        var appDeactivateObserver: NSObjectProtocol?
+        // Read from the nonisolated deinit, which hands them to the main thread for removal.
+        nonisolated(unsafe) var localEventMonitor: Any?
+        nonisolated(unsafe) var globalEventMonitor: Any?
+        nonisolated(unsafe) var appDeactivateObserver: NSObjectProtocol?
         weak var parentWindow: NSWindow?
 
         init(isPresented: Binding<Bool>) {
@@ -222,15 +223,14 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             }
         }
 
-        isolated deinit {
-            if let monitor = localEventMonitor {
-                NSEvent.removeMonitor(monitor)
-            }
-            if let monitor = globalEventMonitor {
-                NSEvent.removeMonitor(monitor)
-            }
-            if let observer = appDeactivateObserver {
-                NotificationCenter.default.removeObserver(observer)
+        deinit {
+            let local = localEventMonitor
+            let global = globalEventMonitor
+            let observer = appDeactivateObserver
+            MainThreadCleanup.run {
+                if let local { NSEvent.removeMonitor(local) }
+                if let global { NSEvent.removeMonitor(global) }
+                if let observer { NotificationCenter.default.removeObserver(observer) }
             }
         }
     }

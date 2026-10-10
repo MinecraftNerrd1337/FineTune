@@ -5,9 +5,10 @@ import AppKit
 /// Uses the same pattern as PopoverHost for reliable click-outside detection.
 @MainActor
 final class ClickOutsideCoordinator {
-    private var localEventMonitor: Any?
-    private var globalEventMonitor: Any?
-    private var appDeactivateObserver: NSObjectProtocol?
+    // Read from the nonisolated deinit, which hands them to the main thread for removal.
+    private nonisolated(unsafe) var localEventMonitor: Any?
+    private nonisolated(unsafe) var globalEventMonitor: Any?
+    private nonisolated(unsafe) var appDeactivateObserver: NSObjectProtocol?
 
     /// Installs monitors to detect clicks outside the specified frame.
     /// - Parameters:
@@ -67,8 +68,15 @@ final class ClickOutsideCoordinator {
         }
     }
 
-    isolated deinit {
-        removeMonitors()
+    deinit {
+        let local = localEventMonitor
+        let global = globalEventMonitor
+        let observer = appDeactivateObserver
+        MainThreadCleanup.run {
+            if let local { NSEvent.removeMonitor(local) }
+            if let global { NSEvent.removeMonitor(global) }
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
     }
 }
 
