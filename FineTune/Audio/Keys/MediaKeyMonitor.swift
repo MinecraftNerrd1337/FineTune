@@ -38,6 +38,9 @@ final class MediaKeyMonitor {
     // Read from the nonisolated deinit, which hands them to the main thread for teardown.
     private nonisolated(unsafe) var tap: CFMachPort?
     private nonisolated(unsafe) var runLoopSource: CFRunLoopSource?
+    /// Retained `MediaKeyTapContext` handed to the C callback as `userInfo`; released exactly
+    /// once, after the run loop source is removed (see `releaseTapContext`).
+    private nonisolated(unsafe) var tapContext: UnsafeMutableRawPointer?
 
     /// Second `.tapDisabledBy*` inside the watchdog window marks the feature offline.
     private var disableWatchdogTask: Task<Void, Never>?
@@ -83,6 +86,7 @@ final class MediaKeyMonitor {
         // C callback holds an unretained pointer to self; runloop source must not outlive us.
         let tap = tap
         let source = runLoopSource
+        let context = tapContext
         let observers = workspaceObservers
         MainThreadCleanup.run {
             if let tap {
@@ -91,6 +95,7 @@ final class MediaKeyMonitor {
             if let source {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             }
+            Self.releaseTapContext(context)
             let nc = NSWorkspace.shared.notificationCenter
             for observer in observers { nc.removeObserver(observer) }
         }
@@ -112,7 +117,10 @@ final class MediaKeyMonitor {
 
         // NX_SYSDEFINED = 14 (from <IOLLEvent.h>); CGEventType has no Swift case.
         let mask = CGEventMask(1 << 14)
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        // The callback gets a weak box, not `self`: if the monitor is ever destroyed before the
+        // tap is torn down, the callback sees nil and passes events through instead of crashing.
+        let context = Unmanaged.passRetained(MediaKeyTapContext(monitor: self)).toOpaque()
+        let userInfo = context
 
         guard let newTap = CGEvent.tapCreate(
             tap: .cghidEventTap,
@@ -123,6 +131,7 @@ final class MediaKeyMonitor {
             userInfo: userInfo
         ) else {
             logger.error("CGEvent.tapCreate returned nil — media keys will not be intercepted")
+            Self.releaseTapContext(context)
             mediaKeyStatus.isOffline = true
             return
         }
@@ -133,6 +142,7 @@ final class MediaKeyMonitor {
 
         self.tap = newTap
         self.runLoopSource = source
+        self.tapContext = context
         self.mediaKeyStatus.isOffline = false
         logger.info("Media key tap installed")
     }
@@ -220,6 +230,8 @@ final class MediaKeyMonitor {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
             onRunLoopSourceRemoved?()
         }
+        Self.releaseTapContext(tapContext)
+        tapContext = nil
         tap = nil
         runLoopSource = nil
         logger.info("Media key tap removed")
@@ -379,6 +391,13 @@ final class MediaKeyMonitor {
 
     // MARK: - Callback bridge
 
+    /// Balances the `passRetained` in `start()`. Call only after the run loop source is removed
+    /// (the callback runs on the main run loop, so it can no longer fire), on the main thread.
+    nonisolated private static func releaseTapContext(_ context: UnsafeMutableRawPointer?) {
+        guard let context else { return }
+        Unmanaged<MediaKeyTapContext>.fromOpaque(context).release()
+    }
+
     /// Returns `true` if the caller should swallow the event.
     fileprivate func processSystemDefined(_ cgEvent: CGEvent) -> Bool {
         // Pass through if disabled mid-race; never silently eat another app's media keys.
@@ -401,13 +420,23 @@ final class MediaKeyMonitor {
 
 // MARK: - CGEventTap C callback
 
+/// Weak back-reference passed to the C callback as `userInfo`.
+private nonisolated final class MediaKeyTapContext {
+    weak var monitor: MediaKeyMonitor?
+    init(monitor: MediaKeyMonitor) { self.monitor = monitor }
+}
+
 // Tap installs on `CFRunLoopGetMain()` so this runs on main; `assumeIsolated`
 // preserves ordering against the next event (a Task-hop would reorder).
 private let mediaKeyTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
     guard let userInfo = userInfo else {
         return Unmanaged.passUnretained(event)
     }
-    let monitor = Unmanaged<MediaKeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+    let context = Unmanaged<MediaKeyTapContext>.fromOpaque(userInfo).takeUnretainedValue()
+    // Monitor already destroyed: never touch it, and never swallow another app's keys.
+    guard let monitor = context.monitor else {
+        return Unmanaged.passUnretained(event)
+    }
 
     if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
         MainActor.assumeIsolated {
