@@ -65,6 +65,8 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
         nonisolated(unsafe) var globalEventMonitor: Any?
         nonisolated(unsafe) var appDeactivateObserver: NSObjectProtocol?
         weak var parentWindow: NSWindow?
+        /// Trigger frame in screen coordinates, kept to re-place the panel when its size changes.
+        private var triggerScreenFrame: NSRect = .zero
 
         init(isPresented: Binding<Bool>) {
             self._isPresented = isPresented
@@ -105,14 +107,11 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             panel.setContentSize(hosting.fittingSize)
             self.hostingView = hosting
 
-            // Position below trigger
+            // Position below the trigger, kept inside the visible area of its screen
             let parentFrame = parentView.convert(parentView.bounds, to: nil)
             let screenFrame = parentWindow.convertToScreen(parentFrame)
-            let panelOrigin = NSPoint(
-                x: screenFrame.origin.x,
-                y: screenFrame.origin.y - panel.frame.height - 4
-            )
-            panel.setFrameOrigin(panelOrigin)
+            triggerScreenFrame = screenFrame
+            panel.setFrameOrigin(Self.origin(for: panel.frame.size, below: screenFrame, in: parentWindow.screen))
 
             // Add as child window - links to parent's event stream
             parentWindow.addChildWindow(panel, ordered: .above)
@@ -177,7 +176,31 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
             let newSize = hostingView.fittingSize
             if let panel = panel, panel.frame.size != newSize {
                 panel.setContentSize(newSize)
+                panel.setFrameOrigin(Self.origin(for: panel.frame.size, below: triggerScreenFrame, in: parentWindow?.screen))
             }
+        }
+
+        /// Origin for a panel of `size` anchored to `trigger`: left-aligned below it, flipped to
+        /// right-aligned when it would run past the screen's right edge, and above the trigger
+        /// when there is no room below. Always clamped to the screen's visible frame.
+        private static func origin(for size: NSSize, below trigger: NSRect, in screen: NSScreen?) -> NSPoint {
+            let gap: CGFloat = 4
+            var origin = NSPoint(x: trigger.minX, y: trigger.minY - size.height - gap)
+            let screen = screen
+                ?? NSScreen.screens.first { $0.frame.intersects(trigger) }
+                ?? NSScreen.main
+            guard let visible = screen?.visibleFrame else { return origin }
+
+            if origin.x + size.width > visible.maxX {
+                origin.x = trigger.maxX - size.width
+            }
+            origin.x = max(visible.minX, min(origin.x, visible.maxX - size.width))
+
+            if origin.y < visible.minY {
+                let above = trigger.maxY + gap
+                origin.y = above + size.height <= visible.maxY ? above : visible.minY
+            }
+            return origin
         }
 
         /// - Parameter reKeyParent: When `true`, restores key status to the parent
