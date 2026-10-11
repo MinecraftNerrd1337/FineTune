@@ -10,6 +10,8 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     var app: AudioApp { get }
     var volume: Float { get set }
     var isMuted: Bool { get set }
+    /// Software master gain (0...1) applied as the very last stage, after EQ, DSP and limiting.
+    var masterVolume: Float { get set }
     var currentDeviceVolume: Float { get set }
     var isDeviceMuted: Bool { get set }
     var audioLevel: Float { get }
@@ -38,6 +40,12 @@ protocol ProcessTapControlling: AnyObject, Sendable {
 }
 
 extension ProcessTapControlling {
+    /// Default for conformers that do not render audio (test doubles).
+    var masterVolume: Float {
+        get { 1.0 }
+        set { _ = newValue }
+    }
+
     /// Convenience activation with default state. Production callers must pass an
     /// `initial:` populated from persisted settings — defaults leave the first audio
     /// callbacks running with no EQ/AutoEQ/Loudness and unity volume ramp.

@@ -740,17 +740,33 @@ struct MenuBarPopupView: View {
 
     @ViewBuilder
     private func appsSection(scrollProxy: ScrollViewProxy) -> some View {
-        HStack {
+        let showMaster = permission.status == .authorized && !isEditingDevicePriority
+        let ignoredCount = audioEngine.settingsManager.getIgnoredAppInfo().count
+        // The master controls sit on the header line inside a glass container. The inner
+        // leading inset (container padding + outer inset) equals a device row's badge + gaps,
+        // so the slider gets the same length as the device sliders.
+        ZStack(alignment: .leading) {
             SectionHeader(title: "Apps")
-            Spacer()
-            let ignoredCount = audioEngine.settingsManager.getIgnoredAppInfo().count
-            if ignoredCount > 0 && !isEditingDevicePriority {
-                Text("\(ignoredCount) ignored")
-                    .font(DesignTokens.Typography.caption)
-                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+
+            if showMaster {
+                MasterVolumeRow(
+                    volume: audioEngine.masterVolume,
+                    onVolumeChange: { audioEngine.setMasterVolume($0) }
+                )
+                // The row draws its own glass container; here we only skip the badge column
+                // so the slider ends up with the device slider length.
+                .padding(.leading, DesignTokens.Spacing.sm + DesignTokens.Dimensions.rowContentHeight + DesignTokens.Spacing.sm)
             }
         }
-        .padding(.bottom, DesignTokens.Spacing.xs)
+        .padding(.bottom, DesignTokens.Spacing.sm)
+
+        if ignoredCount > 0 && !isEditingDevicePriority {
+            Text("\(ignoredCount) ignored")
+                .font(DesignTokens.Typography.caption)
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .padding(.horizontal, DesignTokens.Spacing.sm)
+                .padding(.bottom, DesignTokens.Spacing.xs)
+        }
 
         if permission.status != .authorized {
             PermissionBannerView(permission: permission)

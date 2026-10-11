@@ -52,6 +52,12 @@ final class ProcessTapController: ProcessTapControlling {
     private nonisolated(unsafe) var _primaryCurrentVolume: Float = 1.0
     /// Current ramped volume for secondary tap during crossfade
     private nonisolated(unsafe) var _secondaryCurrentVolume: Float = 1.0
+    /// Software master gain (0...1) applied after EQ/DSP/limiting, just before the device.
+    private nonisolated(unsafe) var _masterVolume: Float = 1.0
+    /// Ramped master gain for the primary / secondary callbacks (avoid zipper noise and
+    /// torn read-modify-write between concurrent callbacks during a crossfade).
+    private nonisolated(unsafe) var _primaryCurrentMaster: Float = 1.0
+    private nonisolated(unsafe) var _secondaryCurrentMaster: Float = 1.0
     /// Emergency silence flag - zeroes output immediately (used during destructive device switch)
     /// Unlike _isMuted, this bypasses all processing including VU metering
     private nonisolated(unsafe) var _forceSilence: Bool = false
@@ -216,6 +222,19 @@ final class ProcessTapController: ProcessTapControlling {
     var volume: Float {
         get { _volume }
         set { _volume = newValue }
+    }
+
+    var masterVolume: Float {
+        get { _masterVolume }
+        set {
+            _masterVolume = newValue
+            // Before the first render there is nothing to ramp from: seed the current value
+            // so a quiet master does not start with a 30 ms burst at unity.
+            if !_hasRenderedAudio {
+                _primaryCurrentMaster = newValue
+                _secondaryCurrentMaster = newValue
+            }
+        }
     }
 
     var isMuted: Bool {
@@ -750,6 +769,7 @@ final class ProcessTapController: ProcessTapControlling {
         // Seed the ramp target before AudioDeviceStart so the first IOProc callback
         // ramps from userVolume→userVolume (no-op) instead of 1.0→userVolume.
         _primaryCurrentVolume = _volume
+        _primaryCurrentMaster = _masterVolume
 
         // Reset output gate to armed; size the ramp from device sample rate.
         _outputGateRawPhase = 0
@@ -1092,6 +1112,7 @@ final class ProcessTapController: ProcessTapControlling {
         secondaryRampCoefficient = 1 - exp(-1 / (Float(sampleRate) * rampTimeSeconds))
 
         _secondaryCurrentVolume = _primaryCurrentVolume
+        _secondaryCurrentMaster = _primaryCurrentMaster
 
         // Create independent EQ processors for the secondary tap.
         // Each tap needs its own biquad delay buffers — sharing would corrupt filter state
@@ -1200,6 +1221,7 @@ final class ProcessTapController: ProcessTapControlling {
 
         _primaryCurrentVolume = _secondaryCurrentVolume
         _secondaryCurrentVolume = 0
+        _primaryCurrentMaster = _secondaryCurrentMaster
         _primaryPreferredStereoLeftChannel = _secondaryPreferredStereoLeftChannel
         _primaryPreferredStereoRightChannel = _secondaryPreferredStereoRightChannel
 
@@ -1408,6 +1430,8 @@ final class ProcessTapController: ProcessTapControlling {
         preferredStereoLeft: Int,
         preferredStereoRight: Int,
         currentVol: inout Float,
+        masterTarget: Float = 1.0,
+        masterCurrent: inout Float,
         eqProc: EQProcessor?,
         autoEQProc: AutoEQProcessor?,
         loudnessEqualizerProc: LoudnessEqualizer?,
@@ -1415,6 +1439,7 @@ final class ProcessTapController: ProcessTapControlling {
     ) {
         let inputBufferCount = inputBuffers.count
         let outputBufferCount = outputBuffers.count
+        let masterStart = masterCurrent
 
         for outputIndex in 0..<outputBufferCount {
             let outputBuffer = outputBuffers[outputIndex]
@@ -1561,6 +1586,21 @@ final class ProcessTapController: ProcessTapControlling {
                 let writtenSampleCount = frameCount * outputChannels
                 SoftLimiter.processBuffer(outputSamples, sampleCount: writtenSampleCount)
             }
+
+            // Software master volume: the very last stage, after EQ, DSP and the limiter, so it
+            // scales the final mix of this tap right before the device. Skipped (bit-transparent)
+            // at unity.
+            var master = masterStart
+            if masterTarget != 1.0 || master != 1.0 {
+                for frame in 0..<frameCount {
+                    master += (masterTarget - master) * rampCoefficient
+                    let base = frame * outputChannels
+                    for ch in 0..<outputChannels {
+                        outputSamples[base + ch] *= master
+                    }
+                }
+            }
+            masterCurrent = master
         }
     }
 
@@ -1685,7 +1725,9 @@ final class ProcessTapController: ProcessTapControlling {
         }
 
         let targetVol = _volume
+        let masterTarget = _masterVolume
         var currentVol: Float
+        var currentMaster: Float
         let crossfadeMultiplier: Float
         let rampCoeff: Float
         let stereoLeft: Int
@@ -1697,6 +1739,7 @@ final class ProcessTapController: ProcessTapControlling {
 
         if isPrimary {
             currentVol = _primaryCurrentVolume
+            currentMaster = _primaryCurrentMaster
             // Equal-power crossfade: primary uses cosine curve (1→0).
             // CrossfadeState.primaryMultiplier handles all phase logic including the
             // race condition guard (returns 0.0 when progress >= 1.0 in idle phase).
@@ -1710,6 +1753,7 @@ final class ProcessTapController: ProcessTapControlling {
             loudnessCompensatorProc = loudnessCompensator
         } else {
             currentVol = _secondaryCurrentVolume
+            currentMaster = _secondaryCurrentMaster
             // Secondary uses sine curve (0→1).
             // .warmingUp → 0.0 (muted), .crossfading → sin(progress*π/2), .idle → 1.0
             crossfadeMultiplier = crossfadeState.secondaryMultiplier
@@ -1732,6 +1776,8 @@ final class ProcessTapController: ProcessTapControlling {
             preferredStereoLeft: stereoLeft,
             preferredStereoRight: stereoRight,
             currentVol: &currentVol,
+            masterTarget: masterTarget,
+            masterCurrent: &currentMaster,
             eqProc: eqProc,
             autoEQProc: autoEQProc,
             loudnessEqualizerProc: loudnessEqualizerProc,
@@ -1740,8 +1786,10 @@ final class ProcessTapController: ProcessTapControlling {
 
         if isPrimary {
             _primaryCurrentVolume = currentVol
+            _primaryCurrentMaster = currentMaster
         } else {
             _secondaryCurrentVolume = currentVol
+            _secondaryCurrentMaster = currentMaster
         }
     }
 }

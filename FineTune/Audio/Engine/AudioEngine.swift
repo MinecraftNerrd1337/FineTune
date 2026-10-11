@@ -684,6 +684,24 @@ final class AudioEngine {
         logger.info("Settings reset: engine state synchronized")
     }
 
+    /// Software master gain (0...1) applied by each tap as its very last stage, after the
+    /// per-app volume, EQ, DSP and limiter, right before the device.
+    /// 1.0 leaves the signal untouched; 0 silences all tapped apps.
+    var masterVolume: Float {
+        settingsManager.appSettings.masterVolume
+    }
+
+    func setMasterVolume(_ volume: Float) {
+        let clamped = volume.isFinite ? min(max(volume, 0), 1) : 1.0
+        guard clamped != settingsManager.appSettings.masterVolume else { return }
+        var settings = settingsManager.appSettings
+        settings.masterVolume = clamped
+        settingsManager.updateAppSettings(settings)
+        for tap in taps.values {
+            tap.masterVolume = clamped
+        }
+    }
+
     func setVolume(for app: AudioApp, to volume: Float) {
         volumeState.setVolume(for: app.id, to: volume, identifier: app.persistenceIdentifier)
         if let deviceUID = appDeviceRouting[app.id] {
@@ -745,6 +763,7 @@ final class AudioEngine {
     private func applyTapOutputState(to tap: any ProcessTapControlling, for pid: pid_t, deviceUIDs: [String]? = nil) {
         let resolvedUIDs = deviceUIDs ?? tap.currentDeviceUIDs
         tap.volume = effectiveVolume(for: pid, deviceUIDs: resolvedUIDs)
+        tap.masterVolume = masterVolume
         tap.isMuted = volumeState.getMute(for: pid)
 
         if let primaryUID = resolvedUIDs.first,
