@@ -25,6 +25,31 @@ struct HoverableRowModifier: ViewModifier {
     }
 }
 
+// MARK: - Glass Container Modifier
+
+struct GlassContainerModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            fallback(content, shape: shape)
+        }
+        #else
+        fallback(content, shape: shape)
+        #endif
+    }
+
+    private func fallback(_ content: Content, shape: RoundedRectangle) -> some View {
+        content
+            .background(.thinMaterial, in: shape)
+            .overlay(shape.strokeBorder(DesignTokens.Colors.glassBorder, lineWidth: 0.5))
+    }
+}
+
 // MARK: - Section Header Style Modifier
 
 struct SectionHeaderStyleModifier: ViewModifier {
@@ -160,6 +185,12 @@ extension View {
     /// Applies icon button styling with hover state (vibrancy-aware)
     func iconButtonStyle(isActive: Bool = false) -> some View {
         modifier(IconButtonStyleModifier(isActive: isActive))
+    }
+
+    /// Wraps content in a rounded Liquid Glass container (macOS 26+); older systems get a
+    /// material fill with a hairline border. Used to visually separate a group of controls.
+    func glassContainer(cornerRadius: CGFloat = DesignTokens.Dimensions.rowRadius) -> some View {
+        modifier(GlassContainerModifier(cornerRadius: cornerRadius))
     }
 
     /// Applies glass button styling
