@@ -1195,6 +1195,9 @@ struct MenuBarPopupView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.message = "Select an AutoEQ ParametricEQ.txt file"
+        // FineTune is an agent app (LSUIElement): without activation the panel opens behind other apps.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.level = .modalPanel
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             let name = url.deletingPathExtension().lastPathComponent
@@ -1213,6 +1216,7 @@ struct MenuBarPopupView: View {
                 }
             }
         }
+        panel.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Keyboard Navigation
