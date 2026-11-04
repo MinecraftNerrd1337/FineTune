@@ -29,6 +29,20 @@ nonisolated extension AudioObjectID {
     func readAudioTapStreamBasicDescription() throws -> AudioStreamBasicDescription {
         try read(kAudioTapPropertyFormat, defaultValue: AudioStreamBasicDescription())
     }
+
+    /// The tap's description as the HAL holds it now, processes it re-attached included.
+    func readTapDescription() -> CATapDescription? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioTapPropertyDescription,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var description: Unmanaged<CATapDescription>?
+        var size = UInt32(MemoryLayout<Unmanaged<CATapDescription>?>.size)
+        let err = AudioObjectGetPropertyData(self, &address, 0, nil, &size, &description)
+        guard err == noErr else { return nil }
+        return description?.takeRetainedValue()
+    }
 }
 
 // MARK: - Process Properties

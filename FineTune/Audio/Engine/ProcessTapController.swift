@@ -175,6 +175,14 @@ final class ProcessTapController: ProcessTapControlling {
     var audioLevel: Float { crossfadeState.isActive ? max(_peakLevel, _secondaryPeakLevel) : _peakLevel }
     var isForceSilenced: Bool { _forceSilence }
 
+    var capturedProcessObjectIDs: Set<AudioObjectID> {
+        var captured = Set<AudioObjectID>()
+        for tapID in [primaryResources.tapID, secondaryResources.tapID] where tapID.isValid {
+            captured.formUnion(tapID.readTapDescription()?.processes ?? [])
+        }
+        return captured
+    }
+
     nonisolated private static let hostTimeNanosScale: Double = {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)

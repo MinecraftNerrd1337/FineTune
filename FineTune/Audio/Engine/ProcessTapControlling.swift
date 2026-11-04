@@ -1,3 +1,5 @@
+import AudioToolbox
+
 /// Abstraction over process tap controllers for testability.
 ///
 /// **Threading:** The protocol surface is `@MainActor` — AudioEngine and tests
@@ -17,6 +19,10 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     var audioLevel: Float { get }
     var currentDeviceUID: String? { get }
     var currentDeviceUIDs: [String] { get }
+    /// Process objects Core Audio currently routes into this tap, read back from the HAL.
+    /// Can differ from `app.processObjectIDs`: macOS re-attaches a relaunched app's new
+    /// processes to a tap that was built for its previous launch.
+    var capturedProcessObjectIDs: Set<AudioObjectID> { get }
 
     func activate(initial: TapInitialState) throws
     func invalidate()
@@ -45,6 +51,9 @@ extension ProcessTapControlling {
         get { 1.0 }
         set { _ = newValue }
     }
+
+    /// Default for conformers without a HAL tap (test doubles): nothing captured.
+    var capturedProcessObjectIDs: Set<AudioObjectID> { [] }
 
     /// Convenience activation with default state. Production callers must pass an
     /// `initial:` populated from persisted settings — defaults leave the first audio

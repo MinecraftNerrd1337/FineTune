@@ -58,6 +58,7 @@ final class RecordingProcessTapController: ProcessTapControlling {
     private(set) var currentDeviceUIDs: [String]
     var currentDeviceUID: String? { currentDeviceUIDs.first }
     var tapSourceDeviceUID: String? = nil
+    var capturedProcessObjectIDs: Set<AudioObjectID> = []
 
     init(app: AudioApp, deviceUIDs: [String]) {
         self.app = app

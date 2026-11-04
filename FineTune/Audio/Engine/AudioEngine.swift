@@ -1121,6 +1121,7 @@ final class AudioEngine {
         guard taps[app.id] == nil else { return }
         guard permission.status == .authorized else { return }
         guard !isCallPassthrough(app) else { return }
+        releaseStaleTaps(conflictingWith: app)
 
         let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
         do {
@@ -1287,6 +1288,7 @@ final class AudioEngine {
         guard taps[app.id] == nil else { return }
         guard permission.status == .authorized else { return }
         guard !isCallPassthrough(app) else { return }
+        releaseStaleTaps(conflictingWith: app)
 
         let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: [deviceUID], isFollowsDefault: followsDefault.contains(app.id))
         do {
@@ -1767,6 +1769,8 @@ final class AudioEngine {
     private func cleanupStaleTaps() {
         let activePIDs = Set(apps.map { $0.id })
         let stalePIDs = Set(taps.keys).subtracting(activePIDs)
+        let liveObjects = liveProcessObjectIDs
+        var needsReprovision = false
 
         // Cancel cleanup for PIDs that reappeared — but only if bundleID matches.
         // PID reuse by a different app should not rescue the old tap.
@@ -1776,6 +1780,14 @@ final class AudioEngine {
 
             let reappearedApp = apps.first { $0.id == pid }
             let existingTap = taps[pid]
+
+            // Same PID, but the processes the tap was built for are gone: a new process
+            // reuses the PID (a relaunch or another app). Rebuild instead of rescuing.
+            if let existingTap, tapProcessesExited(existingTap, liveObjects: liveObjects) {
+                releaseTapImmediately(pid: pid, reason: "the PID now belongs to a new process")
+                needsReprovision = true
+                continue
+            }
 
             if let reappearedApp, let existingTap,
                reappearedApp.bundleID != existingTap.app.bundleID {
@@ -1797,6 +1809,14 @@ final class AudioEngine {
 
         // Schedule cleanup for newly stale PIDs (with grace period)
         for pid in stalePIDs {
+            // The grace period is for apps that paused or flickered during a device change:
+            // their process objects stay in Core Audio. Once those are gone (the app quit or
+            // crashed), the tap can't carry the app's audio again, and keeping it lets macOS
+            // attach the app's next launch to it, which then plays through two taps at once.
+            if let tap = taps[pid], tapProcessesExited(tap, liveObjects: liveObjects) {
+                releaseTapImmediately(pid: pid, reason: "its processes exited")
+                continue
+            }
             guard pendingCleanup[pid] == nil else { continue }  // Already pending
 
             pendingCleanup[pid] = Task { @MainActor in
@@ -1827,6 +1847,56 @@ final class AudioEngine {
         appliedPIDs = appliedPIDs.intersection(pidsToKeep)
         followsDefault = followsDefault.intersection(pidsToKeep)
         volumeState.cleanup(keeping: pidsToKeep)
+
+        // A tap released above for a PID that is still streaming needs its replacement.
+        if needsReprovision {
+            applyPersistedSettings()
+        }
+    }
+
+    /// Every process object Core Audio lists for an app right now, streaming or not.
+    private var liveProcessObjectIDs: Set<AudioObjectID> {
+        Set(processMonitor.activeApps.flatMap { $0.processObjectIDs })
+    }
+
+    /// A tap belongs to the process objects it was created for, not to a PID. True once
+    /// none of them is left in Core Audio: the app quit or crashed, and the tap can never
+    /// carry that process's audio again. A paused app keeps its process objects.
+    private func tapProcessesExited(_ tap: any ProcessTapControlling, liveObjects: Set<AudioObjectID>) -> Bool {
+        let tapObjects = tap.app.processObjectIDs
+        return !tapObjects.isEmpty && liveObjects.isDisjoint(with: tapObjects)
+    }
+
+    /// Tears a tap down now instead of at the end of its grace period, with the same state cleanup.
+    private func releaseTapImmediately(pid: pid_t, reason: String) {
+        pendingCleanup.removeValue(forKey: pid)?.cancel()
+        if let tap = taps.removeValue(forKey: pid) {
+            tap.invalidate()
+            logger.info("Released tap for PID \(pid) without grace period: \(reason, privacy: .public)")
+        }
+        appDeviceRouting.removeValue(forKey: pid)
+        followsDefault.remove(pid)
+        appliedPIDs.remove(pid)
+    }
+
+    /// Keeps a process from being captured by two taps at once, which plays its audio twice
+    /// (about +6 dB). macOS re-attaches a relaunched app's processes to the tap left from its
+    /// previous launch, so before `app` is tapped, the tap of any app that is not streaming is
+    /// released if its own processes are gone or if Core Audio routes one of `app`'s into it.
+    private func releaseStaleTaps(conflictingWith app: AudioApp) {
+        let streamingPIDs = Set(apps.map { $0.id })
+        let liveObjects = liveProcessObjectIDs
+        let newObjects = Set(app.processObjectIDs)
+        var conflicting: [pid_t] = []
+        for (pid, tap) in taps where pid != app.id && !streamingPIDs.contains(pid) {
+            if tapProcessesExited(tap, liveObjects: liveObjects)
+                || !tap.capturedProcessObjectIDs.isDisjoint(with: newObjects) {
+                conflicting.append(pid)
+            }
+        }
+        for pid in conflicting {
+            releaseTapImmediately(pid: pid, reason: "\(app.name) is about to be tapped")
+        }
     }
 
     /// Debounced stale tap cleanup — coalesces rapid app-list changes into a single cleanup pass.
