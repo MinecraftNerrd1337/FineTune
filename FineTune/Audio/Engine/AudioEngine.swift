@@ -1766,7 +1766,8 @@ final class AudioEngine {
         return outputUIDs.contains(defaultUID) ? defaultUID : nil
     }
 
-    private func cleanupStaleTaps() {
+    /// Internal rather than private so tests can run a stale pass without waiting out the debounce.
+    func cleanupStaleTaps() {
         let activePIDs = Set(apps.map { $0.id })
         let stalePIDs = Set(taps.keys).subtracting(activePIDs)
         let liveObjects = liveProcessObjectIDs

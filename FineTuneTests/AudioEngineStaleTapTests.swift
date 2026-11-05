@@ -15,9 +15,6 @@ import AudioToolbox
 
 // MARK: - Fixture
 
-/// Longer than the 350 ms debounce in front of the stale-tap pass, far shorter than the grace period.
-private let staleCleanupDelay: Duration = .milliseconds(700)
-
 @MainActor
 private final class TapLog {
     var all: [RecordingProcessTapController] = []
@@ -35,6 +32,8 @@ private struct Fixture {
     let log: TapLog
 
     /// Publishes an app list the way AudioProcessMonitor does. `streaming: nil` means every app streams.
+    /// The engine's own stale pass runs on a 350 ms debounce timer; tests call `cleanupStaleTaps()`
+    /// directly instead, so they don't depend on that timer firing on time during a parallel run.
     func publish(_ apps: [AudioApp], streaming: Set<pid_t>? = nil) {
         processMonitor.activeApps = apps
         processMonitor.streamingAppIDs = streaming
@@ -105,7 +104,7 @@ private func makeFixture(activeApp: AudioApp) -> Fixture {
 struct AudioEngineStaleTapTests {
 
     @Test("A paused app keeps its tap through the grace period")
-    func pausedAppKeepsTap() async throws {
+    func pausedAppKeepsTap() throws {
         let app = makeApp(pid: 1000, objects: [501])
         let fix = makeFixture(activeApp: app)
         fix.engine.setDevice(for: app, deviceUID: fix.device.uid)
@@ -113,13 +112,13 @@ struct AudioEngineStaleTapTests {
 
         // Paused: the process object stays in Core Audio, it only stops streaming.
         fix.publish([app], streaming: [])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
 
         #expect(!tap.events.contains(.invalidate))
     }
 
     @Test("A quit app's tap is released without waiting for the grace period")
-    func quitAppReleasedAtOnce() async throws {
+    func quitAppReleasedAtOnce() throws {
         let app = makeApp(pid: 1000, objects: [501])
         let fix = makeFixture(activeApp: app)
         fix.engine.setDevice(for: app, deviceUID: fix.device.uid)
@@ -127,24 +126,24 @@ struct AudioEngineStaleTapTests {
 
         // Quit: the process object leaves Core Audio.
         fix.publish([])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
 
         #expect(tap.events.contains(.invalidate))
     }
 
     @Test("An app that quits while paused is released at once, not at the end of the grace period")
-    func pausedThenQuitReleasedAtOnce() async throws {
+    func pausedThenQuitReleasedAtOnce() throws {
         let app = makeApp(pid: 1000, objects: [501])
         let fix = makeFixture(activeApp: app)
         fix.engine.setDevice(for: app, deviceUID: fix.device.uid)
         let tap = try #require(fix.log.all.last)
 
         fix.publish([app], streaming: [])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
         #expect(!tap.events.contains(.invalidate))
 
         fix.publish([])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
         #expect(tap.events.contains(.invalidate))
     }
 
@@ -198,7 +197,7 @@ struct AudioEngineStaleTapTests {
     }
 
     @Test("A PID reused by a new process gets a new tap instead of rescuing the old one")
-    func reusedPIDGetsNewTap() async throws {
+    func reusedPIDGetsNewTap() throws {
         let firstLaunch = makeApp(pid: 1000, objects: [501])
         let fix = makeFixture(activeApp: firstLaunch)
         fix.engine.setDevice(for: firstLaunch, deviceUID: fix.device.uid)
@@ -206,13 +205,13 @@ struct AudioEngineStaleTapTests {
 
         // Paused: the tap enters its grace period.
         fix.publish([firstLaunch], streaming: [])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
         #expect(!oldTap.events.contains(.invalidate))
 
         // A new process with the same PID streams before the list ever showed the PID gone.
         let reused = makeApp(pid: 1000, objects: [701])
         fix.publish([reused])
-        try await Task.sleep(for: staleCleanupDelay)
+        fix.engine.cleanupStaleTaps()
 
         #expect(oldTap.events.contains(.invalidate))
         let newTap = try #require(fix.log.all.last)
