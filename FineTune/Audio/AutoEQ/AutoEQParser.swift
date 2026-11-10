@@ -2,19 +2,22 @@
 import Foundation
 import os
 
-/// Parses EqualizerAPO ParametricEQ.txt files into AutoEQ profiles.
+/// Parses EqualizerAPO text files into AutoEQ profiles: ParametricEQ.txt (a list of filters)
+/// and GraphicEQ.txt (a frequency/gain curve, the format AutoEQ publishes for Wavelet).
 nonisolated enum AutoEQParser {
     private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "AutoEQParser")
 
     // MARK: - ParametricEQ.txt Parsing
 
-    /// Parse an EqualizerAPO ParametricEQ.txt string into an AutoEQProfile.
-    /// Returns nil if zero valid filters are found.
+    /// Parse an EqualizerAPO ParametricEQ.txt or GraphicEQ.txt string into an AutoEQProfile.
+    /// Returns nil if neither a valid filter nor a curve is found. A file with a curve and no
+    /// filter gives a graphic preset, rendered by the minimum-phase FIR engine.
     /// - Parameters:
     ///   - id: Explicit ID to use. If nil, generates one (slug for fetched, UUID for imported).
     static func parse(text: String, name: String, source: AutoEQSource, id: String? = nil) -> AutoEQProfile? {
         var preampDB: Float = 0
         var filters: [AutoEQFilter] = []
+        var curve: [AutoEQCurvePoint] = []
 
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -22,6 +25,8 @@ nonisolated enum AutoEQParser {
 
             if trimmed.lowercased().hasPrefix("preamp:") {
                 preampDB = parsePreamp(trimmed)
+            } else if trimmed.lowercased().hasPrefix("graphiceq:") {
+                curve = parseGraphicEQ(trimmed)
             } else if trimmed.lowercased().hasPrefix("filter") {
                 if let filter = parseFilterLine(trimmed) {
                     filters.append(filter)
@@ -34,7 +39,8 @@ nonisolated enum AutoEQParser {
             filters = Array(filters.prefix(AutoEQProfile.maxFilters))
         }
 
-        guard !filters.isEmpty else { return nil }
+        let isGraphic = filters.isEmpty && curve.count >= 2
+        guard !filters.isEmpty || isGraphic else { return nil }
 
         let resolvedID: String
         if let id {
@@ -48,6 +54,19 @@ nonisolated enum AutoEQParser {
             }
         }
 
+        if isGraphic {
+            return AutoEQProfile(
+                id: resolvedID,
+                name: name,
+                source: source,
+                preampDB: preampDB,
+                filters: [],
+                kind: .graphic,
+                engine: .minimumPhaseFIR,
+                curve: curve
+            )
+        }
+
         return AutoEQProfile(
             id: resolvedID,
             name: name,
@@ -55,6 +74,25 @@ nonisolated enum AutoEQParser {
             preampDB: preampDB,
             filters: filters
         )
+    }
+
+    /// Parse "GraphicEQ: 20 -1.5; 21 -1.4; …" into points sorted by frequency.
+    /// Points that are not two numbers, or outside 1 Hz–100 kHz and ±30 dB, are skipped;
+    /// of two points at the same frequency the first is kept.
+    static func parseGraphicEQ(_ line: String) -> [AutoEQCurvePoint] {
+        guard let colon = line.firstIndex(of: ":") else { return [] }
+        var points: [AutoEQCurvePoint] = []
+        var seen = Set<Double>()
+        for pair in line[line.index(after: colon)...].split(separator: ";") {
+            let tokens = pair.split(whereSeparator: { $0.isWhitespace })
+            guard tokens.count == 2,
+                  let frequency = Double(tokens[0]), let gain = Float(tokens[1]),
+                  frequency >= 1, frequency <= 100_000, abs(gain) <= 30,
+                  seen.insert(frequency).inserted else { continue }
+            points.append(AutoEQCurvePoint(frequency: frequency, gainDB: gain))
+        }
+        points.sort { $0.frequency < $1.frequency }
+        return Array(points.prefix(AutoEQProfile.maxCurvePoints))
     }
 
     // MARK: - Private Helpers

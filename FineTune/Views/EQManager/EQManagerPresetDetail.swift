@@ -9,6 +9,8 @@ struct EQManagerPresetDetail: View {
 
     @State private var selectedBand: Int?
     @State private var scaleDB: Double = 12
+    /// Latency of the preset's linear-phase filter in milliseconds; nil while it is computed.
+    @State private var latencyMS: Double?
 
     private var preset: AutoEQProfile { editor.draft }
     private var isEditing: Bool { editor.isEditing }
@@ -55,19 +57,59 @@ struct EQManagerPresetDetail: View {
         .onChange(of: preset.filters.count) { _, count in
             if let band = selectedBand, band >= count { selectedBand = count > 0 ? count - 1 : nil }
         }
+        .task(id: LatencyKey(preset)) {
+            // Designing the filter takes a few milliseconds: wait until edits pause
+            latencyMS = nil
+            guard preset.effectiveEngine == .linearPhaseFIR, preset.hasCorrection else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            latencyMS = FIRKernelCache.latencyMilliseconds(of: preset, sampleRate: AutoEQResponse.defaultSampleRate)
+        }
+    }
+
+    /// What the latency of a preset depends on.
+    private struct LatencyKey: Equatable {
+        let engine: AutoEQCorrectionEngine
+        let filters: [AutoEQFilter]
+        let curve: [AutoEQCurvePoint]
+
+        init(_ preset: AutoEQProfile) {
+            engine = preset.effectiveEngine
+            // Only the linear-phase filter has a latency to compute
+            filters = engine == .linearPhaseFIR ? preset.filters : []
+            curve = engine == .linearPhaseFIR ? preset.curve : []
+        }
+    }
+
+    private var latencyText: String {
+        guard preset.effectiveEngine == .linearPhaseFIR else { return "None" }
+        guard preset.hasCorrection else { return "—" }
+        guard let latencyMS else { return "…" }
+        return String(format: "%.1f ms", latencyMS)
     }
 
     /// ±24 dB when the preset does not fit in ±12 dB.
     private static func needsWideScale(_ preset: AutoEQProfile) -> Bool {
         if preset.filters.contains(where: { abs($0.gainDB) > 12 }) || abs(preset.preampDB) > 12 { return true }
         let frequencies = AutoEQResponse.logFrequencies(count: 200)
-        return AutoEQResponse.curve(preset.filters, engine: preset.engine, frequencies: frequencies)
+        return AutoEQResponse.curve(of: preset, frequencies: frequencies)
             .contains { abs($0) > 12 }
     }
 
     // MARK: - Preset Section
 
     private var presetSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            presetRows
+            Text(preset.effectiveEngine.summary)
+                .font(.system(size: 10))
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+        }
+    }
+
+    private var presetRows: some View {
         SettingsSection("Preset") {
             row("Name") {
                 if isEditing {
@@ -90,19 +132,21 @@ struct EQManagerPresetDetail: View {
             row("Correction") {
                 if isEditing {
                     Picker("Correction", selection: Binding(
-                        get: { preset.engine },
+                        get: { preset.effectiveEngine },
                         set: { engine in editor.apply { $0.engine = engine } }
                     )) {
-                        ForEach(AutoEQCorrectionEngine.allCases) { Text($0.displayName).tag($0) }
+                        ForEach(AutoEQCorrectionEngine.available(for: preset.kind)) { Text($0.displayName).tag($0) }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .labelsHidden()
                     .controlSize(.small)
-                    .frame(width: 150)
+                    .frame(width: 170)
                 } else {
-                    valueText(preset.engine.displayName)
+                    valueText(preset.effectiveEngine.displayName)
                 }
             }
+            Divider()
+            row("Latency") { valueText(latencyText) }
             Divider()
             row("Source") { valueText(preset.sourceLabel ?? "AutoEQ") }
         }
@@ -169,7 +213,7 @@ struct EQManagerPresetDetail: View {
             Text("Frequency Response")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(DesignTokens.Colors.textPrimary)
-            Text(preset.engine == .biquad ? "Biquad filters at 48 kHz" : "Exact curve")
+            Text(graphCaption)
                 .font(.system(size: 11))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
             Spacer()
@@ -181,6 +225,14 @@ struct EQManagerPresetDetail: View {
             .labelsHidden()
             .controlSize(.small)
             .frame(width: 140)
+        }
+    }
+
+    private var graphCaption: String {
+        switch preset.effectiveEngine {
+        case .biquad: return "Biquad filters at 48 kHz"
+        case .matchedBiquad: return "Exact biquad filters at 48 kHz"
+        case .minimumPhaseFIR, .linearPhaseFIR: return "Exact curve"
         }
     }
 
@@ -213,7 +265,41 @@ struct EQManagerPresetDetail: View {
                 }
             }
         case .graphic:
-            placeholder("Graphic EQ points will be listed here in a later version.")
+            if preset.curve.isEmpty {
+                placeholder("No curve yet. Import a GraphicEQ file (AutoEQ, Wavelet, Equalizer APO) to fill this preset.")
+            } else {
+                curveTable
+            }
+        }
+    }
+
+    /// The points of a graphic preset (read-only).
+    private var curveTable: some View {
+        VStack(spacing: 0) {
+            BandRowLayout(isHeader: true) {
+                Text("#").bandColumn(0, isHeader: true)
+                Text("Frequency").bandColumn(2, isHeader: true)
+                Text("Gain").bandColumn(3, isHeader: true)
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(preset.curve.enumerated()), id: \.offset) { index, point in
+                        BandRowLayout(isHeader: false) {
+                            Text("\(index + 1)").bandColumn(0)
+                            Text(EQResponseGraph.formatFrequency(point.frequency)).bandColumn(2)
+                            Text(String(format: "%+.1f dB", point.gainDB)).bandColumn(3)
+                        }
+                        .background(index % 2 == 0 ? Color.clear : DesignTokens.Colors.pickerBackground.opacity(0.5))
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
         }
     }
 

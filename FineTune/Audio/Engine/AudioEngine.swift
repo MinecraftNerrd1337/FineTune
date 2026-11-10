@@ -934,6 +934,7 @@ final class AudioEngine {
         guard !correctionEnabled else { return profile }
         var preampOnly = profile
         preampOnly.filters = []
+        preampOnly.curve = []
         return preampOnly
     }
 

@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Frequency response graph of a preset: log frequency axis (20 Hz to 20 kHz), dB axis,
 /// the summed curve, the preamp level and one point per band, numbered by frequency.
+/// A graphic preset shows its curve and, when there are few enough, its points.
 ///
 /// Layout ideas (decade/minor grid tiers, knob on a stem from 0 dB, drag by offset from
 /// the grab point) come from iQualize's `EQCanvasView` (MIT, Darius). This version keeps
@@ -40,6 +41,7 @@ struct EQResponseGraph: View {
     private static let insets = EdgeInsets(top: 8, leading: 44, bottom: 22, trailing: 12)
     private static let curvePointCount = 400
     private static let hitRadius: CGFloat = 12
+    private static let maxDrawnCurvePoints = 64
 
     private static let minorFrequencies: [Double] = [
         30, 40, 50, 60, 70, 80, 90,
@@ -120,7 +122,13 @@ struct EQResponseGraph: View {
         context.drawLayer { layer in
             layer.clip(to: Path(plot))
             if profile.kind == .graphic {
-                drawGraphicPlaceholder(into: &layer, plot: plot)
+                guard !profile.curve.isEmpty else {
+                    drawGraphicPlaceholder(into: &layer, plot: plot)
+                    return
+                }
+                drawPreamp(into: &layer, plot: plot)
+                drawCurve(into: &layer, plot: plot)
+                drawCurvePoints(into: &layer, plot: plot)
                 return
             }
             drawPreamp(into: &layer, plot: plot)
@@ -185,7 +193,7 @@ struct EQResponseGraph: View {
 
     private func drawCurve(into context: inout GraphicsContext, plot: CGRect) {
         let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount)
-        let gains = AutoEQResponse.curve(profile.filters, engine: profile.engine, frequencies: frequencies)
+        let gains = AutoEQResponse.curve(of: profile, frequencies: frequencies)
         context.stroke(
             polyline(frequencies: frequencies, gains: gains, plot: plot),
             with: .color(.accentColor),
@@ -195,7 +203,7 @@ struct EQResponseGraph: View {
 
     private func drawSingleBand(_ filter: AutoEQFilter, into context: inout GraphicsContext, plot: CGRect) {
         let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount / 2)
-        let gains = AutoEQResponse.curve(of: filter, engine: profile.engine, frequencies: frequencies)
+        let gains = AutoEQResponse.curve(of: filter, engine: profile.effectiveEngine, frequencies: frequencies)
         context.stroke(
             polyline(frequencies: frequencies, gains: gains, plot: plot),
             with: .color(.accentColor.opacity(0.6)),
@@ -276,9 +284,23 @@ struct EQResponseGraph: View {
         context.draw(text, at: CGPoint(x: box.minX + 6, y: box.midY), anchor: .leading)
     }
 
+    /// The points of a graphic preset, when few enough to tell apart (a 10- or 31-band
+    /// graphic EQ; a dense measured curve is drawn as a line only).
+    private func drawCurvePoints(into context: inout GraphicsContext, plot: CGRect) {
+        guard profile.curve.count <= Self.maxDrawnCurvePoints else { return }
+        let fill = Color(nsColor: .windowBackgroundColor)
+        for point in profile.curve
+        where point.frequency >= AutoEQResponse.minFrequency && point.frequency <= AutoEQResponse.maxFrequency {
+            let center = CGPoint(x: x(for: point.frequency, in: plot), y: y(for: Double(point.gainDB), in: plot))
+            let dot = Path(ellipseIn: CGRect(x: center.x - 2.5, y: center.y - 2.5, width: 5, height: 5))
+            context.fill(dot, with: .color(fill))
+            context.stroke(dot, with: .color(.accentColor), lineWidth: 1.2)
+        }
+    }
+
     private func drawGraphicPlaceholder(into context: inout GraphicsContext, plot: CGRect) {
         context.draw(
-            Text("Graphic EQ curves are not displayed yet")
+            Text("This graphic preset has no curve yet. Import a GraphicEQ file to fill it.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary),
             at: CGPoint(x: plot.midX, y: plot.midY - 14),

@@ -115,7 +115,8 @@ final class AutoEQProfileManager {
             measuredBy: profile.measuredBy,
             optimizedSampleRate: profile.optimizedSampleRate,
             kind: profile.kind,
-            engine: profile.engine
+            engine: profile.engine,
+            curve: profile.curve
         )
         guard let userProfileStore else { return nil }
         userProfileStore.saveAutoEQUserProfile(toSave)
@@ -146,7 +147,8 @@ final class AutoEQProfileManager {
             measuredBy: entry.measuredBy,
             optimizedSampleRate: fetched.optimizedSampleRate,
             kind: fetched.kind,
-            engine: fetched.engine
+            engine: fetched.engine,
+            curve: fetched.curve
         )
         userProfileStore.saveAutoEQUserProfile(copy)
         profiles[copy.id] = copy

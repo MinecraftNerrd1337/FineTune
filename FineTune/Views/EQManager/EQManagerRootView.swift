@@ -202,6 +202,7 @@ struct EQManagerRootView: View {
         editor?.apply { draft in
             draft.kind = profile.kind
             draft.filters = profile.filters
+            draft.curve = profile.curve
             draft.preampDB = profile.preampDB
             draft.optimizedSampleRate = profile.optimizedSampleRate
         }

@@ -133,13 +133,25 @@ enum BiquadMath {
     ///   - profileOptimizedRate: Sample rate the profile was optimized for (Hz).
     ///     When different from `sampleRate`, filter frequencies are pre-warped to
     ///     compensate for the bilinear transform's frequency warping.
+    ///   - exact: Fit each biquad to the band's exact curve (`exactCoefficients`) instead of
+    ///     the cookbook design. Frequencies are then taken as written, without pre-warping.
     static func coefficientsForAutoEQFilters(
         _ filters: [AutoEQFilter],
         sampleRate: Double,
-        profileOptimizedRate: Double = 48000
+        profileOptimizedRate: Double = 48000,
+        exact: Bool = false
     ) -> [Double] {
         var allCoeffs: [Double] = []
         allCoeffs.reserveCapacity(filters.count * 5)
+
+        if exact {
+            for filter in filters {
+                allCoeffs.append(contentsOf: exactCoefficients(
+                    type: filter.type, frequency: filter.frequency, gainDB: filter.gainDB,
+                    q: filter.q, sampleRate: sampleRate))
+            }
+            return allCoeffs
+        }
 
         let needsPreWarp = abs(profileOptimizedRate - sampleRate) > 1.0
 

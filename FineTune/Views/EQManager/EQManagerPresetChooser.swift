@@ -34,7 +34,7 @@ struct EQManagerPresetChooser: View {
 
     @State private var newName = ""
     @State private var newKind: AutoEQPresetKind = .parametric
-    @State private var newEngine: AutoEQCorrectionEngine = .exactFIR
+    @State private var newEngine: AutoEQCorrectionEngine = .minimumPhaseFIR
     @FocusState private var isSearchFocused: Bool
 
     private static let size = CGSize(width: 440, height: 480)
@@ -320,11 +320,21 @@ struct EQManagerPresetChooser: View {
                 }
                 field("Correction") {
                     Picker("Correction", selection: $newEngine) {
-                        ForEach(AutoEQCorrectionEngine.allCases) { Text($0.displayName).tag($0) }
+                        ForEach(AutoEQCorrectionEngine.available(for: newKind)) { Text($0.displayName).tag($0) }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .labelsHidden()
+                    .fixedSize()
+                    .onChange(of: newKind) { _, kind in
+                        if !AutoEQCorrectionEngine.available(for: kind).contains(newEngine) {
+                            newEngine = .minimumPhaseFIR
+                        }
+                    }
                 }
+                Text(newEngine.summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Text("The preset starts empty. Band editing comes in a later version.")
                     .font(.system(size: 11))
                     .foregroundStyle(DesignTokens.Colors.textTertiary)

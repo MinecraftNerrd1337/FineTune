@@ -3,8 +3,9 @@ import Foundation
 
 /// Frequency response of an AutoEQ preset, for the EQ Manager graph and preamp advice.
 ///
-/// `.biquad` evaluates the digital biquad cascade the engine runs (RBJ cookbook) at `sampleRate`.
-/// `.exactFIR` evaluates the analog prototype curve, which is what an exact FIR reproduces.
+/// `.biquad` and `.matchedBiquad` evaluate the digital biquad cascade the engine runs at
+/// `sampleRate`. The FIR engines evaluate the exact curve (the analog prototype of each band,
+/// or the interpolated curve of a graphic preset), which is what they reproduce.
 /// The preamp recommendation (rendered peak plus a safety margin) follows the approach of
 /// GlassEQ's `EQProfileAnalysis.recommendedPreampDB` (GPL v3, Juho Koskela).
 enum AutoEQResponse {
@@ -47,18 +48,95 @@ enum AutoEQResponse {
         case .biquad:
             let c = coefficients(filter, sampleRate: sampleRate)
             return frequencies.map { digitalDB(c, at: $0, sampleRate: sampleRate) }
-        case .exactFIR:
+        case .matchedBiquad:
+            let c = BiquadMath.exactCoefficients(
+                type: filter.type, frequency: filter.frequency, gainDB: filter.gainDB, q: filter.q, sampleRate: sampleRate)
+            return frequencies.map { digitalDB(c, at: $0, sampleRate: sampleRate) }
+        case .minimumPhaseFIR, .linearPhaseFIR:
             return frequencies.map { analogDB(filter, at: $0) }
         }
     }
 
+    /// Gain in dB of the whole preset at each frequency as its engine renders it (preamp excluded).
+    static func curve(of profile: AutoEQProfile, frequencies: [Double], sampleRate: Double = defaultSampleRate) -> [Double] {
+        switch profile.kind {
+        case .parametric:
+            return curve(profile.filters, engine: profile.effectiveEngine, frequencies: frequencies, sampleRate: sampleRate)
+        case .graphic:
+            return graphicCurve(profile.curve, frequencies: frequencies)
+        }
+    }
+
+    /// The exact curve of the preset, whatever its engine: what the FIR engines aim for.
+    static func exactCurve(of profile: AutoEQProfile, frequencies: [Double]) -> [Double] {
+        switch profile.kind {
+        case .parametric:
+            return curve(profile.filters, engine: .minimumPhaseFIR, frequencies: frequencies)
+        case .graphic:
+            return graphicCurve(profile.curve, frequencies: frequencies)
+        }
+    }
+
+    /// A graphic preset's curve at each frequency: straight lines between its points on a
+    /// log-frequency axis, flat beyond the first and last point. `points` sorted by frequency.
+    static func graphicCurve(_ points: [AutoEQCurvePoint], frequencies: [Double]) -> [Double] {
+        guard let first = points.first, let last = points.last else {
+            return [Double](repeating: 0, count: frequencies.count)
+        }
+        return frequencies.map { frequency in
+            if frequency <= first.frequency { return Double(first.gainDB) }
+            if frequency >= last.frequency { return Double(last.gainDB) }
+            // First point above the frequency (binary search)
+            var low = 0, high = points.count - 1
+            while high - low > 1 {
+                let middle = (low + high) / 2
+                if points[middle].frequency <= frequency { low = middle } else { high = middle }
+            }
+            let a = points[low], b = points[high]
+            let span = log(b.frequency / a.frequency)
+            guard span > 0 else { return Double(a.gainDB) }
+            let t = log(frequency / a.frequency) / span
+            return Double(a.gainDB) + (Double(b.gainDB) - Double(a.gainDB)) * t
+        }
+    }
+
+    /// The exact curve sampled for FIR design: gain in dB at `k * sampleRate / gridSize` for
+    /// k = 0...gridSize/2. Evaluated on 4096 log-spaced frequencies and interpolated, which is
+    /// exact enough for any band (Q ≤ 30) and much cheaper than one evaluation per bin.
+    static func designGrid(of profile: AutoEQProfile, sampleRate: Double, gridSize: Int) -> [Double] {
+        let nyquist = sampleRate / 2
+        let coarseCount = 4096
+        let low = 1.0
+        let coarse = logFrequencies(count: coarseCount, from: low, to: nyquist)
+        let values = exactCurve(of: profile, frequencies: coarse)
+        let step = log(nyquist / low) / Double(coarseCount - 1)
+
+        let bins = gridSize / 2 + 1
+        var grid = [Double](repeating: values[0], count: bins)
+        let binWidth = sampleRate / Double(gridSize)
+        for k in 0..<bins {
+            let frequency = Double(k) * binWidth
+            guard frequency > low else { continue }
+            let position = log(frequency / low) / step
+            let index = min(Int(position), coarseCount - 2)
+            let t = min(position - Double(index), 1)
+            grid[k] = values[index] + (values[index + 1] - values[index]) * t
+        }
+        return grid
+    }
+
     /// Highest gain of the curve between 10 Hz and 20 kHz, or nil when there is nothing to measure.
     static func peakDB(_ profile: AutoEQProfile, sampleRate: Double = defaultSampleRate) -> Double? {
-        guard profile.kind == .parametric, !profile.filters.isEmpty else { return nil }
-        // A dense grid plus every band's centre, so narrow peaks are not missed.
+        guard profile.hasCorrection else { return nil }
+        // A dense grid plus every band's centre (or curve point), so narrow peaks are not missed.
         var frequencies = logFrequencies(count: 1024, from: 10, to: maxFrequency)
-        frequencies += profile.filters.map(\.frequency).filter { $0 >= 10 && $0 <= maxFrequency }
-        return curve(profile.filters, engine: profile.engine, frequencies: frequencies, sampleRate: sampleRate).max()
+        switch profile.kind {
+        case .parametric:
+            frequencies += profile.filters.map(\.frequency).filter { $0 >= 10 && $0 <= maxFrequency }
+        case .graphic:
+            frequencies += profile.curve.map(\.frequency).filter { $0 >= 10 && $0 <= maxFrequency }
+        }
+        return curve(of: profile, frequencies: frequencies, sampleRate: sampleRate).max()
     }
 
     /// Preamp that keeps the curve's peak `recommendedHeadroomDB` below the input level.
@@ -85,40 +163,15 @@ enum AutoEQResponse {
 
     /// |H(e^jw)| in dB for vDSP-style coefficients [b0, b1, b2, a1, a2].
     private static func digitalDB(_ c: [Double], at frequency: Double, sampleRate: Double) -> Double {
-        let w = 2 * Double.pi * frequency / sampleRate
-        let cos1 = cos(w), sin1 = sin(w), cos2 = cos(2 * w), sin2 = sin(2 * w)
-        let numRe = c[0] + c[1] * cos1 + c[2] * cos2
-        let numIm = -(c[1] * sin1 + c[2] * sin2)
-        let denRe = 1 + c[3] * cos1 + c[4] * cos2
-        let denIm = -(c[3] * sin1 + c[4] * sin2)
-        let magnitude2 = (numRe * numRe + numIm * numIm) / max(denRe * denRe + denIm * denIm, 1e-30)
-        return 10 * log10(max(magnitude2, 1e-20))
+        10 * log10(max(BiquadMath.digitalMagnitudeSquared(c, at: frequency, sampleRate: sampleRate), 1e-20))
     }
 
     // MARK: - Analog prototype (exact curve)
 
     /// |H(jW)| in dB of the RBJ analog prototypes, with W = f / f0.
     private static func analogDB(_ filter: AutoEQFilter, at frequency: Double) -> Double {
-        let a = pow(10, Double(filter.gainDB) / 40)
-        let w = frequency / max(filter.frequency, 1e-6)
-        let w2 = w * w
-        let q = max(filter.q, 1e-6)
-        let magnitude2: Double
-        switch filter.type {
-        case .peaking:
-            let re = 1 - w2
-            let numIm = w * a / q
-            let denIm = w / (a * q)
-            magnitude2 = (re * re + numIm * numIm) / (re * re + denIm * denIm)
-        case .lowShelf:
-            let im = sqrt(a) / q * w
-            let numRe = a - w2, denRe = 1 - a * w2
-            magnitude2 = a * a * (numRe * numRe + im * im) / max(denRe * denRe + im * im, 1e-30)
-        case .highShelf:
-            let im = sqrt(a) / q * w
-            let numRe = 1 - a * w2, denRe = a - w2
-            magnitude2 = a * a * (numRe * numRe + im * im) / max(denRe * denRe + im * im, 1e-30)
-        }
+        let magnitude2 = BiquadMath.analogMagnitudeSquared(
+            type: filter.type, centerFrequency: filter.frequency, gainDB: Double(filter.gainDB), q: filter.q, at: frequency)
         return 10 * log10(max(magnitude2, 1e-20))
     }
 }
