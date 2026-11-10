@@ -27,6 +27,11 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     func invalidateAsync() async
     func updateEQSettings(_ settings: EQSettings)
     func updateAutoEQProfile(_ profile: AutoEQProfile?)
+    /// AutoEQ of one output device, for a tap that renders each of its devices separately.
+    func updateAutoEQProfile(_ profile: AutoEQProfile?, for deviceUID: String)
+    /// Master volume × software gain of one output device, applied to that device's buffer
+    /// when the tap plays on several devices.
+    func setOutputGain(_ gain: Float, for deviceUID: String)
     func setAutoEQPreampEnabled(_ enabled: Bool)
     func updateLoudnessCompensation(volume: Float, enabled: Bool)
     func updateLoudnessEqualization(_ settings: LoudnessEqualizerSettings)
@@ -77,6 +82,10 @@ extension ProcessTapControlling {
     }
 
     func hasOutputSampleRateMismatch() -> Bool { false }
+
+    func updateAutoEQProfile(_ profile: AutoEQProfile?, for deviceUID: String) {}
+
+    func setOutputGain(_ gain: Float, for deviceUID: String) {}
 
     func prepareForOutputFormatChange() {}
 

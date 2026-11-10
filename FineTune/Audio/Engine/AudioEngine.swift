@@ -326,6 +326,9 @@ final class AudioEngine {
             guard let self else { return }
             guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
             let loudnessEnabled = self.settingsManager.appSettings.loudnessCompensationEnabled
+            if self.outputVolumeBackend(for: deviceID) == .software {
+                self.refreshOutputGain(for: deviceUID)
+            }
             for (_, tap) in self.taps {
                 if tap.currentDeviceUID == deviceUID {
                     tap.currentDeviceVolume = newVolume
@@ -344,6 +347,9 @@ final class AudioEngine {
         deviceVolumeMonitor.onMuteChanged = { [weak self] deviceID, isMuted in
             guard let self else { return }
             guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
+            if self.outputVolumeBackend(for: deviceID) == .software {
+                self.refreshOutputGain(for: deviceUID)
+            }
             for (_, tap) in self.taps {
                 if tap.currentDeviceUID == deviceUID {
                     tap.isDeviceMuted = isMuted
@@ -697,15 +703,17 @@ final class AudioEngine {
     /// Master volume (0...1) of an output device, remembered per device: a software gain on top
     /// of the device's own hardware, DDC or software volume. Applied like a software-backed
     /// device's volume: folded into the gain of each tap playing on that device alone, so it adds
-    /// no processing stage (1.0 changes nothing). A tap fanned out to several devices sends them
-    /// the same buffer, so it keeps the app gain alone rather than one device's master volume.
-    /// Audio FineTune doesn't tap (system sounds, ignored apps, apps on a call) is not affected.
+    /// no processing stage (1.0 changes nothing). A tap playing on several devices renders each
+    /// device's buffer separately and applies each device's own master volume there
+    /// (`setOutputGain`). Audio FineTune doesn't tap (system sounds, ignored apps, apps on a
+    /// call) is not affected.
     func deviceMasterVolume(for deviceUID: String) -> Float {
         settingsManager.getDeviceMasterVolume(for: deviceUID)
     }
 
     func setDeviceMasterVolume(_ volume: Float, for deviceUID: String) {
         settingsManager.setDeviceMasterVolume(for: deviceUID, to: volume)
+        refreshOutputGain(for: deviceUID)
         let loudnessEnabled = settingsManager.appSettings.loudnessCompensationEnabled
         for tap in taps.values where tap.currentDeviceUIDs == [deviceUID] {
             tap.volume = effectiveVolume(for: tap.app.id, deviceUIDs: tap.currentDeviceUIDs)
@@ -761,8 +769,8 @@ final class AudioEngine {
 
     /// Effective gain for ProcessTapController: app volume × boost, plus the single
     /// device's master volume and, for software-backed devices, its software output gain.
-    /// Multi-destination routing keeps `appGain` alone because a per-device gain has no
-    /// unambiguous meaning across fan-out (every device gets the same buffer).
+    /// Multi-destination routing keeps `appGain` alone: the tap applies each device's
+    /// `outputGain` to that device's buffer.
     private func effectiveVolume(for pid: pid_t, deviceUIDs: [String]? = nil) -> Float {
         let appGain = volumeState.getVolume(for: pid) * volumeState.getBoost(for: pid).rawValue
 
@@ -789,9 +797,56 @@ final class AudioEngine {
         return tap.currentDeviceVolume * master * volumeState.getVolume(for: tap.app.id)
     }
 
+    /// Gain a device applies on top of the app's in a multi-device tap: its master volume and,
+    /// for a software-backed device, its software output gain (what `effectiveVolume` folds in
+    /// for a tap on that device alone).
+    private func outputGain(for deviceUID: String) -> Float {
+        let master = deviceMasterVolume(for: deviceUID)
+        guard let device = deviceMonitor.device(for: deviceUID),
+              outputVolumeBackend(for: device.id) == .software else {
+            return master
+        }
+        return master * deviceVolumeMonitor.outputProcessingGain(for: device.id)
+    }
+
+    /// Hands every tap the new gain of a device. Every tap, not only those on the device now:
+    /// a tap keeps the gains it was given to build the chains of the devices it moves to.
+    private func refreshOutputGain(for deviceUID: String) {
+        let gain = outputGain(for: deviceUID)
+        for tap in taps.values {
+            tap.setOutputGain(gain, for: deviceUID)
+        }
+    }
+
+    /// Hands a tap the gain and, when it is known without loading, the AutoEQ profile of each
+    /// device it is about to play on, so that a multi-device aggregate built for them starts
+    /// with the right ones (the profiles are applied again once the devices are in place).
+    private func prepareOutputs(of tap: any ProcessTapControlling, for deviceUIDs: [String]) {
+        for uid in deviceUIDs {
+            tap.setOutputGain(outputGain(for: uid), for: uid)
+            if let known = immediateAutoEQProfile(for: uid) {
+                tap.updateAutoEQProfile(known, for: uid)
+            }
+        }
+    }
+
+    /// The AutoEQ profile of a device when it is known without loading: `.some(nil)` when the
+    /// device has no correction, nil when the device is unknown or its profile still loading.
+    private func immediateAutoEQProfile(for deviceUID: String) -> AutoEQProfile?? {
+        guard let device = deviceMonitor.device(for: deviceUID) else { return nil }
+        guard device.supportsAutoEQ, let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
+            return .some(nil)
+        }
+        guard let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
+        return .some(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
+    }
+
     private func applyTapOutputState(to tap: any ProcessTapControlling, for pid: pid_t, deviceUIDs: [String]? = nil) {
         let resolvedUIDs = deviceUIDs ?? tap.currentDeviceUIDs
         tap.volume = effectiveVolume(for: pid, deviceUIDs: resolvedUIDs)
+        for uid in resolvedUIDs {
+            tap.setOutputGain(outputGain(for: uid), for: uid)
+        }
         tap.isMuted = volumeState.getMute(for: pid)
 
         if let primaryUID = resolvedUIDs.first,
@@ -915,7 +970,7 @@ final class AudioEngine {
     /// Apply AutoEQ profile to all taps currently routed to the given device.
     private func applyAutoEQToTaps(for deviceUID: String) {
         for tap in taps.values {
-            guard tap.currentDeviceUID == deviceUID else { continue }
+            guard tap.currentDeviceUIDs.contains(deviceUID) else { continue }
             applyAutoEQToTap(tap)
         }
     }
@@ -951,43 +1006,60 @@ final class AudioEngine {
         )
     }
 
+    /// Applies the AutoEQ of the tap's devices: the first device's to the tap's main chain, and
+    /// each device's to its own buffer (a tap on several devices renders each separately).
     /// Skips AutoEQ entirely for devices that don't support it (speakers, HDMI, etc.).
-    /// If the profile isn't loaded yet, triggers an async fetch and applies when ready.
+    /// If a profile isn't loaded yet, triggers an async fetch and applies it when ready.
     private func applyAutoEQToTap(_ tap: any ProcessTapControlling) {
-        guard let deviceUID = tap.currentDeviceUID else { return }
+        guard let primaryUID = tap.currentDeviceUID else { return }
+        applyAutoEQ(of: primaryUID, to: tap, stillApplies: { tap.currentDeviceUID == primaryUID }) { profile in
+            tap.updateAutoEQProfile(profile)
+        }
+        for uid in tap.currentDeviceUIDs {
+            applyAutoEQ(of: uid, to: tap, stillApplies: { tap.currentDeviceUIDs.contains(uid) }) { profile in
+                tap.updateAutoEQProfile(profile, for: uid)
+            }
+        }
+    }
 
+    private func applyAutoEQ(
+        of deviceUID: String,
+        to tap: any ProcessTapControlling,
+        stillApplies: @escaping @MainActor () -> Bool,
+        apply: @escaping @MainActor (AutoEQProfile?) -> Void
+    ) {
         // Skip AutoEQ for non-headphone devices (or if device not found in monitor)
         guard let device = deviceMonitor.device(for: deviceUID) else {
             logger.debug("AutoEQ skip for \(tap.app.name): device \(deviceUID) not found in monitor")
             return
         }
         guard device.supportsAutoEQ else {
-            tap.updateAutoEQProfile(nil)
+            apply(nil)
             logger.debug("AutoEQ skip for \(tap.app.name): \(device.name) doesn't support AutoEQ")
             return
         }
 
         guard let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
-            tap.updateAutoEQProfile(nil)
+            apply(nil)
             logger.debug("AutoEQ skip for \(tap.app.name): no selection for \(device.name)")
             return
         }
 
         // Try in-memory first (instant)
         if let profile = autoEQProfileManager.profile(for: selection.profileID) {
-            tap.updateAutoEQProfile(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
+            apply(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
             return
         }
 
         // Profile not loaded yet — fetch asynchronously
-        tap.updateAutoEQProfile(nil)
+        apply(nil)
         Task { @MainActor in
             guard let profile = await autoEQProfileManager.resolveProfile(for: selection.profileID) else { return }
-            // Verify tap still exists and is still routed to the same device
-            guard tap.currentDeviceUID == deviceUID else { return }
+            // Verify the tap is still routed to the same device
+            guard stillApplies() else { return }
             guard let latestSelection = settingsManager.getAutoEQSelection(for: deviceUID),
                   latestSelection.profileID == selection.profileID else { return }
-            tap.updateAutoEQProfile(Self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
+            apply(Self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
         }
     }
 
@@ -1171,6 +1243,7 @@ final class AudioEngine {
             if tap.currentDeviceUIDs != deviceUIDs {
                 do {
                     let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: tapSourceFollowsDefault(app.id))
+                    prepareOutputs(of: tap, for: deviceUIDs)
                     try await tap.updateDevices(to: deviceUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID)
                     applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
                     applyAutoEQToTap(tap)
@@ -1197,6 +1270,7 @@ final class AudioEngine {
         do {
             let tap = try tapFactory(app, deviceUIDs, preferredTapSourceUID)
             applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
+            prepareOutputs(of: tap, for: deviceUIDs)
 
             let initial = tapInitialState(
                 forApp: app,
@@ -1207,7 +1281,8 @@ final class AudioEngine {
             taps[app.id] = tap
 
             // Catalog AutoEQ may not have been cached yet — kick off async resolve.
-            if initial.autoEQProfile == nil {
+            // A tap on several devices also needs each device's own correction.
+            if initial.autoEQProfile == nil || deviceUIDs.count > 1 {
                 applyAutoEQToTap(tap)
             }
 
@@ -1544,8 +1619,11 @@ final class AudioEngine {
                 for (tap, remainingUIDs) in multiModeTapsToUpdate {
                     do {
                         let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: remainingUIDs, isFollowsDefault: self.tapSourceFollowsDefault(tap.app.id))
+                        self.prepareOutputs(of: tap, for: remainingUIDs)
                         try await tap.updateDevices(to: remainingUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID, sourceDeviceDead: true)
                         self.applyTapOutputState(to: tap, for: tap.app.id, deviceUIDs: remainingUIDs)
+                        // The first device may have changed, and with it the main chain's correction
+                        self.applyAutoEQToTap(tap)
                         self.logger.debug("Removed \(deviceName) from \(tap.app.name) multi-device output")
                     } catch {
                         self.logger.error("Failed to update \(tap.app.name) devices: \(error.localizedDescription)")

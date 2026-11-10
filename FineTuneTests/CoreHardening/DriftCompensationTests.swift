@@ -61,7 +61,8 @@ struct DriftCompensationTests {
             outputStreamCount: { _ in 1 }
         )
         #expect(plan.subDeviceUIDs == ["bt-device", "usb-device"])
-        #expect(plan.isStacked == true)  // Multi-device is always stacked
+        #expect(plan.isStacked == false)  // Plain devices are fanned out, one stream each
+        #expect(plan.isFannedOut == true)
     }
 
     @Test("Unknown transport: defaults to OFF (less wrong on unknown BT)")
@@ -113,7 +114,7 @@ struct AggregateDescriptionTests {
 @Suite("ProcessTapController — Multi-Device Configuration (Core Hardening)")
 struct MultiDeviceConfigTests {
 
-    @Test("Two devices: stacked, order preserved")
+    @Test("Two devices: fanned out, order preserved")
     func twoDevicesStacked() {
         let plan = ProcessTapController.planAggregate(
             outputUIDs: ["a", "b"],
@@ -121,11 +122,12 @@ struct MultiDeviceConfigTests {
             outputStreamCount: { _ in 1 }
         )
         #expect(plan.subDeviceUIDs == ["a", "b"])
-        #expect(plan.isStacked == true)
+        #expect(plan.isStacked == false)
+        #expect(plan.isFannedOut == true)
         #expect(plan.clockDeviceUID == "a")
     }
 
-    @Test("Three devices: stacked, first is clock")
+    @Test("Three devices: fanned out, first is clock")
     func threeDevicesStacked() {
         let plan = ProcessTapController.planAggregate(
             outputUIDs: ["x", "y", "z"],
@@ -133,7 +135,8 @@ struct MultiDeviceConfigTests {
             outputStreamCount: { _ in 1 }
         )
         #expect(plan.subDeviceUIDs == ["x", "y", "z"])
-        #expect(plan.isStacked == true)
+        #expect(plan.isStacked == false)
+        #expect(plan.isFannedOut == true)
         #expect(plan.clockDeviceUID == "x")
     }
 

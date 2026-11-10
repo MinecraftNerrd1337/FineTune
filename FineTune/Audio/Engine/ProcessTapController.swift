@@ -136,6 +136,16 @@ final class ProcessTapController: ProcessTapControlling {
     private nonisolated(unsafe) var secondaryAutoEQProcessor: AutoEQProcessor?
     private nonisolated(unsafe) var secondaryLoudnessCompensator: LoudnessCompensator?
     private nonisolated(unsafe) var secondaryLoudnessEqualizerProcessor: LoudnessEqualizer?
+    /// Per-device chains of a tap that plays on several devices at once (nil on one device):
+    /// each device gets its own AutoEQ and master volume. See `OutputFanOut`.
+    private nonisolated(unsafe) var primaryFanOut: OutputFanOut?
+    private nonisolated(unsafe) var secondaryFanOut: OutputFanOut?
+    /// AutoEQ profile of each output device, as last given by the engine (nil value = none).
+    /// Used to build the chains of a new aggregate before the engine re-applies them.
+    private var autoEQProfilesByDevice: [String: AutoEQProfile?] = [:]
+    /// Master volume × software gain of each output device, as last given by the engine.
+    private var outputGainsByDevice: [String: Float] = [:]
+    private var autoEQPreampEnabled = false
 
     // Target device UIDs for synchronized multi-output (first is clock source)
     private var targetDeviceUIDs: [String]
@@ -269,16 +279,38 @@ final class ProcessTapController: ProcessTapControlling {
     func updateEQSettings(_ settings: EQSettings) {
         eqProcessor?.updateSettings(settings)
         secondaryEQProcessor?.updateSettings(settings)
+        primaryFanOut?.updateEQSettings(settings)
+        secondaryFanOut?.updateEQSettings(settings)
     }
 
+    /// The correction of the first output device (the only one when the tap plays on one).
     func updateAutoEQProfile(_ profile: AutoEQProfile?) {
         autoEQProcessor?.updateProfile(profile)
         secondaryAutoEQProcessor?.updateProfile(profile)
     }
 
+    /// The correction of one output device. On a tap that plays on several devices, each one
+    /// renders its own; on a single device the profile is only remembered.
+    func updateAutoEQProfile(_ profile: AutoEQProfile?, for deviceUID: String) {
+        autoEQProfilesByDevice.updateValue(profile, forKey: deviceUID)
+        primaryFanOut?.updateAutoEQProfile(profile, for: deviceUID)
+        secondaryFanOut?.updateAutoEQProfile(profile, for: deviceUID)
+    }
+
+    /// Master volume × software gain of one output device, applied on top of `volume` when the
+    /// tap plays on several devices. On a single device the engine folds it into `volume`.
+    func setOutputGain(_ gain: Float, for deviceUID: String) {
+        outputGainsByDevice[deviceUID] = gain
+        primaryFanOut?.setGain(gain, for: deviceUID)
+        secondaryFanOut?.setGain(gain, for: deviceUID)
+    }
+
     func setAutoEQPreampEnabled(_ enabled: Bool) {
+        autoEQPreampEnabled = enabled
         autoEQProcessor?.setPreampEnabled(enabled)
         secondaryAutoEQProcessor?.setPreampEnabled(enabled)
+        primaryFanOut?.setAutoEQPreampEnabled(enabled)
+        secondaryFanOut?.setAutoEQPreampEnabled(enabled)
     }
 
     func updateLoudnessCompensation(volume: Float, enabled: Bool) {
@@ -290,6 +322,8 @@ final class ProcessTapController: ProcessTapControlling {
             loudnessCompensator?.setEnabled(false)
             secondaryLoudnessCompensator?.setEnabled(false)
         }
+        primaryFanOut?.updateLoudnessCompensation(volume: volume, enabled: enabled)
+        secondaryFanOut?.updateLoudnessCompensation(volume: volume, enabled: enabled)
     }
 
     func updateLoudnessEqualization(_ settings: LoudnessEqualizerSettings) {
@@ -311,6 +345,8 @@ final class ProcessTapController: ProcessTapControlling {
             secondaryLoudnessEqualizerProcessor = newSecondary
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { _ = secondary }
         }
+        primaryFanOut?.updateLoudnessEqualization(settings)
+        secondaryFanOut?.updateLoudnessEqualization(settings)
     }
 
     // MARK: - Multi-Device Aggregate Configuration
@@ -321,6 +357,9 @@ final class ProcessTapController: ProcessTapControlling {
         var subDeviceUIDs: [String]
         var isStacked: Bool
         var clockDeviceUID: String
+        /// Several devices, each with its own output buffer, rendered by its own chain
+        /// (`OutputFanOut`) so that each gets its own AutoEQ and master volume.
+        var isFannedOut = false
     }
 
     /// Pure planning step for `buildAggregateDescription`.
@@ -339,6 +378,11 @@ final class ProcessTapController: ProcessTapControlling {
     ///      sub-devices (or one device with several output streams) produces a multi-stream
     ///      wrapper where neither holds, so those stay stacked — which also makes
     ///      Multi-Output Device targets mirror correctly instead of playing one sub-device.
+    ///   4. Except when the user picked several plain single-stream devices: the wrapper is then
+    ///      *fanned out* (non-stacked, one output stream per device, in order), and the callback
+    ///      renders each device's buffer through that device's own chain (`OutputFanOut`).
+    ///      A stacked wrapper sends every device the same buffer, so the devices could not have
+    ///      their own headphone correction or master volume.
     ///
     /// - Parameters:
     ///   - outputUIDs: The user-selected output device UIDs (1 = single, >1 = mirroring).
@@ -368,18 +412,23 @@ final class ProcessTapController: ProcessTapControlling {
 
         let isMirroring = outputUIDs.count > 1
         let isSingleFlatten = didFlatten && !isMirroring && flatUIDs.count == 1
-        let isStacked = !(isSingleFlatten && outputStreamCount(flatUIDs[0]) == 1)
+        let isFannedOut = isMirroring && !didFlatten && flatUIDs.count == outputUIDs.count
+            && flatUIDs.allSatisfy { outputStreamCount($0) == 1 }
+        let isStacked = !isFannedOut && !(isSingleFlatten && outputStreamCount(flatUIDs[0]) == 1)
 
         return AggregatePlan(
             subDeviceUIDs: flatUIDs,
             isStacked: isStacked,
-            clockDeviceUID: flatUIDs[0]
+            clockDeviceUID: flatUIDs[0],
+            isFannedOut: isFannedOut
         )
     }
 
     /// Builds aggregate device description for synchronized multi-device output.
     /// First device is clock source (no drift compensation), others sync to it via drift compensation.
-    private func buildAggregateDescription(outputUIDs: [String], tapUUID: UUID, name: String) -> [String: Any] {
+    private func buildAggregateDescription(
+        outputUIDs: [String], tapUUID: UUID, name: String
+    ) -> (description: [String: Any], plan: AggregatePlan) {
         precondition(!outputUIDs.isEmpty, "Must have at least one output device")
 
         let plan = Self.planAggregate(
@@ -417,7 +466,7 @@ final class ProcessTapController: ProcessTapControlling {
         let isPrimaryBTOutput = audioDeviceID(for: plan.clockDeviceUID)?.isBluetoothDevice() ?? true
         let tapDriftCompensation = !isTapSourceVirtual() && !isPrimaryBTOutput
 
-        return [
+        let description: [String: Any] = [
             kAudioAggregateDeviceNameKey: name,
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: plan.clockDeviceUID,
@@ -435,6 +484,43 @@ final class ProcessTapController: ProcessTapControlling {
                 ]
             ]
         ]
+        return (description, plan)
+    }
+
+    /// The per-device chains for an aggregate built from `plan`, or nil when it is not fanned out.
+    /// Starts from the current single-device chain, with each device's AutoEQ and gain.
+    private func makeFanOut(for plan: AggregatePlan, sampleRate: Double) -> OutputFanOut? {
+        guard plan.isFannedOut else { return nil }
+        let settings = OutputFanOut.Settings(
+            eqSettings: eqProcessor?.currentSettings,
+            autoEQPreampEnabled: autoEQPreampEnabled,
+            loudnessEqualizerSettings: loudnessEqualizerProcessor?.currentSettings ?? LoudnessEqualizerSettings(),
+            loudnessCompensationEnabled: loudnessCompensator?.isEnabled ?? false,
+            loudnessVolume: _lastLoudnessVolume
+        )
+        let firstUID = plan.subDeviceUIDs.first
+        let fanOut = OutputFanOut(
+            deviceUIDs: plan.subDeviceUIDs,
+            sampleRate: sampleRate,
+            settings: settings,
+            autoEQProfile: { uid in
+                if let known = self.autoEQProfilesByDevice[uid] { return known }
+                return uid == firstUID ? self.autoEQProcessor?.currentProfile : nil
+            },
+            gain: { uid in self.outputGainsByDevice[uid] ?? 1.0 },
+            initialVolume: _volume,
+            preferredChannels: { uid in self.preferredStereoChannels(for: uid) }
+        )
+        if let fanOut {
+            logger.info("Fanned out to \(fanOut.lanes.count) devices, each with its own AutoEQ and master volume")
+        }
+        return fanOut
+    }
+
+    /// The AutoEQ profile to start a single-device chain on `deviceUID` with.
+    private func startingAutoEQProfile(for deviceUID: String?) -> AutoEQProfile? {
+        if let deviceUID, let known = autoEQProfilesByDevice[deviceUID] { return known }
+        return autoEQProcessor?.currentProfile
     }
 
     private func isTapSourceVirtual() -> Bool {
@@ -534,11 +620,14 @@ final class ProcessTapController: ProcessTapControlling {
     /// The audio callback only reads the trailing tap stream(s), so the map cannot change
     /// the audio it produces. No-op for plain output devices and the stacked path;
     /// failures are non-fatal — audio still works, the prompt may appear.
-    private func disableHardwareInputStreams(aggregateID: AudioObjectID, procID: AudioDeviceIOProcID?) {
+    private func disableHardwareInputStreams(aggregateID: AudioObjectID, procID: AudioDeviceIOProcID?, plan: AggregatePlan) {
         guard let procID else { return }
 
         let inputCount = aggregateID.streamCount(scope: kAudioObjectPropertyScopeInput)
-        let outputCount = aggregateID.streamCount(scope: kAudioObjectPropertyScopeOutput)
+        // A fanned-out wrapper has one output stream per device but still a single tap stream
+        let outputCount = plan.isFannedOut
+            ? min(1, aggregateID.streamCount(scope: kAudioObjectPropertyScopeOutput))
+            : aggregateID.streamCount(scope: kAudioObjectPropertyScopeOutput)
         guard let flagsArray = Self.inputStreamUsageFlags(inputCount: inputCount, outputCount: outputCount) else { return }
         let usedInputStreams = flagsArray.reduce(0) { $0 + Int($1) }
 
@@ -676,7 +765,7 @@ final class ProcessTapController: ProcessTapControlling {
 
         // Build multi-device aggregate description
         // First device is clock source, others have drift compensation for sync
-        let description = buildAggregateDescription(
+        let (description, plan) = buildAggregateDescription(
             outputUIDs: targetDeviceUIDs,
             tapUUID: tapDesc.uuid,
             name: "FineTune-\(app.id)"
@@ -723,6 +812,7 @@ final class ProcessTapController: ProcessTapControlling {
         // Apply persisted state to fresh processors before AudioDeviceStart so the
         // first IOProc callback sees correct EQ/AutoEQ/Loudness coefficients.
         eqProcessor?.updateSettings(initial.eqSettings)
+        autoEQPreampEnabled = initial.autoEQPreampEnabled
         autoEQProcessor?.setPreampEnabled(initial.autoEQPreampEnabled)
         if let profile = initial.autoEQProfile {
             autoEQProcessor?.updateProfile(profile)
@@ -732,6 +822,7 @@ final class ProcessTapController: ProcessTapControlling {
             loudnessCompensator?.updateForVolume(initial.loudnessVolume)
         }
         _lastLoudnessVolume = initial.loudnessVolume
+        primaryFanOut = makeFanOut(for: plan, sampleRate: sampleRate)
 
         // Create IO proc with gain processing
         nextCallbackID += 1
@@ -753,7 +844,7 @@ final class ProcessTapController: ProcessTapControlling {
             throw NSError(domain: NSOSStatusErrorDomain, code: Int(err), userInfo: [NSLocalizedDescriptionKey: "Failed to create IO proc: \(err)"])
         }
 
-        disableHardwareInputStreams(aggregateID: primaryResources.aggregateDeviceID, procID: primaryResources.deviceProcID)
+        disableHardwareInputStreams(aggregateID: primaryResources.aggregateDeviceID, procID: primaryResources.deviceProcID, plan: plan)
 
         // Seed the ramp target before AudioDeviceStart so the first IOProc callback
         // ramps from userVolume→userVolume (no-op) instead of 1.0→userVolume.
@@ -835,6 +926,8 @@ final class ProcessTapController: ProcessTapControlling {
 
         targetDeviceUIDs = newDeviceUIDs
         currentDeviceUIDs = newDeviceUIDs
+        // A device that left may come back with another correction: forget the old one
+        autoEQProfilesByDevice = autoEQProfilesByDevice.filter { newDeviceUIDs.contains($0.key) }
 
         let endTime = CFAbsoluteTimeGetCurrent()
         logger.info("[UPDATE] === END === Total time: \((endTime - startTime) * 1000)ms")
@@ -945,6 +1038,7 @@ final class ProcessTapController: ProcessTapControlling {
         secondaryAutoEQProcessor = nil
         secondaryLoudnessCompensator = nil
         secondaryLoudnessEqualizerProcessor = nil
+        secondaryFanOut = nil
         _invalidating = false
     }
 
@@ -1064,7 +1158,7 @@ final class ProcessTapController: ProcessTapControlling {
         logger.debug("[CROSSFADE] Created secondary tap #\(tapID)")
 
         // Build multi-device aggregate description using helper
-        let description = buildAggregateDescription(
+        let (description, plan) = buildAggregateDescription(
             outputUIDs: outputUIDs,
             tapUUID: tapDesc.uuid,
             name: "FineTune-\(app.id)-secondary"
@@ -1111,7 +1205,8 @@ final class ProcessTapController: ProcessTapControlling {
         secondaryEQProcessor = secEQ
 
         let secAutoEQ = AutoEQProcessor(sampleRate: sampleRate)
-        if let profile = autoEQProcessor?.currentProfile {
+        secAutoEQ.setPreampEnabled(autoEQPreampEnabled)
+        if let profile = startingAutoEQProfile(for: outputUIDs.first) {
             secAutoEQ.updateProfile(profile)
         }
         secondaryAutoEQProcessor = secAutoEQ
@@ -1123,6 +1218,7 @@ final class ProcessTapController: ProcessTapControlling {
         secLoudness.updateForVolume(_lastLoudnessVolume)
         if !(loudnessCompensator?.isEnabled ?? false) { secLoudness.setEnabled(false) }
         secondaryLoudnessCompensator = secLoudness
+        secondaryFanOut = makeFanOut(for: plan, sampleRate: sampleRate)
 
         nextCallbackID += 1
         _secondaryCallbackID = nextCallbackID
@@ -1143,7 +1239,7 @@ final class ProcessTapController: ProcessTapControlling {
             throw CrossfadeError.tapCreationFailed(err)
         }
 
-        disableHardwareInputStreams(aggregateID: secondaryResources.aggregateDeviceID, procID: secondaryResources.deviceProcID)
+        disableHardwareInputStreams(aggregateID: secondaryResources.aggregateDeviceID, procID: secondaryResources.deviceProcID, plan: plan)
 
         err = AudioDeviceStart(secondaryResources.aggregateDeviceID, secondaryResources.deviceProcID)
         guard err == noErr else {
@@ -1167,6 +1263,7 @@ final class ProcessTapController: ProcessTapControlling {
         secondaryAutoEQProcessor = nil
         secondaryLoudnessCompensator = nil
         secondaryLoudnessEqualizerProcessor = nil
+        secondaryFanOut = nil
     }
 
     private func promoteSecondaryToPrimary() {
@@ -1185,6 +1282,9 @@ final class ProcessTapController: ProcessTapControlling {
         let oldAutoEQ = autoEQProcessor
         let oldLoudness = loudnessCompensator
         let oldLoudnessEqualizer = loudnessEqualizerProcessor
+        let oldFanOut = primaryFanOut
+        primaryFanOut = secondaryFanOut
+        secondaryFanOut = nil
         eqProcessor = secondaryEQProcessor
         autoEQProcessor = secondaryAutoEQProcessor
         loudnessCompensator = secondaryLoudnessCompensator
@@ -1197,12 +1297,13 @@ final class ProcessTapController: ProcessTapControlling {
         // Deferred cleanup: hold old processors alive briefly so any in-flight RT callback
         // that read the pointer before the swap finishes its buffer without accessing freed memory.
         // 0.5s is conservative — audio callbacks run at ~5ms intervals.
-        if oldEQ != nil || oldAutoEQ != nil || oldLoudness != nil || oldLoudnessEqualizer != nil {
+        if oldEQ != nil || oldAutoEQ != nil || oldLoudness != nil || oldLoudnessEqualizer != nil || oldFanOut != nil {
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
                 _ = oldEQ
                 _ = oldAutoEQ
                 _ = oldLoudness
                 _ = oldLoudnessEqualizer
+                _ = oldFanOut
             }
         }
 
@@ -1288,7 +1389,7 @@ final class ProcessTapController: ProcessTapControlling {
         newResources.tapID = tapID
 
         // Build multi-device aggregate description using helper
-        let description = buildAggregateDescription(
+        let (description, plan) = buildAggregateDescription(
             outputUIDs: outputUIDs,
             tapUUID: newTapDesc.uuid,
             name: "FineTune-\(app.id)"
@@ -1307,6 +1408,15 @@ final class ProcessTapController: ProcessTapControlling {
         guard newResources.aggregateDeviceID.waitUntilReady(timeout: 2.0) else {
             newResources.destroy()
             throw CrossfadeError.deviceNotReady
+        }
+
+        // The old IO proc only outputs silence from here on (_forceSilence), so the chains
+        // can be replaced before the new one starts.
+        let newSampleRate = (try? newResources.aggregateDeviceID.readNominalSampleRate()) ?? 48_000
+        let oldFanOut = primaryFanOut
+        primaryFanOut = makeFanOut(for: plan, sampleRate: newSampleRate)
+        if let oldFanOut {
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { _ = oldFanOut }
         }
 
         nextCallbackID += 1
@@ -1328,7 +1438,7 @@ final class ProcessTapController: ProcessTapControlling {
             throw CrossfadeError.tapCreationFailed(err)
         }
 
-        disableHardwareInputStreams(aggregateID: newResources.aggregateDeviceID, procID: newResources.deviceProcID)
+        disableHardwareInputStreams(aggregateID: newResources.aggregateDeviceID, procID: newResources.deviceProcID, plan: plan)
 
         err = AudioDeviceStart(newResources.aggregateDeviceID, newResources.deviceProcID)
         guard err == noErr else {
@@ -1728,6 +1838,24 @@ final class ProcessTapController: ProcessTapControlling {
             autoEQProc = secondaryAutoEQProcessor
             loudnessEqualizerProc = secondaryLoudnessEqualizerProcessor
             loudnessCompensatorProc = secondaryLoudnessCompensator
+        }
+
+        // Several devices: each renders its own buffer with its own AutoEQ and master volume
+        if let fanOut = isPrimary ? primaryFanOut : secondaryFanOut,
+           fanOut.render(
+               inputBuffers: inputBuffers,
+               outputBuffers: outputBuffers,
+               targetVolume: targetVol,
+               crossfadeMultiplier: crossfadeMultiplier,
+               outputGateMultiplier: outputGateMultiplier,
+               rampCoefficient: rampCoeff
+           ) {
+            if isPrimary {
+                _primaryCurrentVolume = targetVol
+            } else {
+                _secondaryCurrentVolume = targetVol
+            }
+            return
         }
 
         Self.processMappedBuffers(

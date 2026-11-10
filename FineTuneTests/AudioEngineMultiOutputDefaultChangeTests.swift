@@ -170,3 +170,46 @@ struct AudioEngineMultiOutputDefaultChangeTests {
         #expect(!fix.engine.isMultiRouted(app.id))
     }
 }
+
+@Suite("AudioEngine multi-device output — each device keeps its own settings", .serialized)
+@MainActor
+struct AudioEngineMultiOutputPerDeviceTests {
+
+    @Test("Each device's master volume reaches its own buffer; the app gain stays shared")
+    func masterVolumePerDevice() async throws {
+        let app = makeApp(pid: 2100)
+        let fix = makeFixture(apps: [app])
+        await routeToAAndB(app, in: fix)
+        let tap = try #require(fix.log.tap(forPID: 2100))
+        let appGain = tap.volume
+
+        fix.engine.setDeviceMasterVolume(0.25, for: fix.b.uid)
+
+        #expect(tap.outputGainsByDevice[fix.b.uid] == 0.25)
+        #expect(tap.outputGainsByDevice[fix.a.uid] == 1.0)
+        #expect(tap.volume == appGain)
+    }
+
+    @Test("A device's gain is known before it joins the tap")
+    func gainKnownBeforeJoining() async throws {
+        let app = makeApp(pid: 2101)
+        let fix = makeFixture(apps: [app])
+        fix.engine.setDeviceMasterVolume(0.5, for: fix.b.uid)
+        await routeToAAndB(app, in: fix)
+        let tap = try #require(fix.log.tap(forPID: 2101))
+        #expect(tap.outputGainsByDevice[fix.b.uid] == 0.5)
+    }
+
+    @Test("Each device gets its own AutoEQ decision")
+    func autoEQPerDevice() async throws {
+        let app = makeApp(pid: 2102)
+        let fix = makeFixture(apps: [app])
+        await routeToAAndB(app, in: fix)
+        let tap = try #require(fix.log.tap(forPID: 2102))
+        // These test devices do not support AutoEQ: each is told "no correction"
+        let a = try #require(tap.autoEQProfileIDsByDevice[fix.a.uid])
+        let b = try #require(tap.autoEQProfileIDsByDevice[fix.b.uid])
+        #expect(a == nil)
+        #expect(b == nil)
+    }
+}
