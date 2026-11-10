@@ -7,6 +7,7 @@ struct LiquidGlassSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
     let showUnityMarker: Bool
+    let fillColor: Color
     let onEditingChanged: ((Bool) -> Void)?
 
     @State private var isEditing = false
@@ -21,11 +22,13 @@ struct LiquidGlassSlider: View {
         value: Binding<Double>,
         in range: ClosedRange<Double> = 0...1,
         showUnityMarker: Bool = false,
+        fillColor: Color = DesignTokens.Colors.accentPrimary,
         onEditingChanged: ((Bool) -> Void)? = nil
     ) {
         self._value = value
         self.range = range
         self.showUnityMarker = showUnityMarker
+        self.fillColor = fillColor
         self.onEditingChanged = onEditingChanged
     }
 
@@ -47,7 +50,7 @@ struct LiquidGlassSlider: View {
 
                     // Filled track
                     Capsule()
-                        .fill(DesignTokens.Colors.accentPrimary)
+                        .fill(fillColor)
                         .frame(width: max(trackHeight, geo.size.width * normalizedValue), height: trackHeight)
                 }
                 .frame(maxHeight: .infinity)

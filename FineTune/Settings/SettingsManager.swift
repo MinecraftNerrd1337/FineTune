@@ -29,7 +29,7 @@ nonisolated struct AppSettings: Codable, Equatable {
 
     // Audio
     var defaultNewAppVolume: Float = 1.0      // 100% (unity gain)
-    var masterVolume: Float = 1.0             // Software master gain applied on top of every app (1.0 = unity, 0 = silence)
+    var masterVolumeOptionKeyEnabled: Bool = true  // Hold ⌥ on a device slider to adjust that device's master volume
 
     // Input Device Lock
     var lockInputDevice: Bool = true          // Prevent auto-switching input device
@@ -75,8 +75,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         menuBarIconStyle = try c.decodeIfPresent(MenuBarIconStyle.self, forKey: .menuBarIconStyle) ?? .default
         defaultNewAppVolume = try c.decodeIfPresent(Float.self, forKey: .defaultNewAppVolume) ?? 1.0
-        let decodedMaster = try c.decodeIfPresent(Float.self, forKey: .masterVolume) ?? 1.0
-        masterVolume = decodedMaster.isFinite ? min(max(decodedMaster, 0), 1) : 1.0
+        masterVolumeOptionKeyEnabled = try c.decodeIfPresent(Bool.self, forKey: .masterVolumeOptionKeyEnabled) ?? true
         lockInputDevice = try c.decodeIfPresent(Bool.self, forKey: .lockInputDevice) ?? true
         showDeviceDisconnectAlerts = try c.decodeIfPresent(Bool.self, forKey: .showDeviceDisconnectAlerts) ?? true
         loudnessCompensationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessCompensationEnabled) ?? false
@@ -128,6 +127,9 @@ final class SettingsManager {
         var softwareDeviceVolumes: [String: Float] = [:]      // device UID → visible volume (0.0-1.0)
         var softwareDeviceMuteStates: [String: Bool] = [:]    // device UID → software mute state
         var softwareDeviceSavedVolumes: [String: Float] = [:] // device UID → volume before mute
+
+        // Master volume: software gain on top of a device's own volume, whatever its tier (missing = 100%)
+        var deviceMasterVolumes: [String: Float] = [:]        // device UID → gain (0.0-1.0)
 
         // Per-device volume control tier override (overrides auto-detection).
         // nil/missing → auto-detect (hardware/ddc/software). Populated only by
@@ -186,6 +188,9 @@ final class SettingsManager {
                 .mapValues { min($0, 1.0) }
             softwareDeviceMuteStates = try c.decodeIfPresent([String: Bool].self, forKey: .softwareDeviceMuteStates) ?? [:]
             softwareDeviceSavedVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .softwareDeviceSavedVolumes) ?? [:])
+                .filter { $0.value.isFinite && $0.value >= 0 }
+                .mapValues { min($0, 1.0) }
+            deviceMasterVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .deviceMasterVolumes) ?? [:])
                 .filter { $0.value.isFinite && $0.value >= 0 }
                 .mapValues { min($0, 1.0) }
             deviceVolumeTierOverride = try c.decodeIfPresent([String: VolumeControlTier].self, forKey: .deviceVolumeTierOverride) ?? [:]
@@ -434,6 +439,21 @@ final class SettingsManager {
 
     func setSoftwareDeviceSavedVolume(for deviceUID: String, to volume: Float) {
         settings.softwareDeviceSavedVolumes[deviceUID] = normalizedDeviceVolume(volume)
+        scheduleSave()
+    }
+
+    // MARK: - Per-Device Master Volume
+
+    /// Master volume of a device: software gain on top of its own volume, whatever its tier. 1.0 = off.
+    func getDeviceMasterVolume(for deviceUID: String) -> Float {
+        settings.deviceMasterVolumes[deviceUID] ?? 1.0
+    }
+
+    func setDeviceMasterVolume(for deviceUID: String, to volume: Float) {
+        let clamped = volume.isFinite ? min(max(volume, 0), 1) : 1.0
+        guard clamped != getDeviceMasterVolume(for: deviceUID) else { return }
+        // 100% is the default, so it is stored as no entry at all.
+        settings.deviceMasterVolumes[deviceUID] = clamped < 1.0 ? clamped : nil
         scheduleSave()
     }
 
@@ -860,6 +880,7 @@ final class SettingsManager {
         settings.softwareDeviceVolumes.removeAll()
         settings.softwareDeviceMuteStates.removeAll()
         settings.softwareDeviceSavedVolumes.removeAll()
+        settings.deviceMasterVolumes.removeAll()
         settings.deviceVolumeTierOverride.removeAll()
         settings.deviceIconOverrides.removeAll()
         settings.outputDevicePriority.removeAll()

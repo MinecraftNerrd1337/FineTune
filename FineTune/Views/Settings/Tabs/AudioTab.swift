@@ -103,6 +103,16 @@ struct AudioTab: View {
             }
             SettingsRowDivider()
             SettingsRow(
+                "Master Volume with ⌥",
+                description: "Hold ⌥ on an output device's slider to adjust its master volume without switching to it"
+            ) {
+                Toggle("", isOn: $settings.appSettings.masterVolumeOptionKeyEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
                 "System Sounds",
                 description: "Where alerts and effects play"
             ) {

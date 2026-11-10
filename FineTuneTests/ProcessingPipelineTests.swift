@@ -108,8 +108,6 @@ private func processWithDefaults(
     loudnessEqualizerProc: LoudnessEqualizer? = nil,
     loudnessCompensatorProc: LoudnessCompensator? = nil
 ) {
-    // Master volume left at unity: the master stage is skipped, so these tests see the pipeline without it.
-    var masterCurrent: Float = 1.0
     ProcessTapController.processMappedBuffers(
         inputBuffers: input.bufferList,
         outputBuffers: output.bufferList,
@@ -120,7 +118,6 @@ private func processWithDefaults(
         preferredStereoLeft: preferredStereoLeft,
         preferredStereoRight: preferredStereoRight,
         currentVol: &currentVol,
-        masterCurrent: &masterCurrent,
         eqProc: eqProc,
         autoEQProc: autoEQProc,
         loudnessEqualizerProc: loudnessEqualizerProc,

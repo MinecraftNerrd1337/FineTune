@@ -619,7 +619,12 @@ struct MenuBarPopupView: View {
                             audioEngine.setAutoEQPreampEnabled(!audioEngine.autoEQPreampEnabled)
                         },
                         isFocused: hasKeyboardEngaged && selectedRow == .device(uid: device.uid),
-                        iconOverrideSymbol: audioEngine.settingsManager.getDeviceIconOverride(for: device.uid)
+                        iconOverrideSymbol: audioEngine.settingsManager.getDeviceIconOverride(for: device.uid),
+                        masterVolume: audioEngine.deviceMasterVolume(for: device.uid),
+                        onMasterVolumeChange: { volume in
+                            audioEngine.setDeviceMasterVolume(volume, for: device.uid)
+                        },
+                        optionKeyEditsMasterVolume: audioEngine.settingsManager.appSettings.masterVolumeOptionKeyEnabled
                     )
                     .id(PopupKeyboardNavModel.RowID.device(uid: device.uid))
                 }

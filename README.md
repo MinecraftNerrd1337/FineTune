@@ -80,6 +80,7 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 - **Input device control** — Monitor and adjust microphone levels
 - **Alert volume** — Control macOS notification and alert volume from settings
 - **Smart volume backend** — FineTune auto-picks hardware, DDC, or software volume per device. If the hardware slider on a USB DAC or HDMI output doesn't actually control level, force software volume from the device inspector and FineTune remembers the choice for that device
+- **Master volume per device** — A software volume on top of the output device's own hardware or DDC volume, remembered per device, to go quieter than its lowest step. The master slider above the apps sets it for the current output; hold ⌥ on any device's slider to set that device's without switching to it. It works like a software-backed device's volume, so it adds no processing step
 - **Device inspector** — Tap the info button on any device row for sample rate (with picker), transport, UID copy, hog-mode banner, and the software-volume override
 - **Hide devices** — Eye toggle in edit mode hides output and input devices you don't want in the list, mirroring the app-hide flow
 - **Bluetooth device management** — Connect paired devices directly from the menu bar

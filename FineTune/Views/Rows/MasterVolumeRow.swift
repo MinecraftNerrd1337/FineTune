@@ -1,9 +1,10 @@
 // FineTune/Views/Rows/MasterVolumeRow.swift
 import SwiftUI
 
-/// Software master volume, applied as the last stage of every tap, right before the device.
-/// 100% leaves the audio untouched; 0% silences all apps. Lets the user go quieter
-/// than the lowest hardware step of the output device.
+/// Master volume of the default output device, remembered per device: a software gain folded
+/// into the gain of every tap playing on it, like a software-backed device's volume. 100%
+/// leaves the audio untouched; 0% silences the apps. Lets the user go quieter than the lowest hardware step of
+/// the device. Holding ⌥ on any device's slider adjusts that device's master volume.
 struct MasterVolumeRow: View {
     let volume: Float
     let onVolumeChange: (Float) -> Void
@@ -55,6 +56,8 @@ struct MasterVolumeRow: View {
             LiquidGlassSlider(
                 value: sliderBinding,
                 showUnityMarker: false,
+                // Same color as a device slider showing its master volume while ⌥ is held
+                fillColor: DesignTokens.Colors.masterVolumeOption,
                 onEditingChanged: { editing in
                     if !editing { dragOverrideValue = nil }
                 }
@@ -73,7 +76,7 @@ struct MasterVolumeRow: View {
                 range: 0...100
             )
         }
-        .help("Software master volume: applies on top of every app and the device volume")
+        .help("Master volume of the current output device: applies on top of every app and the device volume, remembered per device. Hold ⌥ on a device's slider to adjust its own.")
     }
 }
 

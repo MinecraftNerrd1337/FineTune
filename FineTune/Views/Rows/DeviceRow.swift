@@ -17,6 +17,10 @@ import SwiftUI
 ///   that needs perceptual scaling (dr-lex.be, Discord perceptual).
 ///
 /// See: IOAudioLevelControl.h, MCCS VCP 0x62, empirical ScalarToDecibels measurement.
+///
+/// While ⌥ is held, the slider and percentage edit the device's master volume instead (the
+/// software gain FineTune applies on top of the device's own volume, whatever its backend,
+/// with the master slider's x² curve), without making the device the default output.
 struct DeviceRow: View {
     let device: AudioDevice
     let isDefault: Bool
@@ -44,7 +48,22 @@ struct DeviceRow: View {
     let isFocused: Bool
     let iconOverrideSymbol: String?
 
+    // Master volume (optional — without `onMasterVolumeChange` ⌥ does nothing)
+    let masterVolume: Float
+    let onMasterVolumeChange: ((Float) -> Void)?
+    let optionKeyEditsMasterVolume: Bool
+
     @State private var sliderValue: Double
+    /// Slider position of the master volume, mirrored like `sliderValue` for the device volume.
+    @State private var masterSliderValue: Double
+    @State private var isUpdatingMasterFromModel = false
+    /// Which volume the current drag edits (true: master volume), fixed when the drag starts
+    /// so pressing or releasing ⌥ mid-drag doesn't swap the slider under the pointer.
+    @State private var dragEditsMaster: Bool?
+    /// Same for typing in the percentage: fixed when the edit starts, so ⌥ can be released to
+    /// type, and kept a moment after it ends so the slider is seen reaching the typed value.
+    @State private var percentageEditsMaster: Bool?
+    @State private var percentageEditRelease: Task<Void, Never>?
     @State private var isEditing = false
     @State private var suppressSliderAutoUnmute = false
     /// Suppresses write-back when slider is being synced from a device volume change.
@@ -63,6 +82,30 @@ struct DeviceRow: View {
 
     /// Default slider position to restore when unmuting from 0 (50%)
     private let defaultUnmuteVolume: Double = 0.5
+
+    /// True while the slider and percentage show the master volume instead of the device volume.
+    private var showsMasterVolume: Bool {
+        guard optionKeyEditsMasterVolume, onMasterVolumeChange != nil else { return false }
+        return dragEditsMaster ?? percentageEditsMaster ?? OptionKeyMonitor.shared.isOptionDown
+    }
+
+    /// The slider position the controls currently edit. Resolved when read or written, so the
+    /// scroll-wheel monitor installed on hover follows ⌥ too.
+    private var activeSliderValue: Binding<Double> {
+        Binding(
+            get: { showsMasterVolume ? masterSliderValue : sliderValue },
+            set: { newValue in
+                if showsMasterVolume {
+                    masterSliderValue = newValue
+                } else {
+                    sliderValue = newValue
+                }
+            }
+        )
+    }
+
+    /// How long the slider keeps showing the master volume after a typed edit ends.
+    private static let percentageEditReleaseDelay: Duration = .milliseconds(900)
 
     private var displayIcon: NSImage? {
         DeviceIconResolver.displayIcon(
@@ -94,7 +137,10 @@ struct DeviceRow: View {
         autoEQPreampEnabled: Bool = true,
         onAutoEQPreampToggle: (() -> Void)? = nil,
         isFocused: Bool = false,
-        iconOverrideSymbol: String? = nil
+        iconOverrideSymbol: String? = nil,
+        masterVolume: Float = 1.0,
+        onMasterVolumeChange: ((Float) -> Void)? = nil,
+        optionKeyEditsMasterVolume: Bool = false
     ) {
         self.device = device
         self.isDefault = isDefault
@@ -118,7 +164,11 @@ struct DeviceRow: View {
         self.onAutoEQPreampToggle = onAutoEQPreampToggle
         self.isFocused = isFocused
         self.iconOverrideSymbol = iconOverrideSymbol
+        self.masterVolume = masterVolume
+        self.onMasterVolumeChange = onMasterVolumeChange
+        self.optionKeyEditsMasterVolume = optionKeyEditsMasterVolume
         self._sliderValue = State(initialValue: Self.volumeToSlider(volume, backend: volumeBackend))
+        self._masterSliderValue = State(initialValue: VolumeMapping.gainToSlider(masterVolume))
     }
 
     var body: some View {
@@ -135,6 +185,10 @@ struct DeviceRow: View {
                 }
             }
             .hoverableRow(isFocused: isFocused)
+            .onAppear { OptionKeyMonitor.shared.start() }
+            .onHover { hovering in
+                if hovering { OptionKeyMonitor.shared.refresh() }
+            }
     }
 
     // MARK: - Device Header
@@ -205,14 +259,22 @@ struct DeviceRow: View {
                 }
             }
 
-            // Volume slider (Liquid Glass)
+            // Volume slider (Liquid Glass): the device volume, or its master volume while ⌥ is held
             LiquidGlassSlider(
-                value: $sliderValue,
+                value: activeSliderValue,
+                fillColor: showsMasterVolume ? DesignTokens.Colors.masterVolumeOption : DesignTokens.Colors.accentPrimary,
                 onEditingChanged: { editing in
-                    isEditing = editing
+                    if editing {
+                        let editsMaster = showsMasterVolume
+                        dragEditsMaster = editsMaster
+                        isEditing = !editsMaster
+                    } else {
+                        dragEditsMaster = nil
+                        isEditing = false
+                    }
                 }
             )
-            .opacity(showMutedIcon ? 0.5 : 1.0)
+            .opacity(showMutedIcon && !showsMasterVolume ? 0.5 : 1.0)
             .onChange(of: sliderValue) { _, newValue in
                 // Skip write-back when syncing from device (breaks USB DAC quantization spiral)
                 if isUpdatingSliderFromDevice {
@@ -229,16 +291,45 @@ struct DeviceRow: View {
                     onMuteToggle()
                 }
             }
-            .scrollWheelStep($sliderValue, in: 0.0...1.0)
+            .onChange(of: masterSliderValue) { _, newValue in
+                if isUpdatingMasterFromModel {
+                    isUpdatingMasterFromModel = false
+                    return
+                }
+                onMasterVolumeChange?(VolumeMapping.sliderToGain(newValue))
+            }
+            .scrollWheelStep(activeSliderValue, in: 0.0...1.0)
 
-            // Editable volume percentage
+            // Editable volume percentage (of the master volume while ⌥ is held)
             EditablePercentage(
                 percentage: Binding(
-                    get: { Int(round(sliderValue * 100)) },
-                    set: { sliderValue = Double($0) / 100.0 }
+                    get: { Int(round(activeSliderValue.wrappedValue * 100)) },
+                    set: { newValue in
+                        // Typed values glide the slider there instead of jumping
+                        withAnimation(.easeOut(duration: 0.25)) {
+                            activeSliderValue.wrappedValue = Double(newValue) / 100.0
+                        }
+                    }
                 ),
                 range: 0...100,
-                isRowFocused: isFocused
+                isRowFocused: isFocused,
+                onEditingChanged: { editing in
+                    percentageEditRelease?.cancel()
+                    percentageEditRelease = nil
+                    if editing {
+                        // Keeps the target of an edit that starts during the release delay
+                        if percentageEditsMaster == nil {
+                            percentageEditsMaster = showsMasterVolume
+                        }
+                    } else {
+                        percentageEditRelease = Task { @MainActor in
+                            try? await Task.sleep(for: Self.percentageEditReleaseDelay)
+                            guard !Task.isCancelled else { return }
+                            percentageEditsMaster = nil
+                            percentageEditRelease = nil
+                        }
+                    }
+                }
             )
         }
         .frame(height: DesignTokens.Dimensions.rowContentHeight)
@@ -249,6 +340,19 @@ struct DeviceRow: View {
             guard newSlider != sliderValue else { return }
             isUpdatingSliderFromDevice = true
             sliderValue = newSlider
+        }
+        .onDisappear {
+            percentageEditRelease?.cancel()
+            percentageEditRelease = nil
+            percentageEditsMaster = nil
+        }
+        .onChange(of: masterVolume) { _, newValue in
+            // Changed from the master slider, or written back from our own edit
+            guard dragEditsMaster != true else { return }
+            let newSlider = VolumeMapping.gainToSlider(newValue)
+            guard newSlider != masterSliderValue else { return }
+            isUpdatingMasterFromModel = true
+            masterSliderValue = newSlider
         }
     }
 }

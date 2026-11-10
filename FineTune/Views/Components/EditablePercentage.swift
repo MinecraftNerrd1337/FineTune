@@ -30,6 +30,9 @@ struct EditablePercentage: View {
         isVisuallyEditing ? DesignTokens.Colors.accentPrimary : DesignTokens.Colors.textSecondary
     }
 
+    /// Called when editing starts or ends, by mouse or keyboard entry.
+    var onEditingChanged: ((Bool) -> Void)? = nil
+
     var body: some View {
         HStack(spacing: 0) {
             if let buffer = keyboardBuffer {
@@ -118,6 +121,9 @@ struct EditablePercentage: View {
         }
         .animation(.easeOut(duration: 0.15), value: isEditing)
         .animation(.easeOut(duration: 0.1), value: isHovered)
+        .onChange(of: isVisuallyEditing) { _, editing in
+            onEditingChanged?(editing)
+        }
     }
 
     private func startEditing() {

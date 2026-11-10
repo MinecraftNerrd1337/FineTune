@@ -684,22 +684,38 @@ final class AudioEngine {
         logger.info("Settings reset: engine state synchronized")
     }
 
-    /// Software master gain (0...1) applied by each tap as its very last stage, after the
-    /// per-app volume, EQ, DSP and limiter, right before the device.
-    /// 1.0 leaves the signal untouched; 0 silences all tapped apps.
+    // MARK: - Master Volume
+
+    /// Master volume (0...1) of an output device, remembered per device: a software gain on top
+    /// of the device's own hardware, DDC or software volume. Applied like a software-backed
+    /// device's volume: folded into the gain of each tap playing on that device alone, so it adds
+    /// no processing stage (1.0 changes nothing). A tap fanned out to several devices sends them
+    /// the same buffer, so it keeps the app gain alone rather than one device's master volume.
+    /// Audio FineTune doesn't tap (system sounds, ignored apps, apps on a call) is not affected.
+    func deviceMasterVolume(for deviceUID: String) -> Float {
+        settingsManager.getDeviceMasterVolume(for: deviceUID)
+    }
+
+    func setDeviceMasterVolume(_ volume: Float, for deviceUID: String) {
+        settingsManager.setDeviceMasterVolume(for: deviceUID, to: volume)
+        let loudnessEnabled = settingsManager.appSettings.loudnessCompensationEnabled
+        for tap in taps.values where tap.currentDeviceUIDs == [deviceUID] {
+            tap.volume = effectiveVolume(for: tap.app.id, deviceUIDs: tap.currentDeviceUIDs)
+            if loudnessEnabled {
+                tap.updateLoudnessCompensation(volume: effectiveLoudnessVolume(for: tap), enabled: true)
+            }
+        }
+    }
+
+    /// Master volume of the default output device: the master slider above the apps.
     var masterVolume: Float {
-        settingsManager.appSettings.masterVolume
+        guard let deviceUID = deviceVolumeMonitor.defaultDeviceUID else { return 1.0 }
+        return deviceMasterVolume(for: deviceUID)
     }
 
     func setMasterVolume(_ volume: Float) {
-        let clamped = volume.isFinite ? min(max(volume, 0), 1) : 1.0
-        guard clamped != settingsManager.appSettings.masterVolume else { return }
-        var settings = settingsManager.appSettings
-        settings.masterVolume = clamped
-        settingsManager.updateAppSettings(settings)
-        for tap in taps.values {
-            tap.masterVolume = clamped
-        }
+        guard let deviceUID = deviceVolumeMonitor.defaultDeviceUID else { return }
+        setDeviceMasterVolume(volume, for: deviceUID)
     }
 
     func setVolume(for app: AudioApp, to volume: Float) {
@@ -735,35 +751,39 @@ final class AudioEngine {
         volumeState.getBoost(for: app.id)
     }
 
-    /// Effective gain for ProcessTapController: app volume × boost, plus optional
-    /// single-device software output gain for software-backed devices.
-    /// Single-device-routed apps on `.software`-backed devices always receive the
-    /// device's software gain; multi-destination routing keeps `appGain` alone
-    /// because per-device software gain has no unambiguous meaning across fan-out.
+    /// Effective gain for ProcessTapController: app volume × boost, plus the single
+    /// device's master volume and, for software-backed devices, its software output gain.
+    /// Multi-destination routing keeps `appGain` alone because a per-device gain has no
+    /// unambiguous meaning across fan-out (every device gets the same buffer).
     private func effectiveVolume(for pid: pid_t, deviceUIDs: [String]? = nil) -> Float {
         let appGain = volumeState.getVolume(for: pid) * volumeState.getBoost(for: pid).rawValue
 
         guard let resolvedUIDs = deviceUIDs, resolvedUIDs.count == 1,
-              let primaryUID = resolvedUIDs.first,
-              let device = deviceMonitor.device(for: primaryUID),
-              outputVolumeBackend(for: device.id) == .software else {
+              let primaryUID = resolvedUIDs.first else {
             return appGain
         }
+        let gain = appGain * deviceMasterVolume(for: primaryUID)
 
-        return appGain * deviceVolumeMonitor.outputProcessingGain(for: device.id)
+        guard let device = deviceMonitor.device(for: primaryUID),
+              outputVolumeBackend(for: device.id) == .software else {
+            return gain
+        }
+
+        return gain * deviceVolumeMonitor.outputProcessingGain(for: device.id)
     }
 
-    /// Estimated listening level for loudness compensation: device volume × per-app slider.
-    /// Does not include boost (intentional amplification beyond reference).
+    /// Estimated listening level for loudness compensation: device volume × master volume ×
+    /// per-app slider. Does not include boost (intentional amplification beyond reference).
     /// The compensator's phon estimation clamps to [0,1] so values > 1 are treated as reference.
     private func effectiveLoudnessVolume(for tap: any ProcessTapControlling) -> Float {
-        tap.currentDeviceVolume * volumeState.getVolume(for: tap.app.id)
+        let uids = tap.currentDeviceUIDs
+        let master = uids.count == 1 ? deviceMasterVolume(for: uids[0]) : 1.0
+        return tap.currentDeviceVolume * master * volumeState.getVolume(for: tap.app.id)
     }
 
     private func applyTapOutputState(to tap: any ProcessTapControlling, for pid: pid_t, deviceUIDs: [String]? = nil) {
         let resolvedUIDs = deviceUIDs ?? tap.currentDeviceUIDs
         tap.volume = effectiveVolume(for: pid, deviceUIDs: resolvedUIDs)
-        tap.masterVolume = masterVolume
         tap.isMuted = volumeState.getMute(for: pid)
 
         if let primaryUID = resolvedUIDs.first,
