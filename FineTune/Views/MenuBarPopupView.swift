@@ -696,7 +696,12 @@ struct MenuBarPopupView: View {
                             audioEngine.settingsManager.setDeviceVolumeTierOverride(for: device.uid, to: newTier)
                             deviceVolumeMonitor.applyTierOverrideChange(for: device.id)
                         },
-                        onDismiss: {}
+                        onDismiss: {},
+                        keepAliveEnabled: audioEngine.deviceKeepAlive.isEnabled(for: device.uid),
+                        keepAliveStatus: audioEngine.deviceKeepAlive.status(for: device.uid),
+                        onKeepAliveChange: { enabled in
+                            audioEngine.deviceKeepAlive.setEnabled(enabled, for: device.uid)
+                        }
                     )
                 }
             }

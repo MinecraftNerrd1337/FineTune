@@ -16,6 +16,8 @@ final class AudioEngine {
     let autoEQProfileManager: AutoEQProfileManager
     let permission: AudioRecordingPermission
     let appListCoordinator: AppListCoordinator
+    /// Keeps the output devices the user chose streaming silence, so they never stop or sleep.
+    let deviceKeepAlive: DeviceKeepAliveService
 
     #if !APP_STORE
     let ddcController: DDCController
@@ -191,14 +193,16 @@ final class AudioEngine {
         // If a custom deviceProvider is given, use it directly.
         // Otherwise create a real AudioDeviceMonitor (needed by DeviceVolumeMonitor and default tap factory).
         let realDeviceMonitor: AudioDeviceMonitor?
+        let resolvedDeviceProvider: any AudioDeviceProviding
         if let provider = deviceProvider {
             realDeviceMonitor = provider as? AudioDeviceMonitor
-            self.deviceMonitor = provider
+            resolvedDeviceProvider = provider
         } else {
             let monitor = AudioDeviceMonitor()
             realDeviceMonitor = monitor
-            self.deviceMonitor = monitor
+            resolvedDeviceProvider = monitor
         }
+        self.deviceMonitor = resolvedDeviceProvider
         self.processMonitor = processMonitor ?? AudioProcessMonitor()
         self.bluetoothDeviceMonitor = BluetoothDeviceMonitor()
 
@@ -223,6 +227,8 @@ final class AudioEngine {
             self.deviceVolumeMonitor = DeviceVolumeMonitor(deviceMonitor: realDeviceMonitor, settingsManager: manager)
         }
         #endif
+
+        self.deviceKeepAlive = DeviceKeepAliveService(settingsManager: manager, deviceProvider: resolvedDeviceProvider)
 
         // Tap factory: use provided factory or default to ProcessTapController
         if let factory = tapFactory {
@@ -267,6 +273,8 @@ final class AudioEngine {
                 }
                 self.deviceMonitor.start()
                 self.bluetoothDeviceMonitor.start()
+                // Right after the device list is populated, so kept-alive devices start at launch
+                self.deviceKeepAlive.start()
 
                 #if !APP_STORE
                 ddc.onProbeCompleted = { [weak self] in

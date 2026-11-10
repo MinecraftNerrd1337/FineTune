@@ -10,6 +10,10 @@ struct DeviceDetailSheet: View {
     let currentOverride: VolumeControlTier?
     let onOverrideChange: (VolumeControlTier?) -> Void
     let onDismiss: () -> Void
+    /// Keep-alive (optional — without `onKeepAliveChange` the sheet shows no keep-alive row)
+    let keepAliveEnabled: Bool
+    let keepAliveStatus: DeviceKeepAliveService.Status?
+    let onKeepAliveChange: ((Bool) -> Void)?
 
     @State private var viewModel: DeviceInspectorViewModel
 
@@ -21,7 +25,10 @@ struct DeviceDetailSheet: View {
         autoDetectedTier: VolumeControlTier,
         currentOverride: VolumeControlTier?,
         onOverrideChange: @escaping (VolumeControlTier?) -> Void,
-        onDismiss: @escaping () -> Void
+        onDismiss: @escaping () -> Void,
+        keepAliveEnabled: Bool = false,
+        keepAliveStatus: DeviceKeepAliveService.Status? = nil,
+        onKeepAliveChange: ((Bool) -> Void)? = nil
     ) {
         self.device = device
         self.transportType = transportType
@@ -29,6 +36,9 @@ struct DeviceDetailSheet: View {
         self.currentOverride = currentOverride
         self.onOverrideChange = onOverrideChange
         self.onDismiss = onDismiss
+        self.keepAliveEnabled = keepAliveEnabled
+        self.keepAliveStatus = keepAliveStatus
+        self.onKeepAliveChange = onKeepAliveChange
         self._viewModel = State(
             initialValue: DeviceInspectorViewModel(
                 deviceID: device.id,
@@ -63,6 +73,12 @@ struct DeviceDetailSheet: View {
                 separator
                 softwareToggle
                 calloutText
+            }
+
+            if let onKeepAliveChange {
+                separator
+                keepAliveToggle(onChange: onKeepAliveChange)
+                keepAliveCallout
             }
         }
         .padding(.horizontal, 12)
@@ -171,6 +187,65 @@ struct DeviceDetailSheet: View {
             .font(DesignTokens.Typography.caption)
             .foregroundStyle(DesignTokens.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: - Keep-Alive
+
+    private func keepAliveToggle(onChange: @escaping (Bool) -> Void) -> some View {
+        HStack(spacing: DesignTokens.Spacing.xs) {
+            Text("Keep stream alive")
+                .font(DesignTokens.Typography.pickerText)
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+
+            if keepAliveEnabled, let keepAliveStatus {
+                keepAliveStatusBadge(keepAliveStatus)
+            }
+
+            Spacer(minLength: DesignTokens.Spacing.sm)
+
+            Toggle("", isOn: Binding(get: { keepAliveEnabled }, set: { onChange($0) }))
+                .toggleStyle(.switch)
+                .scaleEffect(0.8)
+                .labelsHidden()
+        }
+    }
+
+    private func keepAliveStatusBadge(_ status: DeviceKeepAliveService.Status) -> some View {
+        Text(Self.keepAliveStatusText(status))
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(status == .running ? DesignTokens.Colors.textSecondary : DesignTokens.Colors.mutedIndicator)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(DesignTokens.Colors.glassFillStrong)
+            )
+            .help(Self.keepAliveStatusHelp(status))
+    }
+
+    private var keepAliveCallout: some View {
+        Text("Streams silence to the device at all times, so it never stops or goes to standby. Turn on for DACs that click or pop when playback starts or stops.")
+            .font(DesignTokens.Typography.caption)
+            .foregroundStyle(DesignTokens.Colors.textTertiary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    static func keepAliveStatusText(_ status: DeviceKeepAliveService.Status) -> String {
+        switch status {
+        case .starting: return "Starting"
+        case .running: return "Running"
+        case .blockedByHogMode: return "Blocked"
+        case .failed: return "Retrying"
+        }
+    }
+
+    static func keepAliveStatusHelp(_ status: DeviceKeepAliveService.Status) -> String {
+        switch status {
+        case .starting: return "Opening the device's stream"
+        case .running: return "The device is streaming silence"
+        case .blockedByHogMode(let pid): return "Another app (PID \(pid)) holds the device in exclusive mode. FineTune retries until it is released."
+        case .failed(let code): return "The device refused the stream (error \(code)). FineTune keeps retrying."
+        }
     }
 
     // MARK: - Helpers

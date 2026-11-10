@@ -137,6 +137,9 @@ final class SettingsManager {
         var deviceVolumeTierOverride: [String: VolumeControlTier] = [:]
         var deviceIconOverrides: [String: String] = [:]  // device UID → SF Symbol name
 
+        // Output devices FineTune keeps streaming silence to, so they never stop or power down
+        var keepAliveDeviceUIDs: Set<String> = []
+
         // Device priority (ordered device UIDs, highest priority first)
         var outputDevicePriority: [String] = []
         var inputDevicePriority: [String] = []
@@ -195,6 +198,7 @@ final class SettingsManager {
                 .mapValues { min($0, 1.0) }
             deviceVolumeTierOverride = try c.decodeIfPresent([String: VolumeControlTier].self, forKey: .deviceVolumeTierOverride) ?? [:]
             deviceIconOverrides = try c.decodeIfPresent([String: String].self, forKey: .deviceIconOverrides) ?? [:]
+            keepAliveDeviceUIDs = try c.decodeIfPresent(Set<String>.self, forKey: .keepAliveDeviceUIDs) ?? []
             outputDevicePriority = try c.decodeIfPresent([String].self, forKey: .outputDevicePriority) ?? []
             inputDevicePriority = try c.decodeIfPresent([String].self, forKey: .inputDevicePriority) ?? []
             hiddenOutputDeviceUIDs = try c.decodeIfPresent(Set<String>.self, forKey: .hiddenOutputDeviceUIDs) ?? []
@@ -477,6 +481,27 @@ final class SettingsManager {
     }
 
     // MARK: - Per-Device Icon Override
+
+    // MARK: - Per-Device Keep-Alive
+
+    /// Output devices FineTune keeps streaming silence to (see `DeviceKeepAliveService`).
+    var keepAliveDeviceUIDs: Set<String> {
+        settings.keepAliveDeviceUIDs
+    }
+
+    func isKeepAliveEnabled(for deviceUID: String) -> Bool {
+        settings.keepAliveDeviceUIDs.contains(deviceUID)
+    }
+
+    func setKeepAliveEnabled(_ enabled: Bool, for deviceUID: String) {
+        guard enabled != isKeepAliveEnabled(for: deviceUID) else { return }
+        if enabled {
+            settings.keepAliveDeviceUIDs.insert(deviceUID)
+        } else {
+            settings.keepAliveDeviceUIDs.remove(deviceUID)
+        }
+        scheduleSave()
+    }
 
     /// Returns the user-chosen SF Symbol override for a device, or nil when
     /// the automatic icon should take effect.
@@ -883,6 +908,7 @@ final class SettingsManager {
         settings.deviceMasterVolumes.removeAll()
         settings.deviceVolumeTierOverride.removeAll()
         settings.deviceIconOverrides.removeAll()
+        settings.keepAliveDeviceUIDs.removeAll()
         settings.outputDevicePriority.removeAll()
         settings.inputDevicePriority.removeAll()
         settings.hiddenOutputDeviceUIDs.removeAll()
