@@ -72,12 +72,15 @@ struct EQManagerPresetDetail: View {
         let engine: AutoEQCorrectionEngine
         let filters: [AutoEQFilter]
         let curve: [AutoEQCurvePoint]
+        let baseRate: Double
 
         init(_ preset: AutoEQProfile) {
             engine = preset.effectiveEngine
             // Only the linear-phase filter has a latency to compute
-            filters = engine == .linearPhaseFIR ? preset.filters : []
-            curve = engine == .linearPhaseFIR ? preset.curve : []
+            let isLinear = engine == .linearPhaseFIR
+            filters = isLinear ? preset.filters : []
+            curve = isLinear ? preset.curve : []
+            baseRate = isLinear ? preset.optimizedSampleRate : 0
         }
     }
 
@@ -145,11 +148,37 @@ struct EQManagerPresetDetail: View {
                     valueText(preset.effectiveEngine.displayName)
                 }
             }
+            if preset.kind == .parametric {
+                Divider()
+                row("Base rate") {
+                    if isEditing {
+                        Picker("Base rate", selection: Binding(
+                            get: { preset.optimizedSampleRate },
+                            set: { rate in editor.apply { $0.optimizedSampleRate = rate } }
+                        )) {
+                            ForEach(baseRateChoices, id: \.self) { Text(AutoEQBaseRate.label($0)).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 170)
+                    } else {
+                        valueText(AutoEQBaseRate.label(preset.optimizedSampleRate))
+                    }
+                }
+                .help("Sample rate the filters were designed for. AutoEQ uses 44.1 kHz. The exact engines reproduce the curve the filters have at this rate, whatever the rate of the device.")
+            }
             Divider()
             row("Latency") { valueText(latencyText) }
             Divider()
             row("Source") { valueText(preset.sourceLabel ?? "AutoEQ") }
         }
+    }
+
+    /// The offered rates, plus the preset's own when it is not one of them.
+    private var baseRateChoices: [Double] {
+        let choices = AutoEQBaseRate.choices
+        return choices.contains(preset.optimizedSampleRate) ? choices : [preset.optimizedSampleRate] + choices
     }
 
     // MARK: - Preamp Section
@@ -230,9 +259,12 @@ struct EQManagerPresetDetail: View {
 
     private var graphCaption: String {
         switch preset.effectiveEngine {
-        case .biquad: return "Biquad filters at 48 kHz"
-        case .matchedBiquad: return "Exact biquad filters at 48 kHz"
-        case .minimumPhaseFIR, .linearPhaseFIR: return "Exact curve"
+        case .biquad: return "Biquad filters played at 48 kHz"
+        case .matchedBiquad: return "Exact biquad filters played at 48 kHz"
+        case .minimumPhaseFIR, .linearPhaseFIR:
+            guard preset.kind == .parametric else { return "Exact curve" }
+            let rate = preset.optimizedSampleRate
+            return rate > 0 ? "Exact curve of \(AutoEQBaseRate.label(rate)) filters" : "Exact curve of analog filters"
         }
     }
 

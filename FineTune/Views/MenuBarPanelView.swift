@@ -1189,7 +1189,7 @@ struct MenuBarPanelView: View {
         sortedInputDevices = filtered.isEmpty ? all : filtered
     }
 
-    /// Opens a file panel to import a ParametricEQ.txt for a device
+    /// Opens a file panel to import a ParametricEQ.txt or GraphicEQ.txt for a device
     private func importAutoEQFile(for deviceUID: String) {
         // Dismiss the main panel so the file picker isn't obscured
         NSApp.keyWindow?.resignKey()
@@ -1198,15 +1198,30 @@ struct MenuBarPanelView: View {
         panel.allowedContentTypes = [UTType.plainText]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.message = "Select an AutoEQ ParametricEQ.txt file"
+        panel.message = "Select a ParametricEQ.txt or GraphicEQ.txt file (AutoEQ, Wavelet, Equalizer APO)"
+        // Sample rate the file's filters were designed for (a graphic curve ignores it)
+        let rateChoices = AutoEQBaseRate.choices
+        let ratePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        ratePopup.addItems(withTitles: rateChoices.map(AutoEQBaseRate.label))
+        ratePopup.selectItem(at: rateChoices.firstIndex(of: AutoEQBaseRate.lastImportRate) ?? 0)
+        let rateRow = NSStackView(views: [NSTextField(labelWithString: "Filters designed for:"), ratePopup])
+        rateRow.orientation = .horizontal
+        rateRow.spacing = 8
+        rateRow.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        rateRow.frame = NSRect(origin: .zero, size: rateRow.fittingSize)
+        panel.accessoryView = rateRow
+        panel.isAccessoryViewDisclosed = true
         // FineTune is an agent app (LSUIElement): without activation the panel opens behind other apps.
         NSApp.activate(ignoringOtherApps: true)
         panel.level = .modalPanel
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             let name = url.deletingPathExtension().lastPathComponent
+            let baseRate = rateChoices.indices.contains(ratePopup.indexOfSelectedItem)
+                ? rateChoices[ratePopup.indexOfSelectedItem] : AutoEQBaseRate.autoEQDefault
+            AutoEQBaseRate.lastImportRate = baseRate
             Task { @MainActor in
-                if let profile = audioEngine.autoEQProfileManager.importProfile(from: url, name: name) {
+                if let profile = audioEngine.autoEQProfileManager.importProfile(from: url, name: name, baseRate: baseRate) {
                     audioEngine.setAutoEQProfile(for: deviceUID, profileID: profile.id)
                     autoEQImportError = nil
                 } else {

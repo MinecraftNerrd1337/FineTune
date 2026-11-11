@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Sheet of the EQ Manager window: pick the preset to view, create an empty one,
-/// or import a ParametricEQ.txt file.
+/// or import a ParametricEQ.txt or GraphicEQ.txt file (AutoEQ, Wavelet, Equalizer APO).
 @MainActor
 struct EQManagerPresetChooser: View {
     @Bindable var settings: SettingsManager
@@ -31,6 +31,8 @@ struct EQManagerPresetChooser: View {
     @State private var loadingID: String?
     @State private var errorMessage: String?
     @State private var isImporterPresented = false
+    /// Sample rate the filters of an imported file were designed for.
+    @State private var importBaseRate = AutoEQBaseRate.lastImportRate
 
     @State private var newName = ""
     @State private var newKind: AutoEQPresetKind = .parametric
@@ -91,7 +93,15 @@ struct EQManagerPresetChooser: View {
                         newName = ""
                         mode = .create
                     }
-                    Button("Import ParametricEQ.txt...") { isImporterPresented = true }
+                    Button("Import File...") { isImporterPresented = true }
+                        .help("A ParametricEQ.txt or GraphicEQ.txt file from AutoEQ, Wavelet or Equalizer APO")
+                    Picker("Base rate", selection: $importBaseRate) {
+                        ForEach(AutoEQBaseRate.choices, id: \.self) { Text(AutoEQBaseRate.label($0)).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                    .help("Sample rate the imported filters were designed for (AutoEQ: 44.1 kHz). A graphic curve does not need one. It can be changed later.")
+                    .onChange(of: importBaseRate) { _, rate in AutoEQBaseRate.lastImportRate = rate }
                 }
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -435,7 +445,7 @@ struct EQManagerPresetChooser: View {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         let name = url.deletingPathExtension().lastPathComponent
-        if let profile = profileManager.importProfile(from: url, name: name) {
+        if let profile = profileManager.importProfile(from: url, name: name, baseRate: importBaseRate) {
             onChoose(profile)
         } else {
             errorMessage = "Could not read \(url.lastPathComponent). Check the file format."

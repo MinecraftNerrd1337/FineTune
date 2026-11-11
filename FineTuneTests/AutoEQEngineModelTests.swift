@@ -85,10 +85,14 @@ struct AutoEQParserGraphicEQTests {
         #expect(profile.hasCorrection)
     }
 
-    @Test("Malformed, out-of-range and duplicate points are skipped")
+    @Test("Malformed, out-of-range and duplicate points are skipped, gains limited to ±30 dB")
     func skipsBadPoints() {
         let points = AutoEQParser.parseGraphicEQ("GraphicEQ: 100 1; abc; 200; 300 x; 0.5 1; 400 99; 100 5; 500 -2 ;")
-        #expect(points == [AutoEQCurvePoint(frequency: 100, gainDB: 1), AutoEQCurvePoint(frequency: 500, gainDB: -2)])
+        #expect(points == [
+            AutoEQCurvePoint(frequency: 100, gainDB: 1),
+            AutoEQCurvePoint(frequency: 400, gainDB: 30),
+            AutoEQCurvePoint(frequency: 500, gainDB: -2),
+        ])
         #expect(AutoEQParser.parseGraphicEQ("no colon here").isEmpty)
     }
 
@@ -220,12 +224,13 @@ struct BiquadMathMatchedTests {
             AutoEQFilter(type: .peaking, frequency: 12_000, gainDB: 6, q: 2),
             AutoEQFilter(type: .lowShelf, frequency: 105, gainDB: 5, q: 0.7),
         ]
-        let exact = BiquadMath.coefficientsForAutoEQFilters(filters, sampleRate: 44_100, exact: true)
+        let exact = BiquadMath.coefficientsForAutoEQFilters(
+            filters, sampleRate: 44_100, profileOptimizedRate: 48_000, exact: true)
         #expect(exact.count == 10)
         #expect(Array(exact[0..<5]) == BiquadMath.exactCoefficients(
-            type: .peaking, frequency: 12_000, gainDB: 6, q: 2, sampleRate: 44_100))
+            type: .peaking, frequency: 12_000, gainDB: 6, q: 2, sampleRate: 44_100, baseRate: 48_000))
         #expect(Array(exact[5..<10]) == BiquadMath.exactCoefficients(
-            type: .lowShelf, frequency: 105, gainDB: 5, q: 0.7, sampleRate: 44_100))
+            type: .lowShelf, frequency: 105, gainDB: 5, q: 0.7, sampleRate: 44_100, baseRate: 48_000))
         // Not the cookbook design for the band near Nyquist
         let cookbook = BiquadMath.coefficientsForAutoEQFilters(filters, sampleRate: 44_100, profileOptimizedRate: 44_100)
         #expect(Array(exact[0..<5]) != Array(cookbook[0..<5]))

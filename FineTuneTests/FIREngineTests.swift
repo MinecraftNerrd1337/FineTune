@@ -426,11 +426,11 @@ struct FIRProcessorTests {
 @Suite("AutoEQProcessor — correction engines")
 struct AutoEQProcessorEngineTests {
 
-    /// The cookbook biquads are only checked where they follow the exact curve at 48 kHz;
-    /// the linear-phase filter trades some accuracy in the bass for a short latency.
+    /// The preset is played at its base rate (48 kHz), where its cookbook biquads are its exact
+    /// curve; the linear-phase filter trades some accuracy in the bass for a short latency.
     @Test("Every engine plays the preset's curve, preamp included", arguments: AutoEQCorrectionEngine.allCases)
     func playsCurve(engine: AutoEQCorrectionEngine) {
-        let frequencies: [Double] = engine == .biquad ? [100, 1000, 3200] : [100, 1000, 3200, 6000, 12_000]
+        let frequencies: [Double] = [100, 1000, 3200, 6000, 12_000]
         let tolerance = engine == .linearPhaseFIR ? 0.6 : 0.3
         let profile = testProfile(engine: engine)
         let processor = AutoEQProcessor(sampleRate: 48_000)

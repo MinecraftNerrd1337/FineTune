@@ -4,8 +4,9 @@ import Foundation
 /// Frequency response of an AutoEQ preset, for the EQ Manager graph and preamp advice.
 ///
 /// `.biquad` and `.matchedBiquad` evaluate the digital biquad cascade the engine runs at
-/// `sampleRate`. The FIR engines evaluate the exact curve (the analog prototype of each band,
-/// or the interpolated curve of a graphic preset), which is what they reproduce.
+/// `sampleRate`. The FIR engines evaluate the exact curve, which is what they reproduce: for
+/// a filter list, the curve of its cookbook biquads at the preset's base rate (or of their
+/// analog prototypes, see `AutoEQBaseRate`); for a graphic preset, its interpolated curve.
 /// The preamp recommendation (rendered peak plus a safety margin) follows the approach of
 /// GlassEQ's `EQProfileAnalysis.recommendedPreampDB` (GPL v3, Juho Koskela).
 enum AutoEQResponse {
@@ -27,33 +28,36 @@ enum AutoEQResponse {
         _ filters: [AutoEQFilter],
         engine: AutoEQCorrectionEngine,
         frequencies: [Double],
-        sampleRate: Double = defaultSampleRate
+        sampleRate: Double = defaultSampleRate,
+        baseRate: Double? = nil
     ) -> [Double] {
         var total = [Double](repeating: 0, count: frequencies.count)
         for filter in filters {
-            let response = curve(of: filter, engine: engine, frequencies: frequencies, sampleRate: sampleRate)
+            let response = curve(
+                of: filter, engine: engine, frequencies: frequencies, sampleRate: sampleRate, baseRate: baseRate)
             for i in total.indices { total[i] += response[i] }
         }
         return total
     }
 
-    /// Gain in dB of a single filter at each frequency.
+    /// Gain in dB of a single filter at each frequency, for a filter list made for `baseRate`
+    /// (nil: analog filters).
     static func curve(
         of filter: AutoEQFilter,
         engine: AutoEQCorrectionEngine,
         frequencies: [Double],
-        sampleRate: Double = defaultSampleRate
+        sampleRate: Double = defaultSampleRate,
+        baseRate: Double? = nil
     ) -> [Double] {
         switch engine {
-        case .biquad:
-            let c = coefficients(filter, sampleRate: sampleRate)
-            return frequencies.map { digitalDB(c, at: $0, sampleRate: sampleRate) }
-        case .matchedBiquad:
-            let c = BiquadMath.exactCoefficients(
-                type: filter.type, frequency: filter.frequency, gainDB: filter.gainDB, q: filter.q, sampleRate: sampleRate)
+        case .biquad, .matchedBiquad:
+            // The coefficients the processor computes
+            let c = BiquadMath.coefficientsForAutoEQFilters(
+                [filter], sampleRate: sampleRate, profileOptimizedRate: baseRate ?? AutoEQBaseRate.analog,
+                exact: engine == .matchedBiquad)
             return frequencies.map { digitalDB(c, at: $0, sampleRate: sampleRate) }
         case .minimumPhaseFIR, .linearPhaseFIR:
-            return frequencies.map { analogDB(filter, at: $0) }
+            return frequencies.map { intendedDB(filter, at: $0, baseRate: baseRate) }
         }
     }
 
@@ -61,7 +65,9 @@ enum AutoEQResponse {
     static func curve(of profile: AutoEQProfile, frequencies: [Double], sampleRate: Double = defaultSampleRate) -> [Double] {
         switch profile.kind {
         case .parametric:
-            return curve(profile.filters, engine: profile.effectiveEngine, frequencies: frequencies, sampleRate: sampleRate)
+            return curve(
+                profile.filters, engine: profile.effectiveEngine, frequencies: frequencies,
+                sampleRate: sampleRate, baseRate: profile.designBaseRate)
         case .graphic:
             return graphicCurve(profile.curve, frequencies: frequencies)
         }
@@ -71,7 +77,7 @@ enum AutoEQResponse {
     static func exactCurve(of profile: AutoEQProfile, frequencies: [Double]) -> [Double] {
         switch profile.kind {
         case .parametric:
-            return curve(profile.filters, engine: .minimumPhaseFIR, frequencies: frequencies)
+            return curve(profile.filters, engine: .minimumPhaseFIR, frequencies: frequencies, baseRate: profile.designBaseRate)
         case .graphic:
             return graphicCurve(profile.curve, frequencies: frequencies)
         }
@@ -150,28 +156,19 @@ enum AutoEQResponse {
 
     // MARK: - Biquad (digital)
 
-    private static func coefficients(_ filter: AutoEQFilter, sampleRate: Double) -> [Double] {
-        switch filter.type {
-        case .peaking:
-            return BiquadMath.peakingEQCoefficients(frequency: filter.frequency, gainDB: filter.gainDB, q: filter.q, sampleRate: sampleRate)
-        case .lowShelf:
-            return BiquadMath.lowShelfCoefficients(frequency: filter.frequency, gainDB: filter.gainDB, q: filter.q, sampleRate: sampleRate)
-        case .highShelf:
-            return BiquadMath.highShelfCoefficients(frequency: filter.frequency, gainDB: filter.gainDB, q: filter.q, sampleRate: sampleRate)
-        }
-    }
-
     /// |H(e^jw)| in dB for vDSP-style coefficients [b0, b1, b2, a1, a2].
     private static func digitalDB(_ c: [Double], at frequency: Double, sampleRate: Double) -> Double {
         10 * log10(max(BiquadMath.digitalMagnitudeSquared(c, at: frequency, sampleRate: sampleRate), 1e-20))
     }
 
-    // MARK: - Analog prototype (exact curve)
+    // MARK: - Exact curve
 
-    /// |H(jW)| in dB of the RBJ analog prototypes, with W = f / f0.
-    private static func analogDB(_ filter: AutoEQFilter, at frequency: Double) -> Double {
-        let magnitude2 = BiquadMath.analogMagnitudeSquared(
-            type: filter.type, centerFrequency: filter.frequency, gainDB: Double(filter.gainDB), q: filter.q, at: frequency)
+    /// Gain in dB of a band's exact curve: its cookbook biquad at `baseRate`, or its RBJ analog
+    /// prototype when `baseRate` is nil.
+    private static func intendedDB(_ filter: AutoEQFilter, at frequency: Double, baseRate: Double?) -> Double {
+        let magnitude2 = BiquadMath.intendedMagnitudeSquared(
+            type: filter.type, centerFrequency: filter.frequency, gainDB: Double(filter.gainDB), q: filter.q,
+            at: frequency, baseRate: baseRate)
         return 10 * log10(max(magnitude2, 1e-20))
     }
 }

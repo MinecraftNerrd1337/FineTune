@@ -81,9 +81,19 @@ final class AutoEQProfileManager {
 
     // MARK: - Import / Delete
 
-    /// Import a ParametricEQ.txt file. Copies to app support and adds to catalog.
-    func importProfile(from url: URL, name: String) -> AutoEQProfile? {
-        guard let profile = loader.importProfile(from: url, name: name) else { return nil }
+    /// Import a ParametricEQ.txt or GraphicEQ.txt file. Copies it to app support and adds it to
+    /// the catalog. `baseRate` is the sample rate the file's filters were designed for (see
+    /// `AutoEQBaseRate`); a graphic curve has none.
+    func importProfile(
+        from url: URL, name: String, baseRate: Double = AutoEQBaseRate.autoEQDefault
+    ) -> AutoEQProfile? {
+        guard var profile = loader.importProfile(from: url, name: name) else { return nil }
+        if profile.kind == .parametric {
+            profile.optimizedSampleRate = AutoEQBaseRate.sanitized(baseRate)
+            // The text file does not hold the rate: the stored copy (settings.json) replaces
+            // the file's preset on the next launch
+            userProfileStore?.saveAutoEQUserProfile(profile)
+        }
         profiles[profile.id] = profile
         rebuildSearchIndex()
         return profile

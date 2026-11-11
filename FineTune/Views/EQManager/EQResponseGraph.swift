@@ -203,7 +203,8 @@ struct EQResponseGraph: View {
 
     private func drawSingleBand(_ filter: AutoEQFilter, into context: inout GraphicsContext, plot: CGRect) {
         let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount / 2)
-        let gains = AutoEQResponse.curve(of: filter, engine: profile.effectiveEngine, frequencies: frequencies)
+        let gains = AutoEQResponse.curve(
+            of: filter, engine: profile.effectiveEngine, frequencies: frequencies, baseRate: profile.designBaseRate)
         context.stroke(
             polyline(frequencies: frequencies, gains: gains, plot: plot),
             with: .color(.accentColor.opacity(0.6)),

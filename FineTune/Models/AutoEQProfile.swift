@@ -1,4 +1,5 @@
 // FineTune/Models/AutoEQProfile.swift
+import Foundation
 
 /// A single biquad filter in an AutoEQ correction profile.
 nonisolated struct AutoEQFilter: Codable, Equatable {
@@ -75,8 +76,8 @@ nonisolated enum AutoEQCorrectionEngine: String, Codable, CaseIterable, Identifi
     /// One line on what the engine does, for the EQ Manager.
     var summary: String {
         switch self {
-        case .biquad: return "Standard biquad filters at 48 kHz. No latency."
-        case .matchedBiquad: return "Biquad filters fitted to the exact curve. No latency."
+        case .biquad: return "Standard biquad filters, re-tuned from the base rate. No latency."
+        case .matchedBiquad: return "Biquad filters fitted to the exact curve at every sample rate. No latency."
         case .minimumPhaseFIR: return "Exact curve, phase of an analog EQ. No latency."
         case .linearPhaseFIR: return "Exact curve, phase untouched. Adds latency."
         }
@@ -99,6 +100,40 @@ nonisolated enum AutoEQCorrectionEngine: String, Codable, CaseIterable, Identifi
     }
 }
 
+/// Sample rate a filter list was designed for (`AutoEQProfile.optimizedSampleRate`).
+///
+/// AutoEQ, like most parametric EQ tools, optimises its filters as cookbook biquads at one
+/// sample rate. The same list played at another rate gives a slightly different curve near the
+/// top of the spectrum, so the exact engines need to know that rate to reproduce the curve the
+/// list was made for. 0 stands for analog filters (the RBJ analog prototypes).
+nonisolated enum AutoEQBaseRate {
+    static let analog = 0.0
+    /// AutoEQ's default (`DEFAULT_FS` in autoeq/constants.py), used for its published results.
+    static let autoEQDefault = 44_100.0
+    /// Rates offered in the import dialogs and the EQ Manager.
+    static let choices: [Double] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, analog]
+    /// The last rate chosen when importing a file (UserDefaults).
+    static let lastImportRateKey = "AutoEQImportBaseRate"
+
+    static func label(_ rate: Double) -> String {
+        rate > 0 ? String(format: "%g kHz", rate / 1000) : "Analog"
+    }
+
+    /// A stored rate, or 48 kHz when it is not one a filter list can be made for.
+    static func sanitized(_ rate: Double) -> Double {
+        rate == analog || (rate.isFinite && rate >= 8_000 && rate <= 768_000) ? rate : 48_000
+    }
+
+    /// The rate the import dialogs offer first: the last one chosen, else AutoEQ's.
+    static var lastImportRate: Double {
+        get {
+            let stored = UserDefaults.standard.object(forKey: lastImportRateKey) as? Double
+            return stored.map(sanitized) ?? autoEQDefault
+        }
+        set { UserDefaults.standard.set(sanitized(newValue), forKey: lastImportRateKey) }
+    }
+}
+
 /// A headphone/speaker correction profile from AutoEQ.
 nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     let id: String           // Slug for fetched, UUID for imported
@@ -108,7 +143,8 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     var filters: [AutoEQFilter]
     /// Measurement source (e.g. "oratory1990", "crinacle"). Nil for imported profiles.
     let measuredBy: String?
-    /// Sample rate the filter parameters were optimized for (Hz).
+    /// Sample rate the filter parameters were optimized for (Hz), or 0 for analog filters.
+    /// See `AutoEQBaseRate`. Not used by graphic presets, whose curve is in Hz.
     var optimizedSampleRate: Double
     /// Parametric (filters) or graphic (curve).
     var kind: AutoEQPresetKind
@@ -174,6 +210,11 @@ nonisolated extension AutoEQProfile {
         AutoEQCorrectionEngine.available(for: kind).contains(engine) ? engine : .minimumPhaseFIR
     }
 
+    /// The base rate for the response math: nil for analog filters.
+    var designBaseRate: Double? {
+        optimizedSampleRate > 0 ? optimizedSampleRate : nil
+    }
+
     /// Whether there is a curve to apply (as opposed to the preamp alone).
     var hasCorrection: Bool {
         switch kind {
@@ -221,7 +262,7 @@ extension AutoEQProfile {
             preampDB: clampedPreamp,
             filters: Array(validFilters.prefix(Self.maxFilters)),
             measuredBy: measuredBy,
-            optimizedSampleRate: optimizedSampleRate,
+            optimizedSampleRate: AutoEQBaseRate.sanitized(optimizedSampleRate),
             kind: kind,
             engine: engine,
             curve: Array(validCurve.prefix(Self.maxCurvePoints))

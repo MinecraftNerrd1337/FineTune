@@ -24,9 +24,9 @@ Profiles are fetched on demand from the AutoEQ database and cached locally for o
 
 If you have a custom measurement or want to use a profile from another source:
 
-1. Click **"Import ParametricEQ.txt..."** at the bottom of the AutoEQ panel
-2. Select your `.txt` file
-3. The profile is imported and applied to the selected device
+1. Open the **EQ Manager**, click the preset selector, then **Import File...**
+2. For a filter list, pick the **Base rate** next to the button: the sample rate the filters were designed for (44.1 kHz for AutoEQ's own profiles)
+3. Select your `.txt` file
 4. Use the **Correction** switch in the picker to A/B the profile without removing it
 
 FineTune accepts [EqualizerAPO](https://sourceforge.net/projects/equalizerapo/) ParametricEQ.txt files:
@@ -46,7 +46,24 @@ Filter 3: ON HSC Fc 8000 Hz Gain 2.1 dB Q 0.71
 | `LS` / `LSC` | Low shelf | Boost or cut everything below a frequency |
 | `HS` / `HSC` | High shelf | Boost or cut everything above a frequency |
 
-Up to 10 filters per profile. The `Preamp` line sets a global gain offset to prevent clipping.
+Up to 128 filters per profile. The `Preamp` line sets a global gain offset to prevent clipping.
+
+### GraphicEQ (Wavelet, Equalizer APO)
+
+A `GraphicEQ:` line (AutoEQ's GraphicEQ.txt, Wavelet, Equalizer APO's graphic EQ) gives a graphic preset: a frequency/gain curve in Hz, played by one of the FIR engines. UTF-8 and UTF-16 files are read; several `GraphicEQ` and `Preamp` lines add up, and in a file with `Channel:` sections only the first section is used.
+
+```
+Preamp: -5.5 dB
+GraphicEQ: 20 -1.5; 21 -1.4; 22 -1.4; ...; 19871 -3.2
+```
+
+### Base rate
+
+A filter list is made for one sample rate: AutoEQ, like most tools, optimises its filters as biquads at 44.1 kHz, and the same filters played at 96 kHz give a slightly different curve above about 8 kHz. The **Base rate** of a preset (EQ Manager, edit mode) tells the exact engines which curve to reproduce:
+
+- **Exact biquad** and the **FIR** engines reproduce the curve the filters have at the base rate, at any device rate. At the base rate itself the exact biquads are the standard ones.
+- **Biquad** re-tunes each filter's frequency for the device rate, as before.
+- **Analog** treats the filters as analog prototypes, for lists designed that way.
 
 ## Where to Get Profiles
 

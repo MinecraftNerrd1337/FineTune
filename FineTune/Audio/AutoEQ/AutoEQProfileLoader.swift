@@ -44,10 +44,15 @@ nonisolated final class AutoEQProfileLoader {
 
     // MARK: - Import / Delete on Disk
 
-    /// Import a ParametricEQ.txt file. Copies to import directory and returns parsed profile.
+    /// Import a ParametricEQ.txt or GraphicEQ.txt file (AutoEQ, Wavelet, Equalizer APO).
+    /// Copies it to the import directory as UTF-8 and returns the parsed profile.
     func importProfile(from url: URL, name: String) -> AutoEQProfile? {
         do {
-            let text = try String(contentsOf: url, encoding: .utf8)
+            let data = try Data(contentsOf: url)
+            guard let text = AutoEQParser.decodeText(data) else {
+                logger.warning("Imported file is not text: \(name)")
+                return nil
+            }
             guard let profile = AutoEQParser.parse(text: text, name: name, source: .imported) else {
                 logger.warning("Failed to parse imported file: \(name)")
                 return nil

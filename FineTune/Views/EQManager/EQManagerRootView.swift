@@ -211,11 +211,16 @@ struct EQManagerRootView: View {
     private func replaceContents(withFileAt url: URL) {
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
-        guard let text = try? String(contentsOf: url, encoding: .utf8),
-              let parsed = AutoEQParser.parse(text: text, name: url.deletingPathExtension().lastPathComponent, source: .imported)
+        guard let data = try? Data(contentsOf: url), let text = AutoEQParser.decodeText(data),
+              var parsed = AutoEQParser.parse(text: text, name: url.deletingPathExtension().lastPathComponent, source: .imported)
         else {
             alertMessage = "Could not read \(url.lastPathComponent). Check the file format."
             return
+        }
+        // A text file does not say which rate its filters were made for: keep the preset's
+        // (changeable in the Base rate row)
+        if let draft = editor?.draft {
+            parsed.optimizedSampleRate = draft.kind == .parametric ? draft.optimizedSampleRate : AutoEQBaseRate.lastImportRate
         }
         replaceContents(with: parsed)
     }

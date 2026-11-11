@@ -13,6 +13,7 @@ enum FIRKernelCache {
         let filters: [AutoEQFilter]
         let curve: [AutoEQCurvePoint]
         let engine: AutoEQCorrectionEngine
+        let baseRate: Double
         let sampleRate: Double
         let kernel: FIRDesign.Kernel
     }
@@ -30,6 +31,7 @@ enum FIRKernelCache {
         if let index = entries.firstIndex(where: {
             $0.sampleRate == sampleRate && $0.engine == engine && $0.kind == profile.kind
                 && $0.filters == profile.filters && $0.curve == profile.curve
+                && $0.baseRate == profile.optimizedSampleRate
         }) {
             let entry = entries.remove(at: index)
             entries.append(entry)
@@ -44,7 +46,8 @@ enum FIRKernelCache {
         guard let kernel = designed else { return nil }
 
         entries.append(Entry(kind: profile.kind, filters: profile.filters, curve: profile.curve,
-                             engine: engine, sampleRate: sampleRate, kernel: kernel))
+                             engine: engine, baseRate: profile.optimizedSampleRate,
+                             sampleRate: sampleRate, kernel: kernel))
         if entries.count > capacity { entries.removeFirst() }
         return kernel
     }
