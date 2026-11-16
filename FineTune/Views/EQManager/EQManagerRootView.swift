@@ -4,6 +4,10 @@ import UniformTypeIdentifiers
 
 /// Content of the "FineTune EQ Manager" window: a preset selector and edit controls on top,
 /// the selected preset (response graph, preamp, bands) below.
+///
+/// Saving follows the library's rules (`AutoEQProfileManager.saveKind`): a preset is saved in
+/// place, after a confirmation (a setting) and with its replaced version kept in its history; a
+/// template keeps its bands, so changing them saves a new preset.
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
@@ -23,6 +27,9 @@ struct EQManagerRootView: View {
     @State private var chooserPurpose: ChooserPurpose?
     @State private var isReplaceImporterPresented = false
     @State private var alertMessage: String?
+    @State private var isSaveConfirmationPresented = false
+    @State private var newPresetRequest: EQManagerNewPresetRequest?
+    @State private var isClearHistoryConfirmationPresented = false
 
     private var profileManager: AutoEQProfileManager { audioEngine.autoEQProfileManager }
 
@@ -51,6 +58,17 @@ struct EQManagerRootView: View {
             )
             .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         }
+        .sheet(item: $newPresetRequest) { request in
+            EQManagerNewPresetSheet(
+                request: request,
+                onCreate: { name, useOnDevices in
+                    newPresetRequest = nil
+                    createPreset(named: name, useOnDevices: useOnDevices)
+                },
+                onCancel: { newPresetRequest = nil }
+            )
+            .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+        }
         .fileImporter(isPresented: $isReplaceImporterPresented, allowedContentTypes: [.plainText]) { result in
             if case .success(let url) = result { replaceContents(withFileAt: url) }
         }
@@ -59,6 +77,18 @@ struct EQManagerRootView: View {
             isPresented: Binding(get: { alertMessage != nil }, set: { if !$0 { alertMessage = nil } })
         ) {
             Button("OK", role: .cancel) {}
+        }
+        .confirmationDialog(
+            clearHistoryTitle,
+            isPresented: $isClearHistoryConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Versions", role: .destructive) {
+                if let id = editor?.draft.id { profileManager.history.clear(profileID: id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The preset itself is not changed. This cannot be undone.")
         }
         .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         .background(WindowAppearanceBridge(appearance: settings.appSettings.appearance.nsAppearance))
@@ -84,6 +114,7 @@ struct EQManagerRootView: View {
             Spacer()
 
             if let editor {
+                historyMenu(editor)
                 if editor.isEditing {
                     editControls(editor)
                 } else {
@@ -92,16 +123,36 @@ struct EQManagerRootView: View {
                     } label: {
                         Label("Edit", systemImage: "pencil")
                     }
-                    .help("Make this preset editable")
+                    .help(editor.draft.isTemplate
+                          ? "Templates keep their bands: changing them saves a new preset"
+                          : "Make this preset editable")
                 }
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.lg)
         .padding(.vertical, DesignTokens.Spacing.md)
+        // Only this dialog offers "Do not ask again" (the toggle applies to dialogs shown from here)
+        .confirmationDialog(
+            "Save changes to “\(editor?.original.name ?? "")”?",
+            isPresented: $isSaveConfirmationPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Save") { if let editor { saveInPlace(editor) } }
+            Button("Save as New Preset...") { if let editor { requestNewPreset(from: editor) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(saveConfirmationMessage)
+        }
+        .dialogSuppressionToggle(isSuppressed: Binding(
+            get: { !settings.appSettings.confirmPresetSaves },
+            set: { settings.appSettings.confirmPresetSaves = !$0 }
+        ))
     }
 
     @ViewBuilder
     private func editControls(_ editor: EQManagerEditor) -> some View {
+        let saveKind = AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft)
+
         HStack(spacing: 2) {
             Button {
                 editor.undo()
@@ -127,6 +178,9 @@ struct EQManagerRootView: View {
         Menu("Replace") {
             Button("With a ParametricEQ.txt File...") { isReplaceImporterPresented = true }
             Button("With Another Preset...") { chooserPurpose = .replace }
+            if let templateID = editor.draft.templateID {
+                Button("With Its Template") { replaceContents(withTemplate: templateID) }
+            }
         }
         .fixedSize()
         .help("Replace the bands and preamp of this preset (name and settings are kept)")
@@ -136,15 +190,91 @@ struct EQManagerRootView: View {
         }
         .help(editor.hasChanges ? "Drop all unsaved changes" : "Leave edit mode")
 
-        Button(editor.draft.source.isLocal ? "Save" : "Save as Copy") {
+        if saveKind == .updateInPlace {
+            Button("Save as New...") {
+                NSApp.keyWindow?.makeFirstResponder(nil)
+                requestNewPreset(from: editor)
+            }
+            .keyboardShortcut("s", modifiers: [.command, .shift])
+            .help(editor.original.isTemplate
+                  ? "Create a preset from this template, with your changes"
+                  : "Save the changes as a new preset and leave this one as it is")
+        }
+
+        // Making a preset needs no change: it can start as a copy of the template
+        Button(saveKind == .createPreset ? "Save as Preset..." : "Save") {
             save(editor)
         }
         .keyboardShortcut("s", modifiers: .command)
         .buttonStyle(.borderedProminent)
-        .disabled(!editor.hasChanges)
-        .help(editor.draft.source.isLocal
-              ? "Save the changes to this preset"
-              : "Catalog presets stay untouched: the changes are saved as a new custom preset")
+        .disabled(saveKind == .updateInPlace && !editor.hasChanges)
+        .help(saveHelp(editor, saveKind))
+    }
+
+    private func saveHelp(_ editor: EQManagerEditor, _ kind: AutoEQSaveKind) -> String {
+        switch kind {
+        case .createPreset where editor.original.source.isLocal:
+            return "Templates keep their bands as imported: the changes are saved as a new preset"
+        case .createPreset:
+            return "Catalog presets stay untouched: the changes are saved as a new preset"
+        case .updateInPlace where editor.original.isTemplate:
+            return "Save the name, base rate and correction of this template (its bands do not change)"
+        case .updateInPlace:
+            return settings.appSettings.presetHistoryLimit > 0
+                ? "Save the changes to this preset (the current version goes to its history)"
+                : "Save the changes to this preset (version history is off in Settings)"
+        }
+    }
+
+    // MARK: - History
+
+    @ViewBuilder
+    private func historyMenu(_ editor: EQManagerEditor) -> some View {
+        let versions = profileManager.history.versions(of: editor.original.id)
+        if !versions.isEmpty {
+            Menu {
+                Section("Restore an Earlier Version") {
+                    ForEach(versions) { version in
+                        Button(versionLabel(version, current: editor.original)) { restore(version) }
+                    }
+                }
+                Divider()
+                Button("Delete Earlier Versions...") { isClearHistoryConfirmationPresented = true }
+            } label: {
+                Label("History", systemImage: "clock.arrow.circlepath")
+            }
+            .fixedSize()
+            .disabled(editor.hasChanges)
+            .help(editor.hasChanges
+                  ? "Save or discard your changes to restore an earlier version"
+                  : "Earlier versions of this preset. Restoring one opens it for editing: it replaces the current version only when saved.")
+        }
+    }
+
+    private func versionLabel(_ version: AutoEQPresetVersion, current: AutoEQProfile) -> String {
+        let date = version.replacedAt.formatted(date: .abbreviated, time: .shortened)
+        let name = version.profile.name == current.name ? "" : "“\(version.profile.name)” · "
+        return "\(date) · \(name)\(version.profile.attributesSummary)"
+    }
+
+    /// Load an earlier version into the draft (one undo step). Nothing is stored until saved.
+    private func restore(_ version: AutoEQPresetVersion) {
+        guard let editor else { return }
+        if !editor.isEditing { editor.beginEditing() }
+        let old = version.profile
+        editor.apply { draft in
+            draft = draft.withCorrection(of: old)
+            draft.name = old.name
+            draft.optimizedSampleRate = old.optimizedSampleRate
+            draft.engine = old.engine
+        }
+    }
+
+    private var clearHistoryTitle: String {
+        guard let id = editor?.original.id else { return "" }
+        let count = profileManager.history.versions(of: id).count
+        let versions = count == 1 ? "the earlier version" : "the \(count) earlier versions"
+        return "Delete \(versions) of “\(editor?.original.name ?? "")”?"
     }
 
     // MARK: - Content
@@ -152,7 +282,7 @@ struct EQManagerRootView: View {
     @ViewBuilder
     private var content: some View {
         if let editor {
-            EQManagerPresetDetail(editor: editor)
+            EQManagerPresetDetail(editor: editor, templateName: profileManager.templateName(of: editor.draft))
         } else {
             emptyState
         }
@@ -189,12 +319,74 @@ struct EQManagerRootView: View {
     private func save(_ editor: EQManagerEditor) {
         // Commit a value still being typed in a field before reading the draft.
         NSApp.keyWindow?.makeFirstResponder(nil)
-        guard let saved = profileManager.saveEditedProfile(editor.draft) else {
+        switch AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft) {
+        case .createPreset:
+            requestNewPreset(from: editor)
+        case .updateInPlace:
+            if settings.appSettings.confirmPresetSaves {
+                isSaveConfirmationPresented = true
+            } else {
+                saveInPlace(editor)
+            }
+        }
+    }
+
+    private var saveConfirmationMessage: String {
+        guard let editor else { return "" }
+        let limit = settings.appSettings.presetHistoryLimit
+        let kept = limit > 0
+            ? "The current version is kept in its history (the last \(limit) are kept), where it can be restored."
+            : "The current version will be replaced: version history is off in Settings."
+        return editor.original.isTemplate
+            ? "Its bands stay as imported: only its name, base rate and correction change. \(kept)"
+            : kept
+    }
+
+    private func saveInPlace(_ editor: EQManagerEditor) {
+        guard let saved = profileManager.saveInPlace(editor.draft) else {
             alertMessage = "Could not save the preset."
             return
         }
         editor.markSaved(saved)
         audioEngine.reapplyAutoEQProfile(id: saved.id)
+    }
+
+    /// Ask for the name of a new preset holding the draft.
+    private func requestNewPreset(from editor: EQManagerEditor) {
+        let original = editor.original
+        let draft = editor.draft
+        let name: String
+        if draft.name != original.name {
+            name = draft.name
+        } else {
+            name = original.isTemplate ? "\(draft.name) (Custom)" : "\(draft.name) (Copy)"
+        }
+        let deviceUIDs = settings.deviceUIDs(usingAutoEQProfile: original.id)
+        let names = deviceUIDs.compactMap { uid in audioEngine.outputDevices.first { $0.uid == uid }?.name }
+        newPresetRequest = EQManagerNewPresetRequest(
+            sourceName: original.name,
+            sourceIsTemplate: original.isTemplate,
+            suggestedName: name,
+            deviceNames: names,
+            otherDeviceCount: deviceUIDs.count - names.count
+        )
+    }
+
+    private func createPreset(named name: String, useOnDevices: Bool) {
+        guard let editor else { return }
+        let sourceID = editor.original.id
+        guard let preset = profileManager.saveAsNewPreset(editor.draft, name: name) else {
+            alertMessage = "Could not save the preset."
+            return
+        }
+        if useOnDevices {
+            audioEngine.switchAutoEQProfile(
+                from: sourceID, to: preset.id,
+                onDevices: settings.deviceUIDs(usingAutoEQProfile: sourceID)
+            )
+        }
+        // The edited profile is left as it was; show the new preset
+        self.editor = EQManagerEditor(profile: preset)
     }
 
     /// Replace the bands and preamp of the draft (one undo step); name, engine and source stay.
@@ -205,6 +397,17 @@ struct EQManagerRootView: View {
             draft.curve = profile.curve
             draft.preampDB = profile.preampDB
             draft.optimizedSampleRate = profile.optimizedSampleRate
+        }
+    }
+
+    /// Go back to the bands of the template the preset was made from.
+    private func replaceContents(withTemplate templateID: String) {
+        Task { @MainActor in
+            if let template = await profileManager.resolveProfile(for: templateID) {
+                replaceContents(with: template)
+            } else {
+                alertMessage = "The template of this preset is not available."
+            }
         }
     }
 
@@ -223,6 +426,89 @@ struct EQManagerRootView: View {
             parsed.optimizedSampleRate = draft.kind == .parametric ? draft.optimizedSampleRate : AutoEQBaseRate.lastImportRate
         }
         replaceContents(with: parsed)
+    }
+}
+
+// MARK: - New Preset Sheet
+
+/// What the "new preset" sheet shows: where the changes come from and which devices use it.
+struct EQManagerNewPresetRequest: Identifiable {
+    let id = UUID()
+    let sourceName: String
+    let sourceIsTemplate: Bool
+    let suggestedName: String
+    /// Connected devices whose correction is the edited profile.
+    let deviceNames: [String]
+    /// Disconnected devices whose correction is the edited profile.
+    let otherDeviceCount: Int
+
+    var hasDevices: Bool { !deviceNames.isEmpty || otherDeviceCount > 0 }
+
+    var devicesText: String {
+        var parts = deviceNames
+        if otherDeviceCount > 0 {
+            parts.append(otherDeviceCount == 1 ? "1 disconnected device" : "\(otherDeviceCount) disconnected devices")
+        }
+        return ListFormatter.localizedString(byJoining: parts)
+    }
+}
+
+/// Names the preset that receives the changes of a template or a copied preset.
+@MainActor
+struct EQManagerNewPresetSheet: View {
+    let request: EQManagerNewPresetRequest
+    let onCreate: (_ name: String, _ useOnDevices: Bool) -> Void
+    let onCancel: () -> Void
+
+    @State private var name = ""
+    @State private var useOnDevices = true
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Text("New Preset")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+
+            Text(request.sourceIsTemplate
+                 ? "“\(request.sourceName)” is a template: it stays as imported, and your changes become a new preset."
+                 : "Your changes become a new preset. “\(request.sourceName)” stays as it is.")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                Text("Name")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                TextField("Preset name", text: $name)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if request.hasDevices {
+                Toggle(isOn: $useOnDevices) {
+                    Text("Use it instead of “\(request.sourceName)” on \(request.devicesText)")
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .toggleStyle(.checkbox)
+            }
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Create Preset") { onCreate(trimmedName, useOnDevices && request.hasDevices) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(trimmedName.isEmpty)
+            }
+        }
+        .padding(DesignTokens.Spacing.lg)
+        .frame(width: 400, height: request.hasDevices ? 230 : 190)
+        .onAppear { name = request.suggestedName }
     }
 }
 

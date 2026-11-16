@@ -8,13 +8,27 @@ struct AutoEQSearchResult {
     let totalCount: Int
 }
 
-/// Manages the catalog of AutoEQ headphone correction profiles.
+/// What saving a profile edited in the EQ Manager does (`AutoEQProfileManager.saveKind`).
+nonisolated enum AutoEQSaveKind: Equatable {
+    /// The stored profile is replaced, and the version it replaces goes to its history.
+    case updateInPlace
+    /// A new preset is created, and the edited profile stays as it is: a template whose
+    /// correction changed, or a profile of the AutoEQ catalog.
+    case createPreset
+}
+
+/// Manages the catalog of AutoEQ headphone correction profiles, and the user's library:
+/// templates (imported or downloaded) and presets (created in the EQ Manager). See `AutoEQProfile`.
 /// Search operates on lightweight catalog entries; full profiles are resolved on demand.
 @Observable
 @MainActor
 final class AutoEQProfileManager {
     /// Fully-loaded profiles (imported + previously fetched).
     private(set) var profiles: [String: AutoEQProfile] = [:]
+    /// Earlier versions of the user's presets and templates.
+    let history: AutoEQPresetHistoryStore
+    /// Imported profiles as their files describe them: the correction a template keeps for good.
+    private var importedFileProfiles: [String: AutoEQProfile] = [:]
 
     private let fetcher: AutoEQFetcher
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "AutoEQProfileManager")
@@ -31,14 +45,20 @@ final class AutoEQProfileManager {
     /// Whether each entry is one of the user's presets (parallel array with sortedEntries).
     private var localEntryFlags: [Bool] = []
 
-    init(loader: AutoEQProfileLoader = AutoEQProfileLoader(), fetcher: AutoEQFetcher? = nil) {
+    init(
+        loader: AutoEQProfileLoader = AutoEQProfileLoader(),
+        fetcher: AutoEQFetcher? = nil,
+        history: AutoEQPresetHistoryStore? = nil
+    ) {
         self.loader = loader
         self.fetcher = fetcher ?? AutoEQFetcher()
+        self.history = history ?? AutoEQPresetHistoryStore()
 
         // Imported profiles are small — load synchronously
         let imported = loader.loadImportedProfiles()
         for profile in imported {
             profiles[profile.id] = profile
+            importedFileProfiles[profile.id] = profile
         }
 
         // Load catalog from cache/GitHub
@@ -48,14 +68,49 @@ final class AutoEQProfileManager {
         }
     }
 
-    /// Load the presets created or edited in the EQ Manager. Edited versions replace
-    /// the imported files they came from.
+    /// Load the presets created in the EQ Manager, and the settings (name, base rate, engine)
+    /// stored for imported and downloaded templates.
     func attachUserProfileStore(_ store: SettingsManager) {
         userProfileStore = store
         for profile in store.autoEQUserProfiles {
-            profiles[profile.id] = profile
+            if profile.source == .imported, let file = importedFileProfiles[profile.id],
+               !profile.hasSameCorrection(as: file) {
+                splitEditedImport(profile, file: file, store: store)
+            } else {
+                profiles[profile.id] = profile
+            }
         }
         rebuildSearchIndex()
+    }
+
+    /// Earlier builds saved the edits of an imported file in place. Nothing is lost: the edited
+    /// version becomes a preset made from the file, the file becomes a template again (keeping
+    /// the name, base rate and engine it was given), and the devices and favorite that used the
+    /// edited version now use the preset. Runs once: the template then matches its file again.
+    private func splitEditedImport(_ edited: AutoEQProfile, file: AutoEQProfile, store: SettingsManager) {
+        var template = file
+        template.name = edited.name
+        template.optimizedSampleRate = edited.optimizedSampleRate
+        template.engine = edited.engine
+        let preset = AutoEQProfile(
+            id: UUID().uuidString,
+            name: edited.name,
+            source: .created,
+            preampDB: edited.preampDB,
+            filters: edited.filters,
+            measuredBy: edited.measuredBy,
+            optimizedSampleRate: edited.optimizedSampleRate,
+            kind: edited.kind,
+            engine: edited.engine,
+            curve: edited.curve,
+            templateID: file.id
+        )
+        store.saveAutoEQUserProfile(preset)
+        store.saveAutoEQUserProfile(template)
+        store.remapAutoEQProfile(from: file.id, to: preset.id)
+        profiles[template.id] = template
+        profiles[preset.id] = preset
+        logger.info("Edited import \(edited.name) kept as a preset; its file is a template again")
     }
 
     // MARK: - Catalog State (forwarded from fetcher)
@@ -72,11 +127,29 @@ final class AutoEQProfileManager {
         sortedEntries.first(where: { $0.id == id })
     }
 
-    /// Imported and created presets, sorted by name.
+    /// The user's library: imported, downloaded and created profiles, sorted by name.
     var localProfiles: [AutoEQProfile] {
         profiles.values
             .filter { $0.source.isLocal }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Presets created in the EQ Manager, sorted by name.
+    var localPresets: [AutoEQProfile] { localProfiles.filter { !$0.isTemplate } }
+
+    /// Imported and downloaded templates, sorted by name.
+    var localTemplates: [AutoEQProfile] { localProfiles.filter(\.isTemplate) }
+
+    /// The name of the template a preset was made from, also for a catalog profile not loaded yet.
+    func templateName(of profile: AutoEQProfile) -> String? {
+        guard let id = profile.templateID else { return nil }
+        return profiles[id]?.name ?? catalogEntry(for: id)?.name
+    }
+
+    /// Second line of a library entry: where it came from.
+    func libraryLabel(of profile: AutoEQProfile) -> String {
+        if let template = templateName(of: profile) { return "Custom · From \(template)" }
+        return profile.sourceLabel ?? "Imported"
     }
 
     // MARK: - Import / Delete
@@ -88,6 +161,7 @@ final class AutoEQProfileManager {
         from url: URL, name: String, baseRate: Double = AutoEQBaseRate.autoEQDefault
     ) -> AutoEQProfile? {
         guard var profile = loader.importProfile(from: url, name: name) else { return nil }
+        importedFileProfiles[profile.id] = profile
         if profile.kind == .parametric {
             profile.optimizedSampleRate = AutoEQBaseRate.sanitized(baseRate)
             // The text file does not hold the rate: the stored copy (settings.json) replaces
@@ -112,28 +186,58 @@ final class AutoEQProfileManager {
         return profile
     }
 
-    /// Save a preset edited in the EQ Manager.
-    /// Imported and created presets are saved in place; catalog presets are saved as a new custom copy.
-    /// Returns the saved preset, or nil on failure.
-    func saveEditedProfile(_ profile: AutoEQProfile) -> AutoEQProfile? {
-        let toSave = profile.source.isLocal ? profile : AutoEQProfile(
-            id: UUID().uuidString,
-            name: "\(profile.name) (Custom)",
-            source: .created,
-            preampDB: profile.preampDB,
-            filters: profile.filters,
-            measuredBy: profile.measuredBy,
-            optimizedSampleRate: profile.optimizedSampleRate,
-            kind: profile.kind,
-            engine: profile.engine,
-            curve: profile.curve
-        )
-        guard let userProfileStore else { return nil }
+    // MARK: - Saving Edits
+
+    /// What saving `draft`, edited from `original`, does. A preset is saved in place. A template
+    /// of the library is saved in place when only its settings (name, base rate, engine) changed;
+    /// a change to its correction, or any change to a catalog profile, makes a new preset.
+    nonisolated static func saveKind(original: AutoEQProfile, draft: AutoEQProfile) -> AutoEQSaveKind {
+        guard original.source.isLocal else { return .createPreset }
+        if original.isTemplate && !draft.hasSameCorrection(as: original) { return .createPreset }
+        return .updateInPlace
+    }
+
+    /// Save a profile of the library over its stored version, which goes to its history first
+    /// (as many versions as the settings keep). A template keeps its correction whatever the
+    /// draft holds. Returns the saved profile, or nil on failure.
+    func saveInPlace(_ draft: AutoEQProfile) -> AutoEQProfile? {
+        guard let userProfileStore, let stored = profiles[draft.id], stored.source.isLocal else { return nil }
+        let toSave = stored.isTemplate ? draft.withCorrection(of: stored) : draft
+        guard toSave != stored else { return stored }
+        history.record(stored, limit: userProfileStore.appSettings.presetHistoryLimit)
         userProfileStore.saveAutoEQUserProfile(toSave)
         profiles[toSave.id] = toSave
         rebuildSearchIndex()
-        logger.info("Saved edited preset: \(toSave.name)")
+        logger.info("Saved preset: \(toSave.name)")
         return toSave
+    }
+
+    /// Save an edited profile as a new preset; the profile it was edited from does not change.
+    /// The preset remembers its template: the edited profile when it is a template, else the
+    /// edited preset's own. It is a favorite (listed in the AutoEQ popup) when that profile is.
+    func saveAsNewPreset(_ draft: AutoEQProfile, name: String) -> AutoEQProfile? {
+        guard let userProfileStore else { return nil }
+        let preset = AutoEQProfile(
+            id: UUID().uuidString,
+            name: name,
+            source: .created,
+            preampDB: draft.preampDB,
+            filters: draft.filters,
+            measuredBy: draft.measuredBy,
+            optimizedSampleRate: draft.optimizedSampleRate,
+            kind: draft.kind,
+            engine: draft.engine,
+            curve: draft.curve,
+            templateID: draft.isTemplate ? draft.id : draft.templateID
+        )
+        userProfileStore.saveAutoEQUserProfile(preset)
+        if userProfileStore.isAutoEQFavorite(id: draft.id) {
+            userProfileStore.favoriteAutoEQProfile(id: preset.id)
+        }
+        profiles[preset.id] = preset
+        rebuildSearchIndex()
+        logger.info("Created preset \(preset.name)")
+        return preset
     }
 
     /// The user's library copy of a catalog preset, if it was already downloaded.
@@ -167,7 +271,7 @@ final class AutoEQProfileManager {
         return copy
     }
 
-    /// Delete an imported or created profile from disk and catalog.
+    /// Delete an imported or created profile from disk and catalog. Its history is kept.
     func deleteImportedProfile(id: String) {
         guard let profile = profiles[id], profile.source.isLocal else { return }
         profiles.removeValue(forKey: id)
@@ -228,7 +332,7 @@ final class AutoEQProfileManager {
             let entry = AutoEQCatalogEntry(
                 id: profile.id,
                 name: profile.name,
-                measuredBy: profile.sourceLabel ?? "Imported",
+                measuredBy: libraryLabel(of: profile),
                 relativePath: ""
             )
             entries.append(entry)
@@ -379,7 +483,7 @@ final class AutoEQProfileManager {
 
 /// Where a preset search looks.
 nonisolated enum AutoEQSearchScope: Hashable, CaseIterable, Identifiable {
-    /// The user's presets: imported, created or downloaded.
+    /// The user's library: presets, and imported or downloaded templates.
     case library
     /// The AutoEQ catalog on GitHub.
     case catalog
@@ -388,7 +492,7 @@ nonisolated enum AutoEQSearchScope: Hashable, CaseIterable, Identifiable {
 
     var displayName: String {
         switch self {
-        case .library: "My Presets"
+        case .library: "My Library"
         case .catalog: "AutoEQ Catalog"
         }
     }

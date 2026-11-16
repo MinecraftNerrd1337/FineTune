@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 
 /// Sheet of the EQ Manager window: pick the preset to view, create an empty one,
 /// or import a ParametricEQ.txt or GraphicEQ.txt file (AutoEQ, Wavelet, Equalizer APO).
+/// The library lists the user's presets, then the templates (imported files and downloaded
+/// catalog profiles), whose changes are saved as new presets.
 @MainActor
 struct EQManagerPresetChooser: View {
     @Bindable var settings: SettingsManager
@@ -18,7 +20,7 @@ struct EQManagerPresetChooser: View {
     private enum Mode { case choose, create }
 
     @State private var mode: Mode = .choose
-    /// Searches the user's presets by default; the AutoEQ catalog is opt-in.
+    /// Searches the user's library by default; the AutoEQ catalog is opt-in.
     @State private var scope: AutoEQSearchScope = .library
     @State private var downloadingID: String?
     /// Bumped after a download so rows re-read the library.
@@ -127,7 +129,7 @@ struct EQManagerPresetChooser: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
-            TextField(scope == .library ? "Search my presets..." : "Search the AutoEQ catalog...", text: $searchText)
+            TextField(scope == .library ? "Search my library..." : "Search the AutoEQ catalog...", text: $searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($isSearchFocused)
@@ -157,19 +159,22 @@ struct EQManagerPresetChooser: View {
                     let favorites = settings.favoriteAutoEQProfileIDs
                         .compactMap { profileManager.entry(for: $0) }
                         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-                    let local = profileManager.localProfiles.map {
-                        AutoEQCatalogEntry(id: $0.id, name: $0.name, measuredBy: $0.sourceLabel ?? "", relativePath: "")
-                    }
+                    let presets = profileManager.localPresets.map { libraryEntry($0) }
+                    let templates = profileManager.localTemplates.map { libraryEntry($0) }
 
                     if !favorites.isEmpty {
                         sectionTitle("Favorites")
                         ForEach(favorites) { row($0) }
                     }
-                    if !local.isEmpty {
+                    if !presets.isEmpty {
                         sectionTitle("My Presets")
-                        ForEach(local) { row($0) }
+                        ForEach(presets) { row($0) }
                     }
-                    if favorites.isEmpty && local.isEmpty {
+                    if !templates.isEmpty {
+                        sectionTitle("Templates")
+                        ForEach(templates) { row($0) }
+                    }
+                    if favorites.isEmpty && presets.isEmpty && templates.isEmpty {
                         emptyMessage("No presets yet. Create one, import a file, or download one from the AutoEQ catalog.")
                     }
                 } else if searchResult.entries.isEmpty {
@@ -188,6 +193,10 @@ struct EQManagerPresetChooser: View {
             .padding(DesignTokens.Spacing.sm)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func libraryEntry(_ profile: AutoEQProfile) -> AutoEQCatalogEntry {
+        AutoEQCatalogEntry(id: profile.id, name: profile.name, measuredBy: profileManager.libraryLabel(of: profile), relativePath: "")
     }
 
     private var catalogHint: String {
@@ -289,7 +298,7 @@ struct EQManagerPresetChooser: View {
     @ViewBuilder
     private func downloadControl(for entry: AutoEQCatalogEntry) -> some View {
         if profileManager.libraryCopy(of: entry) != nil {
-            Text("In My Presets")
+            Text("In My Library")
                 .font(.system(size: 10))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
         } else if downloadingID == entry.id {
@@ -305,8 +314,8 @@ struct EQManagerPresetChooser: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Download to My Presets")
-            .accessibilityLabel("Download \(entry.name) to My Presets")
+            .help("Download to My Library, as a template")
+            .accessibilityLabel("Download \(entry.name) to My Library")
         }
     }
 

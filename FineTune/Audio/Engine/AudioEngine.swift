@@ -933,6 +933,16 @@ final class AudioEngine {
         settingsManager.getAutoEQSelection(for: deviceUID)
     }
 
+    /// Make the devices that use one profile use another: a preset made from the template they
+    /// used. Each device keeps its correction on or off.
+    func switchAutoEQProfile(from oldID: String, to newID: String, onDevices deviceUIDs: [String]) {
+        for uid in deviceUIDs {
+            guard let selection = settingsManager.getAutoEQSelection(for: uid), selection.profileID == oldID else { continue }
+            settingsManager.setAutoEQSelection(for: uid, to: AutoEQSelection(profileID: newID, isEnabled: selection.isEnabled))
+            applyAutoEQToTaps(for: uid)
+        }
+    }
+
     /// Re-apply a preset to every tap whose device uses it (after it was edited and saved).
     func reapplyAutoEQProfile(id profileID: String) {
         for tap in taps.values {

@@ -134,7 +134,14 @@ nonisolated enum AutoEQBaseRate {
     }
 }
 
-/// A headphone/speaker correction profile from AutoEQ.
+/// A headphone/speaker correction profile.
+///
+/// Profiles come in two roles (see `isTemplate`):
+/// - a **template** is what comes from outside: an imported file, a profile of the AutoEQ catalog
+///   or a downloaded copy of one. Its correction (bands or curve, and preamp) never changes;
+///   only its name, base rate and engine can be edited.
+/// - a **preset** is created in the EQ Manager, empty or from a template (`templateID`), and is
+///   edited in place. Its earlier versions are kept by `AutoEQPresetHistoryStore`.
 nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     let id: String           // Slug for fetched, UUID for imported
     var name: String         // "Sennheiser HD 600"
@@ -152,6 +159,8 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     var engine: AutoEQCorrectionEngine
     /// The curve of a graphic preset, by rising frequency. Empty for parametric presets.
     var curve: [AutoEQCurvePoint]
+    /// The template a preset was created from. Nil for templates and for presets made from scratch.
+    var templateID: String?
 
     static let maxFilters = 128
     static let maxCurvePoints = 1024
@@ -159,7 +168,7 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     static let preampRange: ClosedRange<Float> = -30...12
 
     enum CodingKeys: String, CodingKey {
-        case id, name, source, preampDB, filters, measuredBy, optimizedSampleRate, kind, engine, curve
+        case id, name, source, preampDB, filters, measuredBy, optimizedSampleRate, kind, engine, curve, templateID
     }
 
     init(
@@ -169,7 +178,8 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         optimizedSampleRate: Double = 48000,
         kind: AutoEQPresetKind = .parametric,
         engine: AutoEQCorrectionEngine = .biquad,
-        curve: [AutoEQCurvePoint] = []
+        curve: [AutoEQCurvePoint] = [],
+        templateID: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -181,6 +191,7 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         self.kind = kind
         self.engine = engine
         self.curve = curve
+        self.templateID = templateID
     }
 
     init(from decoder: Decoder) throws {
@@ -195,10 +206,31 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         kind = try container.decodeIfPresent(AutoEQPresetKind.self, forKey: .kind) ?? .parametric
         engine = try container.decodeIfPresent(AutoEQCorrectionEngine.self, forKey: .engine) ?? .biquad
         curve = try container.decodeIfPresent([AutoEQCurvePoint].self, forKey: .curve) ?? []
+        templateID = try container.decodeIfPresent(String.self, forKey: .templateID)
     }
 }
 
 nonisolated extension AutoEQProfile {
+    /// Imported, downloaded or catalog profiles: their correction is never changed. Presets
+    /// (created in the EQ Manager) are edited in place.
+    var isTemplate: Bool { source.isTemplate }
+
+    /// Whether two profiles apply the same correction: same kind, bands or curve, and preamp.
+    /// Name, base rate and engine are settings of the profile, not part of its correction.
+    func hasSameCorrection(as other: AutoEQProfile) -> Bool {
+        kind == other.kind && filters == other.filters && curve == other.curve && preampDB == other.preampDB
+    }
+
+    /// This profile with the correction (kind, bands, curve, preamp) of another.
+    func withCorrection(of other: AutoEQProfile) -> AutoEQProfile {
+        var copy = self
+        copy.kind = other.kind
+        copy.filters = other.filters
+        copy.curve = other.curve
+        copy.preampDB = other.preampDB
+        return copy
+    }
+
     /// Number of bands, for parametric presets only.
     var bandCount: Int? {
         kind == .parametric ? filters.count : nil
@@ -265,7 +297,8 @@ extension AutoEQProfile {
             optimizedSampleRate: AutoEQBaseRate.sanitized(optimizedSampleRate),
             kind: kind,
             engine: engine,
-            curve: Array(validCurve.prefix(Self.maxCurvePoints))
+            curve: Array(validCurve.prefix(Self.maxCurvePoints)),
+            templateID: templateID
         )
     }
 }
@@ -280,6 +313,9 @@ nonisolated enum AutoEQSource: String, Codable {
 
     /// Stored by the user (imported, created or downloaded), as opposed to the AutoEQ catalog.
     var isLocal: Bool { self == .imported || self == .created || self == .downloaded }
+
+    /// Everything but the presets created in the EQ Manager. See `AutoEQProfile.isTemplate`.
+    var isTemplate: Bool { self != .created }
 }
 
 /// Lightweight catalog entry for the AutoEQ search index (no filter data).

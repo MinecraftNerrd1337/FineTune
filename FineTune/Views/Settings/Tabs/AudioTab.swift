@@ -27,6 +27,7 @@ struct AudioTab: View {
             VStack(alignment: .leading, spacing: 24) {
                 volumeSection
                 devicesSection
+                presetsSection
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 20)
@@ -152,6 +153,34 @@ struct AudioTab: View {
                     try? await Task.sleep(for: .seconds(2))
                     deviceVolumeMonitor.refreshAlertVolume()
                 }
+            }
+        }
+    }
+
+    // MARK: - EQ Manager Presets
+
+    private var presetsSection: some View {
+        SettingsSection("EQ Manager Presets") {
+            SettingsRow(
+                "Ask Before Saving",
+                description: "Confirm before a save replaces the stored version of a preset or template"
+            ) {
+                Toggle("", isOn: $settings.appSettings.confirmPresetSaves)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
+                "Versions Kept",
+                description: "Earlier versions kept for each preset, to restore them from the EQ Manager. Lowering it drops the oldest versions of a preset at its next save."
+            ) {
+                Stepper(value: $settings.appSettings.presetHistoryLimit, in: AutoEQPresetHistoryStore.limitRange) {
+                    Text(settings.appSettings.presetHistoryLimit == 0 ? "Off" : "\(settings.appSettings.presetHistoryLimit)")
+                        .font(.system(size: 12, weight: .medium).monospacedDigit())
+                        .frame(minWidth: 28, alignment: .trailing)
+                }
+                .controlSize(.small)
             }
         }
     }

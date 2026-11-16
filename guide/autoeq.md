@@ -72,6 +72,19 @@ A filter list is made for one sample rate: AutoEQ, like most tools, optimises it
 - **[AutoEQ GitHub](https://github.com/jaakkopasanen/AutoEq)** — The full repository of measurements and generated profiles.
 - **Custom measurements** — If you've measured your headphones yourself (e.g., with a MiniDSP EARS or similar), you can create a ParametricEQ.txt file in any text editor following the format above.
 
+## Templates, Presets and History
+
+The EQ Manager keeps two kinds of profiles:
+
+- **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate and correction engine can be edited.
+- **Presets**: created in the EQ Manager, empty or from a template, and edited in place.
+
+Changing the bands of a template saves a new preset, which remembers its template (**Replace → With Its Template** brings its bands back). The new preset can take over from the template on the devices that used it.
+
+Saving a preset asks for confirmation first (turn it off in **Settings → Audio → EQ Manager Presets**, or with the checkbox of the dialog), and the version it replaces is kept in the preset's **History** menu, where any earlier version can be restored. The number of versions kept is a setting (10 by default, 0 turns the history off). **Reset All Settings** keeps your presets and templates.
+
+Presets edited in place by earlier versions of FineTune are kept: an imported file that was edited becomes a template again, and its edited version becomes a preset used by the same devices.
+
 ## Managing Profiles
 
 - Each device remembers its assigned profile independently

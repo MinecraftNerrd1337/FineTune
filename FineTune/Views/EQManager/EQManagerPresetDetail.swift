@@ -6,6 +6,8 @@ import SwiftUI
 @MainActor
 struct EQManagerPresetDetail: View {
     let editor: EQManagerEditor
+    /// Name of the template the preset was made from, if any.
+    var templateName: String? = nil
 
     @State private var selectedBand: Int?
     @State private var scaleDB: Double = 12
@@ -109,6 +111,16 @@ struct EQManagerPresetDetail: View {
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 4)
+            if isEditing && editor.original.isTemplate {
+                Label(
+                    "This is a template: its bands stay as \(templateOrigin). Changing them saves a new preset.",
+                    systemImage: "info.circle"
+                )
+                .font(.system(size: 10))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+            }
         }
     }
 
@@ -171,7 +183,21 @@ struct EQManagerPresetDetail: View {
             Divider()
             row("Latency") { valueText(latencyText) }
             Divider()
-            row("Source") { valueText(preset.sourceLabel ?? "AutoEQ") }
+            row("Role") { valueText(preset.isTemplate ? "Template" : "Preset") }
+                .help(preset.isTemplate
+                      ? "From a file or the AutoEQ catalog: its bands never change. Changing them saves a new preset."
+                      : "Created in the EQ Manager and saved in place. Earlier versions are kept in its history.")
+            Divider()
+            row("Source") { valueText(templateName.map { "From \($0)" } ?? preset.sourceLabel ?? "AutoEQ") }
+        }
+    }
+
+    /// How a template came to the library, for the edit-mode note.
+    private var templateOrigin: String {
+        switch editor.original.source {
+        case .imported: return "imported"
+        case .downloaded: return "downloaded"
+        default: return "published"
         }
     }
 

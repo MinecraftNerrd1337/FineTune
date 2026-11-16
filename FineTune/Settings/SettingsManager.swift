@@ -64,6 +64,10 @@ nonisolated struct AppSettings: Codable, Equatable {
     var panelSize: MenuBarPanelSize = .comfortable  // Overall menu bar panel size and density
     var keepPanelOpen: Bool = false  // Panel stays open when clicking elsewhere; closed by the menu bar icon
 
+    // EQ Manager presets
+    var confirmPresetSaves: Bool = true  // Ask before a save replaces the stored version of a preset
+    var presetHistoryLimit: Int = AutoEQPresetHistoryStore.defaultLimit  // Earlier versions kept per preset (0 = none)
+
     init() {}
 
     mutating func setUnifiedLoudnessEnabled(_ enabled: Bool) {
@@ -95,6 +99,10 @@ nonisolated struct AppSettings: Codable, Equatable {
         keepPanelOpen = try c.decodeIfPresent(Bool.self, forKey: .keepPanelOpen)
             ?? legacy.decodeIfPresent(Bool.self, forKey: .keepPopupOpen)
             ?? false
+        confirmPresetSaves = try c.decodeIfPresent(Bool.self, forKey: .confirmPresetSaves) ?? true
+        let limitRange = AutoEQPresetHistoryStore.limitRange
+        let storedLimit = try c.decodeIfPresent(Int.self, forKey: .presetHistoryLimit) ?? AutoEQPresetHistoryStore.defaultLimit
+        presetHistoryLimit = min(max(storedLimit, limitRange.lowerBound), limitRange.upperBound)
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -794,6 +802,26 @@ final class SettingsManager {
         settings.favoriteAutoEQProfiles
     }
 
+    /// Devices whose AutoEQ selection is this profile.
+    func deviceUIDs(usingAutoEQProfile profileID: String) -> [String] {
+        settings.deviceAutoEQ.filter { $0.value.profileID == profileID }.keys.sorted()
+    }
+
+    /// Point the device selections and the favorite of a profile to another one (when a
+    /// preset takes over from the template it was made from). On/off states are kept.
+    func remapAutoEQProfile(from oldID: String, to newID: String) {
+        var changed = false
+        for (uid, selection) in settings.deviceAutoEQ where selection.profileID == oldID {
+            settings.deviceAutoEQ[uid] = AutoEQSelection(profileID: newID, isEnabled: selection.isEnabled)
+            changed = true
+        }
+        if settings.favoriteAutoEQProfiles.remove(oldID) != nil {
+            settings.favoriteAutoEQProfiles.insert(newID)
+            changed = true
+        }
+        if changed { scheduleSave() }
+    }
+
     var autoEQPreampEnabled: Bool {
         get { settings.autoEQPreampEnabled }
         set {
@@ -962,7 +990,8 @@ final class SettingsManager {
         settings.autoEQPreampEnabled = true
         settings.deviceAutoEQ.removeAll()
         settings.favoriteAutoEQProfiles.removeAll()
-        settings.autoEQUserProfiles.removeAll()
+        // The user's presets and templates are not settings: they are kept (deleting one is a
+        // separate, explicit action)
         settings.eqManagerWindowFrame = nil
         settings.appDeviceSelectionMode.removeAll()
         settings.appSelectedDeviceUIDs.removeAll()

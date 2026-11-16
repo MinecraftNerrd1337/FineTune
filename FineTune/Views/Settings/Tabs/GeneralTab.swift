@@ -101,7 +101,7 @@ struct GeneralTab: View {
         SettingsSection("Data") {
             SettingsRow(
                 "Reset All Settings",
-                description: "Clear all volumes, EQ, and device routings"
+                description: "Clear all volumes, EQ, and device routings. Your AutoEQ presets and templates are kept."
             ) {
                 Button(role: .destructive) {
                     showResetConfirmation = true
