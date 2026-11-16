@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 ///
 /// Saving follows the library's rules (`AutoEQProfileManager.saveKind`): a preset is saved in
 /// place, after a confirmation (a setting) and with its replaced version kept in its history; a
-/// template keeps its bands, so changing them saves a new preset.
+/// template keeps its bands, so changing them saves a new preset. The Convert menu makes a new
+/// preset from the one shown, in another form (`EQManagerConvertSheet`).
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
@@ -30,6 +31,7 @@ struct EQManagerRootView: View {
     @State private var isSaveConfirmationPresented = false
     @State private var newPresetRequest: EQManagerNewPresetRequest?
     @State private var isClearHistoryConfirmationPresented = false
+    @State private var conversionRequest: EQManagerConversionRequest?
 
     private var profileManager: AutoEQProfileManager { audioEngine.autoEQProfileManager }
 
@@ -66,6 +68,17 @@ struct EQManagerRootView: View {
                     createPreset(named: name, useOnDevices: useOnDevices)
                 },
                 onCancel: { newPresetRequest = nil }
+            )
+            .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+        }
+        .sheet(item: $conversionRequest) { request in
+            EQManagerConvertSheet(
+                request: request,
+                onCreate: { profile, name in
+                    conversionRequest = nil
+                    createConvertedPreset(profile, named: name)
+                },
+                onCancel: { conversionRequest = nil }
             )
             .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         }
@@ -115,6 +128,7 @@ struct EQManagerRootView: View {
 
             if let editor {
                 historyMenu(editor)
+                convertMenu(editor)
                 if editor.isEditing {
                     editControls(editor)
                 } else {
@@ -223,6 +237,31 @@ struct EQManagerRootView: View {
             return settings.appSettings.presetHistoryLimit > 0
                 ? "Save the changes to this preset (the current version goes to its history)"
                 : "Save the changes to this preset (version history is off in Settings)"
+        }
+    }
+
+    // MARK: - Convert
+
+    /// New presets made from this one in another form. Outside edit mode only: a conversion
+    /// starts from the stored preset.
+    @ViewBuilder
+    private func convertMenu(_ editor: EQManagerEditor) -> some View {
+        if !editor.isEditing {
+            let preset = editor.draft
+            Menu {
+                ForEach(EQManagerConversionKind.available(for: preset.kind)) { kind in
+                    Button(kind.menuTitle) {
+                        conversionRequest = EQManagerConversionRequest(kind: kind, source: preset)
+                    }
+                }
+            } label: {
+                Label("Convert", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .fixedSize()
+            .disabled(!preset.hasCorrection)
+            .help(preset.hasCorrection
+                  ? "Make a new preset from this one in another form. This preset is not changed."
+                  : "This preset has no bands or curve to convert")
         }
     }
 
@@ -387,6 +426,15 @@ struct EQManagerRootView: View {
         }
         // The edited profile is left as it was; show the new preset
         self.editor = EQManagerEditor(profile: preset)
+    }
+
+    /// Store a conversion as a new preset and show it. The converted preset is left as it was.
+    private func createConvertedPreset(_ profile: AutoEQProfile, named name: String) {
+        guard let preset = profileManager.saveAsNewPreset(profile, name: name) else {
+            alertMessage = "Could not save the preset."
+            return
+        }
+        editor = EQManagerEditor(profile: preset)
     }
 
     /// Replace the bands and preamp of the draft (one undo step); name, engine and source stay.

@@ -85,6 +85,18 @@ Saving a preset asks for confirmation first (turn it off in **Settings → Audio
 
 Presets edited in place by earlier versions of FineTune are kept: an imported file that was edited becomes a template again, and its edited version becomes a preset used by the same devices.
 
+## Converting Presets
+
+The **Convert** menu of the EQ Manager makes a new preset from the one shown, in another form. The preset converted is never changed, and each conversion shows how close its result is: the largest difference between the two curves from 20 Hz to 20 kHz, and its frequency.
+
+- **To Graphic EQ**: the curve sampled from 20 Hz to 20 kHz (127 to 1024 points), for apps that read a GraphicEQ.txt (Wavelet, Equalizer APO). The usual 127 points miss a few tenths of a dB on narrow bands; 512 or 1024 points follow them within a few hundredths.
+- **To Parametric EQ** (graphic presets) and **With Another Number of Bands** (parametric presets): bands fitted to the curve. Choose the number of bands, or the fewest that stay within a tolerance, the highest Q, whether shelves may be used, and the base rate of the new filters. Ten bands usually follow a smooth curve within one or two tenths of a dB; a curve with many sharp corners needs more.
+- **To Another Base Rate**: the same bands, moved so that they give the same curve at another base rate, or as analog filters. Useful to export a filter list to an app that plays it at its own rate: an AutoEQ list made at 44.1 kHz and played as is at 48 kHz differs by about 0.3 dB near the top; moved to 48 kHz, by about 0.01 dB.
+
+Fitting runs in the background and takes a few seconds; it can be cancelled.
+
+The fitting engine follows the approach of the AutoEQ optimiser of PEQdB (all bands fitted together on frequency, gain and bandwidth), in double precision, with Levenberg-Marquardt, a search over the number and types of bands, and a final pass that minimises the largest error.
+
 ## Managing Profiles
 
 - Each device remembers its assigned profile independently
