@@ -97,6 +97,14 @@ Fitting runs in the background and takes a few seconds; it can be cancelled.
 
 The fitting engine follows the approach of the AutoEQ optimiser of PEQdB (all bands fitted together on frequency, gain and bandwidth), in double precision, with Levenberg-Marquardt, a search over the number and types of bands, and a final pass that minimises the largest error.
 
+## Once per Device
+
+By default each app plays through its own stream, so a device's correction runs once for each app playing on it. With **Settings → Audio → Mix Apps per Device**, the apps on a stereo output share one stream: each keeps its own volume, EQ and loudness, and the device's correction runs once, on their sum, followed by the limiter.
+
+- Apps join and leave the shared stream without interrupting the others, and with no added latency.
+- An app moved to another device keeps playing on the old one until its sound reaches the new one, then crossfades.
+- Multichannel outputs, apps played on several devices at once, and more than eight apps on one device keep a stream of their own.
+
 ## Managing Profiles
 
 - Each device remembers its assigned profile independently

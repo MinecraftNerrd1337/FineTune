@@ -50,6 +50,9 @@ struct AudioTab: View {
         .onChange(of: settings.appSettings.callPassthroughEnabled) { _, _ in
             audioEngine.reconcileCallPassthrough()
         }
+        .onChange(of: settings.appSettings.perDeviceMixingEnabled) { _, _ in
+            audioEngine.reconcileRoutingMode()
+        }
     }
 
     // MARK: - Volume
@@ -108,6 +111,16 @@ struct AudioTab: View {
                 description: "Hold ⌥ on an output device's slider to adjust its master volume without switching to it"
             ) {
                 Toggle("", isOn: $settings.appSettings.masterVolumeOptionKeyEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
+                "Mix Apps per Device",
+                description: "Play the apps of each stereo output through one stream, so AutoEQ corrects their sum once per device. Multichannel and multi-device outputs stay per app"
+            ) {
+                Toggle("", isOn: $settings.appSettings.perDeviceMixingEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()

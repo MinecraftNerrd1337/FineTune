@@ -25,6 +25,9 @@ final class AudioEngine {
 
     private var taps: [pid_t: any ProcessTapControlling] = [:]
 
+    /// The per-DAC mixers of the per-DAC routing mode (`AppSettings.perDeviceMixingEnabled`).
+    private let mixerRegistry: DeviceMixerRegistry
+
     /// Factory for creating tap controllers. Overridable for testing.
     private let tapFactory: @MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling
 
@@ -230,11 +233,25 @@ final class AudioEngine {
 
         self.deviceKeepAlive = DeviceKeepAliveService(settingsManager: manager, deviceProvider: resolvedDeviceProvider)
 
+        let registry = DeviceMixerRegistry(deviceMonitor: realDeviceMonitor)
+        self.mixerRegistry = registry
+
         // Tap factory: use provided factory or default to ProcessTapController
         if let factory = tapFactory {
             self.tapFactory = factory
         } else {
             self.tapFactory = { app, deviceUIDs, preferredSource in
+                // Per-DAC routing: the app shares its device's aggregate (AutoEQ once per DAC)
+                // where it can, and keeps its own elsewhere
+                if manager.appSettings.perDeviceMixingEnabled {
+                    return MixedTapController(
+                        app: app,
+                        targetDeviceUIDs: deviceUIDs,
+                        registry: registry,
+                        deviceMonitor: realDeviceMonitor,
+                        preferredTapSourceDeviceUID: preferredSource
+                    )
+                }
                 if deviceUIDs.count == 1 {
                     return ProcessTapController(
                         app: app,
@@ -537,6 +554,19 @@ final class AudioEngine {
         applyPersistedSettings()
     }
 
+    /// Rebuilds every tap after the routing mode changed (per app or per DAC). Routing state
+    /// is kept; each app is re-tapped on the same devices with the new kind of controller.
+    func reconcileRoutingMode() {
+        for (pid, tap) in taps {
+            tap.invalidate()
+            appliedPIDs.remove(pid)
+        }
+        taps.removeAll()
+        mixerRegistry.invalidateAll()
+        applyPersistedSettings()
+        logger.info("Routing mode: \(self.settingsManager.appSettings.perDeviceMixingEnabled ? "per DAC" : "per app", privacy: .public)")
+    }
+
     /// Unhide an app by its persistence identifier.
     /// Immediately creates a tap if the app is currently running.
     func unignoreApp(_ identifier: String) {
@@ -653,6 +683,7 @@ final class AudioEngine {
             tap.invalidate()
         }
         taps.removeAll()
+        mixerRegistry.invalidateAll()
         logger.info("AudioEngine stopped")
     }
 
@@ -670,6 +701,8 @@ final class AudioEngine {
     /// Resets all persisted settings and synchronizes in-memory engine state.
     /// Active taps are kept alive but reverted to defaults (unity volume, unmuted, flat EQ).
     func handleSettingsReset() {
+        let wasPerDeviceMixing = settingsManager.appSettings.perDeviceMixingEnabled
+
         // 1. Clear persisted state
         settingsManager.resetAllSettings()
 
@@ -694,6 +727,11 @@ final class AudioEngine {
 
         // 6. Re-apply from clean settings (re-establishes routing to system default)
         applyPersistedSettings()
+
+        // 7. The reset turned per-DAC routing off: rebuild the taps it had made
+        if wasPerDeviceMixing && !settingsManager.appSettings.perDeviceMixingEnabled {
+            reconcileRoutingMode()
+        }
 
         logger.info("Settings reset: engine state synchronized")
     }
