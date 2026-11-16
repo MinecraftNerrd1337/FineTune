@@ -8,7 +8,8 @@ import UniformTypeIdentifiers
 /// Saving follows the library's rules (`AutoEQProfileManager.saveKind`): a preset is saved in
 /// place, after a confirmation (a setting) and with its replaced version kept in its history; a
 /// template keeps its bands, so changing them saves a new preset. The Convert menu makes a new
-/// preset from the one shown, in another form (`EQManagerConvertSheet`).
+/// preset from the one shown, in another form (`EQManagerConvertSheet`). The Use On menu makes
+/// output devices play their AutoEQ with the preset shown.
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
@@ -127,6 +128,7 @@ struct EQManagerRootView: View {
             Spacer()
 
             if let editor {
+                deviceMenu(editor)
                 historyMenu(editor)
                 convertMenu(editor)
                 if editor.isEditing {
@@ -237,6 +239,63 @@ struct EQManagerRootView: View {
             return settings.appSettings.presetHistoryLimit > 0
                 ? "Save the changes to this preset (the current version goes to its history)"
                 : "Save the changes to this preset (version history is off in Settings)"
+        }
+    }
+
+    // MARK: - Devices
+
+    /// The output devices that play their AutoEQ with the preset shown, as the wand menu of a
+    /// device's row sets it. Checking a device selects the preset for it and turns its
+    /// correction on; unchecking turns its correction off and keeps the selection, as the
+    /// wand's Correction switch does. Outside edit mode only: a device plays the stored preset.
+    @ViewBuilder
+    private func deviceMenu(_ editor: EQManagerEditor) -> some View {
+        if !editor.isEditing {
+            let preset = editor.draft
+            let devices = audioEngine.outputDevices.filter(\.supportsAutoEQ)
+            let users = devices.filter { plays($0.uid, preset.id) }
+            Menu {
+                if devices.isEmpty {
+                    Text("No connected output supports AutoEQ")
+                } else {
+                    Section("Play This Preset On") {
+                        ForEach(devices) { device in
+                            Toggle(deviceLabel(device, presetID: preset.id), isOn: Binding(
+                                get: { plays(device.uid, preset.id) },
+                                set: { use in setPreset(preset.id, playsOn: device.uid, use) }
+                            ))
+                        }
+                    }
+                }
+            } label: {
+                Label(users.count == 1 ? "On \(users[0].name)" : users.isEmpty ? "Use On" : "On \(users.count) Devices",
+                      systemImage: "headphones")
+            }
+            .fixedSize()
+            .help("Choose the output devices whose AutoEQ plays this preset")
+        }
+    }
+
+    /// Whether the device's AutoEQ plays this preset now.
+    private func plays(_ deviceUID: String, _ presetID: String) -> Bool {
+        guard let selection = settings.getAutoEQSelection(for: deviceUID) else { return false }
+        return selection.profileID == presetID && selection.isEnabled
+    }
+
+    /// The device's name, with the preset it plays now when that is another one.
+    private func deviceLabel(_ device: AudioDevice, presetID: String) -> String {
+        guard let selection = settings.getAutoEQSelection(for: device.uid),
+              selection.profileID != presetID || !selection.isEnabled else { return device.name }
+        guard selection.isEnabled else { return "\(device.name) (correction off)" }
+        let current = profileManager.profile(for: selection.profileID)?.name ?? "another preset"
+        return "\(device.name) (now \(current))"
+    }
+
+    private func setPreset(_ presetID: String, playsOn deviceUID: String, _ use: Bool) {
+        if use {
+            audioEngine.setAutoEQProfile(for: deviceUID, profileID: presetID)
+        } else {
+            audioEngine.setAutoEQEnabled(for: deviceUID, enabled: false)
         }
     }
 

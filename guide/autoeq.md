@@ -79,6 +79,8 @@ The EQ Manager keeps two kinds of profiles:
 - **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate and correction engine can be edited.
 - **Presets**: created in the EQ Manager, empty or from a template, and edited in place.
 
+The **Use On** menu of the EQ Manager plays the preset shown on your output devices: check a device to make its AutoEQ use the preset, uncheck it to turn its correction off (its selection is kept, as with the wand's **Correction** switch).
+
 Changing the bands of a template saves a new preset, which remembers its template (**Replace → With Its Template** brings its bands back). The new preset can take over from the template on the devices that used it.
 
 Saving a preset asks for confirmation first (turn it off in **Settings → Audio → EQ Manager Presets**, or with the checkbox of the dialog), and the version it replaces is kept in the preset's **History** menu, where any earlier version can be restored. The number of versions kept is a setting (10 by default, 0 turns the history off). **Reset All Settings** keeps your presets and templates.
