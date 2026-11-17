@@ -24,6 +24,9 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
     /// Number of active filter sections (diagnostic)
     private nonisolated(unsafe) var _filterCount: UInt = 0
 
+    /// Preamp applied without filters: correction switched off, or a preset without bands.
+    private nonisolated(unsafe) var _preampOnly: Bool = false
+
     init(sampleRate: Double) {
         super.init(
             sampleRate: sampleRate,
@@ -41,15 +44,29 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         _currentProfile = profile
 
         let validated = profile?.validated()
-        guard let validated, !validated.filters.isEmpty else {
+        guard let validated else {
             // Disable: atomic writes
             setEnabled(false)
             _filterCount = 0
             _preampGain = 1.0
+            _preampOnly = false
             swapSetup(nil)
-            logger.info("AutoEQ disabled — \(profile == nil ? "nil profile" : "no valid filters after validation")")
+            logger.info("AutoEQ disabled — nil profile")
             return
         }
+
+        guard !validated.filters.isEmpty else {
+            // Preamp only, so turning the correction off keeps the same level.
+            let preampLinear = _preampEnabled ? powf(10.0, validated.preampDB / 20.0) : 1.0
+            _preampOnly = true
+            _preampGain = preampLinear
+            _filterCount = 0
+            swapSetup(nil)
+            setEnabled(preampLinear != 1.0)
+            logger.info("AutoEQ preamp only: \"\(validated.name)\" — preamp \(validated.preampDB, format: .fixed(precision: 1)) dB (\(self._preampEnabled ? "active" : "bypassed"))")
+            return
+        }
+        let wasPreampOnly = _preampOnly
 
         let filters = validated.filters
         let coefficients = BiquadMath.coefficientsForAutoEQFilters(
@@ -72,6 +89,9 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         _preampGain = preampLinear
         _filterCount = UInt(filters.count)
         swapSetup(newSetup)
+        // Delay buffers hold stale state from before the filters were dropped.
+        if wasPreampOnly { resetDelayBuffers() }
+        _preampOnly = false
         setEnabled(true)
 
         let preampStatus = self._preampEnabled ? "active" : "bypassed"
@@ -104,6 +124,20 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
             profileOptimizedRate: profile.optimizedSampleRate
         )
         return (coefficients, profile.filters.count)
+    }
+
+    /// Preamp-only mode skips the biquad cascade; otherwise the base class runs it (RT-safe).
+    override func process(input: UnsafePointer<Float>, output: UnsafeMutablePointer<Float>, frameCount: Int) {
+        guard _preampOnly else {
+            super.process(input: input, output: output, frameCount: frameCount)
+            return
+        }
+        if input != UnsafePointer(output) {
+            memcpy(output, input, frameCount * 2 * MemoryLayout<Float>.size)
+        }
+        if isEnabled {
+            preProcess(output: output, frameCount: frameCount)
+        }
     }
 
     /// Apply preamp gain before the biquad cascade (RT-safe).

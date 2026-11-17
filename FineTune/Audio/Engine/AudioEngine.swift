@@ -914,8 +914,18 @@ final class AudioEngine {
     /// Synchronous in-memory AutoEQ profile lookup. nil = not yet cached.
     private func autoEQProfileForActivation(deviceUID: String) -> AutoEQProfile? {
         guard let device = deviceMonitor.device(for: deviceUID), device.supportsAutoEQ else { return nil }
-        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID), selection.isEnabled else { return nil }
-        return autoEQProfileManager.profile(for: selection.profileID)
+        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
+              let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
+        return Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled)
+    }
+
+    /// The profile handed to the processor. With the correction switched off, the filters are
+    /// dropped but the preamp stays, so switching the correction on and off compares at equal level.
+    private static func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
+        guard !correctionEnabled else { return profile }
+        var preampOnly = profile
+        preampOnly.filters = []
+        return preampOnly
     }
 
     private func tapInitialState(forApp app: AudioApp, primaryDeviceUID: String, deviceVolume: Float) -> TapInitialState {
@@ -947,16 +957,15 @@ final class AudioEngine {
             return
         }
 
-        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
-              selection.isEnabled else {
+        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
             tap.updateAutoEQProfile(nil)
-            logger.debug("AutoEQ skip for \(tap.app.name): no selection or disabled for \(device.name)")
+            logger.debug("AutoEQ skip for \(tap.app.name): no selection for \(device.name)")
             return
         }
 
         // Try in-memory first (instant)
         if let profile = autoEQProfileManager.profile(for: selection.profileID) {
-            tap.updateAutoEQProfile(profile)
+            tap.updateAutoEQProfile(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
             return
         }
 
@@ -967,9 +976,8 @@ final class AudioEngine {
             // Verify tap still exists and is still routed to the same device
             guard tap.currentDeviceUID == deviceUID else { return }
             guard let latestSelection = settingsManager.getAutoEQSelection(for: deviceUID),
-                  latestSelection.profileID == selection.profileID,
-                  latestSelection.isEnabled else { return }
-            tap.updateAutoEQProfile(profile)
+                  latestSelection.profileID == selection.profileID else { return }
+            tap.updateAutoEQProfile(Self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
         }
     }
 
