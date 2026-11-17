@@ -1076,6 +1076,23 @@ final class AudioEngine {
         followsDefault.contains(app.id)
     }
 
+    /// True while an app plays on its own multi-device selection (multi mode with at least one
+    /// selected device connected). Those outputs were chosen explicitly, so a change of the
+    /// default output device does not concern the app: its tap is left exactly as it is.
+    /// False for a multi-mode app that fell back to the default because every selected device
+    /// is gone; that one follows the default like a single-device app.
+    func isMultiRouted(_ pid: pid_t) -> Bool {
+        guard volumeState.getDeviceSelectionMode(for: pid) == .multi else { return false }
+        return volumeState.getSelectedDeviceUIDs(for: pid).contains { deviceMonitor.device(for: $0) != nil }
+    }
+
+    /// Whether an app's tap may capture the default device's own stream (see
+    /// `preferredTapSourceDeviceUID`). Never for a multi-routed app: its tap must survive
+    /// default changes untouched, which only the device-independent mixdown capture does.
+    private func tapSourceFollowsDefault(_ pid: pid_t) -> Bool {
+        followsDefault.contains(pid) && !isMultiRouted(pid)
+    }
+
     // MARK: - Multi-Device Selection
 
     /// Gets the device selection mode for an app
@@ -1124,6 +1141,8 @@ final class AudioEngine {
         case .single:
             if isFollowingDefault(for: app), let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
                 deviceUIDs = [defaultUID]
+                // Default changes were not applied to this app while it was multi-routed
+                appDeviceRouting[app.id] = defaultUID
             } else if let deviceUID = appDeviceRouting[app.id] {
                 deviceUIDs = [deviceUID]
             } else if let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
@@ -1134,7 +1153,11 @@ final class AudioEngine {
             }
 
         case .multi:
-            let selectedUIDs = getSelectedDeviceUIDs(for: app).sorted()
+            // Connected devices only: the selection keeps a device that is unplugged while
+            // the app falls back to the default, and an aggregate cannot include it.
+            let selectedUIDs = getSelectedDeviceUIDs(for: app)
+                .filter { deviceMonitor.device(for: $0) != nil }
+                .sorted()
             if selectedUIDs.isEmpty {
                 return
             }
@@ -1146,9 +1169,10 @@ final class AudioEngine {
             // Tap exists - update devices
             if tap.currentDeviceUIDs != deviceUIDs {
                 do {
-                    let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
+                    let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: tapSourceFollowsDefault(app.id))
                     try await tap.updateDevices(to: deviceUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID)
                     applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
+                    applyAutoEQToTap(tap)
                     logger.debug("Updated \(app.name) to \(deviceUIDs.count) device(s)")
                 } catch {
                     logger.error("Failed to update devices for \(app.name): \(error.localizedDescription)")
@@ -1168,7 +1192,7 @@ final class AudioEngine {
         guard !isCallPassthrough(app) else { return }
         releaseStaleTaps(conflictingWith: app)
 
-        let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
+        let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: tapSourceFollowsDefault(app.id))
         do {
             let tap = try tapFactory(app, deviceUIDs, preferredTapSourceUID)
             applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
@@ -1407,15 +1431,19 @@ final class AudioEngine {
     /// Routes all followsDefault apps to the given device UID and switches their taps.
     /// Early-exits if all apps are already routed to the target (avoids unnecessary tap switches).
     private func routeFollowsDefaultApps(to targetUID: String) {
-        guard !followsDefault.allSatisfy({ appDeviceRouting[$0] == targetUID }) else { return }
+        // An app playing on its own multi-device selection keeps it: re-routing it here would
+        // collapse its outputs to the new default alone. Its tap is not touched at all, so the
+        // default change does not disturb its audio.
+        let followers = followsDefault.filter { !isMultiRouted($0) }
+        guard !followers.allSatisfy({ appDeviceRouting[$0] == targetUID }) else { return }
 
-        for pid in followsDefault {
+        for pid in followers {
             appDeviceRouting[pid] = targetUID
         }
 
         var tapsToSwitch: [(app: AudioApp, tap: any ProcessTapControlling)] = []
         for app in apps {
-            guard followsDefault.contains(app.id), let tap = taps[app.id] else { continue }
+            guard followers.contains(app.id), let tap = taps[app.id] else { continue }
             tapsToSwitch.append((app, tap))
         }
         guard !tapsToSwitch.isEmpty else { return }
@@ -1514,7 +1542,7 @@ final class AudioEngine {
                 // Source device is dead, skip crossfade
                 for (tap, remainingUIDs) in multiModeTapsToUpdate {
                     do {
-                        let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: remainingUIDs, isFollowsDefault: self.followsDefault.contains(tap.app.id))
+                        let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: remainingUIDs, isFollowsDefault: self.tapSourceFollowsDefault(tap.app.id))
                         try await tap.updateDevices(to: remainingUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID, sourceDeviceDead: true)
                         self.applyTapOutputState(to: tap, for: tap.app.id, deviceUIDs: remainingUIDs)
                         self.logger.debug("Removed \(deviceName) from \(tap.app.name) multi-device output")
@@ -1592,7 +1620,9 @@ final class AudioEngine {
             guard let persistedUIDs = settingsManager.getSelectedDeviceUIDs(for: app.persistenceIdentifier),
                   persistedUIDs.contains(deviceUID) else { continue }
             let currentUIDs = volumeState.getSelectedDeviceUIDs(for: app.id)
-            guard !currentUIDs.contains(deviceUID) else { continue }
+            // Already playing on it. (When every selected device was gone, the device stayed in
+            // the selection while the tap fell back to the default: that one must come back.)
+            guard !(currentUIDs.contains(deviceUID) && tap.currentDeviceUIDs.contains(deviceUID)) else { continue }
 
             // Add the reconnected device back to in-memory selection
             var updatedUIDs = currentUIDs
@@ -1773,7 +1803,7 @@ final class AudioEngine {
         }
 
         routeFollowsDefaultApps(to: newDefaultUID)
-        let affectedApps = apps.filter { followsDefault.contains($0.id) }
+        let affectedApps = apps.filter { followsDefault.contains($0.id) && !isMultiRouted($0.id) }
         if !affectedApps.isEmpty {
             logger.info("Default changed to \(newDevice.name), \(affectedApps.count) app(s) following")
             if settingsManager.appSettings.showDeviceDisconnectAlerts {
