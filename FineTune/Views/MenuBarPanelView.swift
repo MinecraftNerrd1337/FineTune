@@ -607,13 +607,6 @@ struct MenuBarPanelView: View {
                         onAutoEQImport: {
                             importAutoEQFile(for: device.uid)
                         },
-                        onAutoEQToggleFavorite: { id in
-                            if audioEngine.settingsManager.isAutoEQFavorite(id: id) {
-                                audioEngine.settingsManager.unfavoriteAutoEQProfile(id: id)
-                            } else {
-                                audioEngine.settingsManager.favoriteAutoEQProfile(id: id)
-                            }
-                        },
                         autoEQImportError: autoEQImportError,
                         autoEQPreampEnabled: audioEngine.autoEQPreampEnabled,
                         onAutoEQPreampToggle: {

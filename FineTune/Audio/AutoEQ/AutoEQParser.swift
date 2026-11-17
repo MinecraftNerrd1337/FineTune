@@ -43,7 +43,7 @@ nonisolated enum AutoEQParser {
             switch source {
             case .bundled, .fetched:
                 resolvedID = slugify(name)
-            case .imported:
+            case .imported, .created, .downloaded:
                 resolvedID = UUID().uuidString
             }
         }

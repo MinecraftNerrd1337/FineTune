@@ -108,9 +108,11 @@ struct FineTuneApp: App {
 
         let settings = SettingsManager()
         let profileManager = AutoEQProfileManager()
+        profileManager.attachUserProfileStore(settings)
         let permission = AudioRecordingPermission()
         let engine = AudioEngine(permission: permission, settingsManager: settings, autoEQProfileManager: profileManager)
         _audioEngine = State(initialValue: engine)
+        EQManagerWindowController.shared.configure(settings: settings, audioEngine: engine)
 
         // "Keep Panel Open": the panel ignores focus loss and only the menu bar icon closes it.
         FluidMenuBarExtraBehavior.dismissesOnFocusLossProvider = { !settings.appSettings.keepPanelOpen }

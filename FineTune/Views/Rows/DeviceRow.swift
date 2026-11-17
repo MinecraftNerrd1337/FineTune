@@ -41,7 +41,6 @@ struct DeviceRow: View {
     let autoEQFavoriteIDs: Set<String>
     let onAutoEQSelect: ((AutoEQProfile?) -> Void)?
     let onAutoEQImport: (() -> Void)?
-    let onAutoEQToggleFavorite: ((String) -> Void)?
     let autoEQImportError: String?
     let autoEQPreampEnabled: Bool
     let onAutoEQPreampToggle: (() -> Void)?
@@ -132,7 +131,6 @@ struct DeviceRow: View {
         autoEQFavoriteIDs: Set<String> = [],
         onAutoEQSelect: ((AutoEQProfile?) -> Void)? = nil,
         onAutoEQImport: (() -> Void)? = nil,
-        onAutoEQToggleFavorite: ((String) -> Void)? = nil,
         autoEQImportError: String? = nil,
         autoEQPreampEnabled: Bool = true,
         onAutoEQPreampToggle: (() -> Void)? = nil,
@@ -158,7 +156,6 @@ struct DeviceRow: View {
         self.autoEQFavoriteIDs = autoEQFavoriteIDs
         self.onAutoEQSelect = onAutoEQSelect
         self.onAutoEQImport = onAutoEQImport
-        self.onAutoEQToggleFavorite = onAutoEQToggleFavorite
         self.autoEQImportError = autoEQImportError
         self.autoEQPreampEnabled = autoEQPreampEnabled
         self.onAutoEQPreampToggle = onAutoEQPreampToggle
@@ -231,7 +228,6 @@ struct DeviceRow: View {
                         favoriteIDs: autoEQFavoriteIDs,
                         onSelect: onSelect,
                         onImport: onImport,
-                        onToggleFavorite: { id in onAutoEQToggleFavorite?(id) },
                         importError: autoEQImportError,
                         isCorrectionEnabled: autoEQEnabled,
                         onCorrectionToggle: onAutoEQToggle,

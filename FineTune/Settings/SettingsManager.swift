@@ -165,6 +165,8 @@ final class SettingsManager {
         var deviceAutoEQ: [String: AutoEQSelection] = [:]  // deviceUID → selection
         var favoriteAutoEQProfiles: Set<String> = []  // profile IDs
         var autoEQPreampEnabled: Bool = true  // Use profile preamp vs bypass (rely on limiter)
+        var autoEQUserProfiles: [String: AutoEQProfile] = [:]  // profile ID → preset created or edited in the EQ Manager
+        var eqManagerWindowFrame: String? = nil  // NSWindow frame descriptor of the EQ Manager window
 
         // User-created EQ presets (named EQ curves)
         var userEQPresets: [UserEQPreset] = []
@@ -219,6 +221,8 @@ final class SettingsManager {
             deviceAutoEQ = try c.decodeIfPresent([String: AutoEQSelection].self, forKey: .deviceAutoEQ) ?? [:]
             favoriteAutoEQProfiles = try c.decodeIfPresent(Set<String>.self, forKey: .favoriteAutoEQProfiles) ?? []
             autoEQPreampEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoEQPreampEnabled) ?? true
+            autoEQUserProfiles = try c.decodeIfPresent([String: AutoEQProfile].self, forKey: .autoEQUserProfiles) ?? [:]
+            eqManagerWindowFrame = try c.decodeIfPresent(String.self, forKey: .eqManagerWindowFrame)
             userEQPresets = try c.decodeIfPresent([UserEQPreset].self, forKey: .userEQPresets) ?? []
         }
     }
@@ -798,6 +802,35 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - AutoEQ User Presets
+
+    /// Presets created or edited in the EQ Manager.
+    var autoEQUserProfiles: [AutoEQProfile] {
+        Array(settings.autoEQUserProfiles.values)
+    }
+
+    func saveAutoEQUserProfile(_ profile: AutoEQProfile) {
+        settings.autoEQUserProfiles[profile.id] = profile
+        scheduleSave()
+    }
+
+    func removeAutoEQUserProfile(id: String) {
+        guard settings.autoEQUserProfiles.removeValue(forKey: id) != nil else { return }
+        scheduleSave()
+    }
+
+    // MARK: - EQ Manager Window
+
+    /// Last frame of the EQ Manager window (`NSWindow.frameDescriptor`).
+    var eqManagerWindowFrame: String? {
+        get { settings.eqManagerWindowFrame }
+        set {
+            guard newValue != settings.eqManagerWindowFrame else { return }
+            settings.eqManagerWindowFrame = newValue
+            scheduleSave()
+        }
+    }
+
     // MARK: - User EQ Presets
 
     /// Returns all user-created EQ presets, ordered by creation date (newest first).
@@ -929,6 +962,8 @@ final class SettingsManager {
         settings.autoEQPreampEnabled = true
         settings.deviceAutoEQ.removeAll()
         settings.favoriteAutoEQProfiles.removeAll()
+        settings.autoEQUserProfiles.removeAll()
+        settings.eqManagerWindowFrame = nil
         settings.appDeviceSelectionMode.removeAll()
         settings.appSelectedDeviceUIDs.removeAll()
         settings.userEQPresets.removeAll()

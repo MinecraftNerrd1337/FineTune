@@ -19,12 +19,17 @@ final class AutoEQProfileManager {
     private let fetcher: AutoEQFetcher
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "AutoEQProfileManager")
     private let loader: AutoEQProfileLoader
+    /// Where presets created or edited in the EQ Manager persist (settings.json).
+    private weak var userProfileStore: SettingsManager?
 
     /// Pre-sorted catalog entries for fast search.
     private var sortedEntries: [AutoEQCatalogEntry] = []
 
     /// Normalized names for fuzzy search (parallel array with sortedEntries).
     private var normalizedNames: [String] = []
+
+    /// Whether each entry is one of the user's presets (parallel array with sortedEntries).
+    private var localEntryFlags: [Bool] = []
 
     init(loader: AutoEQProfileLoader = AutoEQProfileLoader(), fetcher: AutoEQFetcher? = nil) {
         self.loader = loader
@@ -43,6 +48,16 @@ final class AutoEQProfileManager {
         }
     }
 
+    /// Load the presets created or edited in the EQ Manager. Edited versions replace
+    /// the imported files they came from.
+    func attachUserProfileStore(_ store: SettingsManager) {
+        userProfileStore = store
+        for profile in store.autoEQUserProfiles {
+            profiles[profile.id] = profile
+        }
+        rebuildSearchIndex()
+    }
+
     // MARK: - Catalog State (forwarded from fetcher)
 
     var catalogState: AutoEQFetcher.FetchState { fetcher.catalogState }
@@ -50,6 +65,18 @@ final class AutoEQProfileManager {
 
     func catalogEntry(for id: String) -> AutoEQCatalogEntry? {
         fetcher.catalog.first(where: { $0.id == id })
+    }
+
+    /// Catalog entry or local preset (imported or created) for an ID.
+    func entry(for id: String) -> AutoEQCatalogEntry? {
+        sortedEntries.first(where: { $0.id == id })
+    }
+
+    /// Imported and created presets, sorted by name.
+    var localProfiles: [AutoEQProfile] {
+        profiles.values
+            .filter { $0.source.isLocal }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     // MARK: - Import / Delete
@@ -62,11 +89,78 @@ final class AutoEQProfileManager {
         return profile
     }
 
-    /// Delete an imported profile from disk and catalog.
+    /// Create an empty preset in the EQ Manager. Bands are added later by editing.
+    func createPreset(name: String, kind: AutoEQPresetKind, engine: AutoEQCorrectionEngine) -> AutoEQProfile? {
+        let profile = AutoEQProfile(
+            id: UUID().uuidString, name: name, source: .created,
+            preampDB: 0, filters: [], kind: kind, engine: engine
+        )
+        guard let userProfileStore else { return nil }
+        userProfileStore.saveAutoEQUserProfile(profile)
+        profiles[profile.id] = profile
+        rebuildSearchIndex()
+        return profile
+    }
+
+    /// Save a preset edited in the EQ Manager.
+    /// Imported and created presets are saved in place; catalog presets are saved as a new custom copy.
+    /// Returns the saved preset, or nil on failure.
+    func saveEditedProfile(_ profile: AutoEQProfile) -> AutoEQProfile? {
+        let toSave = profile.source.isLocal ? profile : AutoEQProfile(
+            id: UUID().uuidString,
+            name: "\(profile.name) (Custom)",
+            source: .created,
+            preampDB: profile.preampDB,
+            filters: profile.filters,
+            measuredBy: profile.measuredBy,
+            optimizedSampleRate: profile.optimizedSampleRate,
+            kind: profile.kind,
+            engine: profile.engine
+        )
+        guard let userProfileStore else { return nil }
+        userProfileStore.saveAutoEQUserProfile(toSave)
+        profiles[toSave.id] = toSave
+        rebuildSearchIndex()
+        logger.info("Saved edited preset: \(toSave.name)")
+        return toSave
+    }
+
+    /// The user's library copy of a catalog preset, if it was already downloaded.
+    func libraryCopy(of entry: AutoEQCatalogEntry) -> AutoEQProfile? {
+        profiles.values.first {
+            $0.source == .downloaded && $0.name == entry.name && $0.measuredBy == entry.measuredBy
+        }
+    }
+
+    /// Copy a catalog preset into the user's library (settings.json). The copy is independent
+    /// of the catalog: it keeps working offline and can be edited in place.
+    func downloadToLibrary(_ entry: AutoEQCatalogEntry) async -> AutoEQProfile? {
+        if let existing = libraryCopy(of: entry) { return existing }
+        guard let fetched = await resolveProfile(for: entry), let userProfileStore else { return nil }
+        let copy = AutoEQProfile(
+            id: UUID().uuidString,
+            name: fetched.name,
+            source: .downloaded,
+            preampDB: fetched.preampDB,
+            filters: fetched.filters,
+            measuredBy: entry.measuredBy,
+            optimizedSampleRate: fetched.optimizedSampleRate,
+            kind: fetched.kind,
+            engine: fetched.engine
+        )
+        userProfileStore.saveAutoEQUserProfile(copy)
+        profiles[copy.id] = copy
+        rebuildSearchIndex()
+        logger.info("Downloaded preset to library: \(copy.name)")
+        return copy
+    }
+
+    /// Delete an imported or created profile from disk and catalog.
     func deleteImportedProfile(id: String) {
-        guard let profile = profiles[id], profile.source == .imported else { return }
+        guard let profile = profiles[id], profile.source.isLocal else { return }
         profiles.removeValue(forKey: id)
         loader.deleteProfileFiles(id: id)
+        userProfileStore?.removeAutoEQUserProfile(id: id)
         rebuildSearchIndex()
         logger.info("Deleted imported profile: \(profile.name)")
     }
@@ -117,12 +211,12 @@ final class AutoEQProfileManager {
         // Catalog entries from GitHub
         var entries = fetcher.catalog
 
-        // Add imported profiles as pseudo-catalog entries
-        for profile in profiles.values where profile.source == .imported {
+        // Add imported and created profiles as pseudo-catalog entries
+        for profile in profiles.values where profile.source.isLocal {
             let entry = AutoEQCatalogEntry(
                 id: profile.id,
                 name: profile.name,
-                measuredBy: "Imported",
+                measuredBy: profile.sourceLabel ?? "Imported",
                 relativePath: ""
             )
             entries.append(entry)
@@ -132,10 +226,12 @@ final class AutoEQProfileManager {
 
         sortedEntries = entries
         normalizedNames = entries.map { Self.normalize($0.name) }
+        localEntryFlags = entries.map { profiles[$0.id]?.source.isLocal == true }
     }
 
     /// Fuzzy search across catalog entry names with relevance ranking.
-    func search(query: String, limit: Int = 50) -> AutoEQSearchResult {
+    /// - Parameter scope: limits the search to the user's presets or to the AutoEQ catalog; nil searches both.
+    func search(query: String, limit: Int = 50, scope: AutoEQSearchScope? = nil) -> AutoEQSearchResult {
         guard !query.isEmpty else { return AutoEQSearchResult(entries: [], totalCount: 0) }
 
         let loweredQuery = query.lowercased()
@@ -145,6 +241,7 @@ final class AutoEQProfileManager {
         scored.reserveCapacity(200)
 
         for i in 0..<sortedEntries.count {
+            if let scope, localEntryFlags[i] != (scope == .library) { continue }
             let loweredName = sortedEntries[i].name.lowercased()
             let normalizedName = normalizedNames[i]
 
@@ -265,5 +362,22 @@ final class AutoEQProfileManager {
             }
         }
         return result.lowercased()
+    }
+}
+
+/// Where a preset search looks.
+nonisolated enum AutoEQSearchScope: Hashable, CaseIterable, Identifiable {
+    /// The user's presets: imported, created or downloaded.
+    case library
+    /// The AutoEQ catalog on GitHub.
+    case catalog
+
+    var id: Self { self }
+
+    var displayName: String {
+        switch self {
+        case .library: "My Presets"
+        case .catalog: "AutoEQ Catalog"
+        }
     }
 }

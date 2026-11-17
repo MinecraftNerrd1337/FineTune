@@ -10,7 +10,6 @@ struct AutoEQPicker: View {
     let favoriteIDs: Set<String>
     let onSelect: (AutoEQProfile?) -> Void
     let onImport: () -> Void
-    let onToggleFavorite: (String) -> Void
     let importError: String?
     var isCorrectionEnabled: Bool = false
     var onCorrectionToggle: ((Bool) -> Void)?
@@ -104,7 +103,6 @@ struct AutoEQPicker: View {
                     isExpanded = false
                     onImport()
                 },
-                onToggleFavorite: onToggleFavorite,
                 importErrorMessage: importError,
                 isCorrectionEnabled: isCorrectionEnabled,
                 onCorrectionToggle: onCorrectionToggle,

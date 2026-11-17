@@ -1,0 +1,65 @@
+// FineTune/Views/EQManager/EQManagerWindowController.swift
+import SwiftUI
+import AppKit
+
+/// Owns the "FineTune EQ Manager" window.
+///
+/// FineTune is an LSUIElement agent, so like the Settings window this one gets no Dock icon
+/// and no app menu in the menu bar. The window is created on first use and reused afterwards.
+@MainActor
+final class EQManagerWindowController {
+    static let shared = EQManagerWindowController()
+
+    private var settings: SettingsManager?
+    private var audioEngine: AudioEngine?
+    private var window: NSWindow?
+    private var frameObservers: [NSObjectProtocol] = []
+
+    private init() {}
+
+    /// Called once at launch; the window follows the user's appearance setting.
+    func configure(settings: SettingsManager, audioEngine: AudioEngine) {
+        self.settings = settings
+        self.audioEngine = audioEngine
+    }
+
+    func show() {
+        guard let settings, let audioEngine else { return }
+        if window == nil {
+            window = makeWindow(settings: settings, audioEngine: audioEngine)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func makeWindow(settings: SettingsManager, audioEngine: AudioEngine) -> NSWindow {
+        let root = EQManagerRootView(settings: settings, audioEngine: audioEngine)
+        let window = NSWindow(contentViewController: NSHostingController(rootView: root))
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        window.title = EQManagerRootView.title
+        window.tabbingMode = .disallowed
+        window.isReleasedWhenClosed = false
+        // Size the window before centering: the hosting view has not measured its content yet,
+        // so center() would otherwise place a zero-sized frame and the window would grow off-center.
+        window.setContentSize(EQManagerRootView.size)
+        window.center()
+
+        // Like Settings: centered on first open, then reopened where the user left it.
+        // The frame is kept in settings.json with the rest of FineTune's settings.
+        if let savedFrame = settings.eqManagerWindowFrame {
+            window.setFrame(from: savedFrame)
+            if window.screen == nil { window.center() }
+        }
+        for name in [NSWindow.didMoveNotification, NSWindow.willCloseNotification] {
+            frameObservers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.saveFrame() }
+            })
+        }
+        return window
+    }
+
+    private func saveFrame() {
+        guard let window else { return }
+        settings?.eqManagerWindowFrame = window.frameDescriptor
+    }
+}

@@ -878,6 +878,15 @@ final class AudioEngine {
         settingsManager.getAutoEQSelection(for: deviceUID)
     }
 
+    /// Re-apply a preset to every tap whose device uses it (after it was edited and saved).
+    func reapplyAutoEQProfile(id profileID: String) {
+        for tap in taps.values {
+            guard let deviceUID = tap.currentDeviceUID,
+                  settingsManager.getAutoEQSelection(for: deviceUID)?.profileID == profileID else { continue }
+            applyAutoEQToTap(tap)
+        }
+    }
+
     var autoEQPreampEnabled: Bool {
         settingsManager.autoEQPreampEnabled
     }
