@@ -150,15 +150,20 @@ final class FIRConvolver: @unchecked Sendable {
 /// start of the kernel), in partitions of `blockSize`, convolved by overlap-add in the
 /// frequency domain. When a block of input is complete, the stage computes the contribution
 /// of those taps to the *next* block of output.
+///
+/// The FFTs are real (`vDSP_DFT_zrop`): the spectrum of a real signal is symmetric, so only
+/// its lower half is computed, stored and multiplied, which halves the work and the memory
+/// of a complex FFT for the same result. A real FFT of `2 × blockSize` points takes the even
+/// samples as real parts and the odd ones as imaginary parts, and gives `blockSize` bins, the
+/// first of which packs two real values: DC as its real part, Nyquist as its imaginary part.
 final class FIRPartitionStage: @unchecked Sendable {
     let blockSize: Int
     let partitionCount: Int
-    private let fftSize: Int
     private let channels: Int
     private let forward: vDSP_DFT_Setup
     private let inverse: vDSP_DFT_Setup
 
-    /// Spectra of the partitions (`partitionCount × fftSize`), scaled for the round trip.
+    /// Spectra of the partitions (`partitionCount × blockSize` bins), scaled for the round trip.
     private let kernelReal: UnsafeMutablePointer<Float>
     private let kernelImag: UnsafeMutablePointer<Float>
     /// Per channel: spectra of the last `partitionCount` input blocks, as a ring.
@@ -172,25 +177,28 @@ final class FIRPartitionStage: @unchecked Sendable {
     /// Per channel: fill of `block`, and ring index of the newest spectrum.
     private let fill: UnsafeMutablePointer<Int>
     private let newest: UnsafeMutablePointer<Int>
-    /// Work buffers, `fftSize` each.
-    private let timeReal: UnsafeMutablePointer<Float>
-    private let timeImag: UnsafeMutablePointer<Float>
+    /// Input of the forward FFT, `blockSize` each: an input block split into even and odd
+    /// samples fills the lower half, and the upper half, the zero padding, is never written.
+    private let inputReal: UnsafeMutablePointer<Float>
+    private let inputImag: UnsafeMutablePointer<Float>
+    /// Accumulators, `blockSize` each; the one not holding the sum takes the inverse FFT.
     private let sumRealA: UnsafeMutablePointer<Float>
     private let sumImagA: UnsafeMutablePointer<Float>
     private let sumRealB: UnsafeMutablePointer<Float>
     private let sumImagB: UnsafeMutablePointer<Float>
+    /// Result of the inverse FFT back in time order, `2 × blockSize`.
+    private let time: UnsafeMutablePointer<Float>
 
     /// - Parameter taps: the kernel from offset `blockSize` on (so `taps[0]` is the tap at
     ///   offset `blockSize`). Must not be empty.
     init?(blockSize: Int, taps: [Float], channels: Int) {
         let fftSize = 2 * blockSize
         guard !taps.isEmpty, blockSize >= 8, blockSize & (blockSize - 1) == 0,
-              let forward = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(fftSize), .FORWARD),
-              let inverse = vDSP_DFT_zop_CreateSetup(nil, vDSP_Length(fftSize), .INVERSE) else {
+              let forward = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(fftSize), .FORWARD),
+              let inverse = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(fftSize), .INVERSE) else {
             return nil
         }
         self.blockSize = blockSize
-        self.fftSize = fftSize
         self.channels = channels
         self.forward = forward
         self.inverse = inverse
@@ -202,19 +210,20 @@ final class FIRPartitionStage: @unchecked Sendable {
             pointer.initialize(repeating: 0, count: count)
             return pointer
         }
-        kernelReal = zeroed(partitions * fftSize)
-        kernelImag = zeroed(partitions * fftSize)
-        lineReal = zeroed(channels * partitions * fftSize)
-        lineImag = zeroed(channels * partitions * fftSize)
+        kernelReal = zeroed(partitions * blockSize)
+        kernelImag = zeroed(partitions * blockSize)
+        lineReal = zeroed(channels * partitions * blockSize)
+        lineImag = zeroed(channels * partitions * blockSize)
         block = zeroed(channels * blockSize)
         ready = zeroed(channels * blockSize)
         overlap = zeroed(channels * blockSize)
-        timeReal = zeroed(fftSize)
-        timeImag = zeroed(fftSize)
-        sumRealA = zeroed(fftSize)
-        sumImagA = zeroed(fftSize)
-        sumRealB = zeroed(fftSize)
-        sumImagB = zeroed(fftSize)
+        inputReal = zeroed(blockSize)
+        inputImag = zeroed(blockSize)
+        sumRealA = zeroed(blockSize)
+        sumImagA = zeroed(blockSize)
+        sumRealB = zeroed(blockSize)
+        sumImagB = zeroed(blockSize)
+        time = zeroed(fftSize)
         fill = .allocate(capacity: channels)
         fill.initialize(repeating: 0, count: channels)
         newest = .allocate(capacity: channels)
@@ -222,37 +231,46 @@ final class FIRPartitionStage: @unchecked Sendable {
 
         // Scale of a forward·forward → inverse round trip, measured rather than assumed:
         // an impulse convolved with an impulse must come back as 1.
-        timeReal[0] = 1
-        vDSP_DFT_Execute(forward, timeReal, timeImag, sumRealA, sumImagA)
+        inputReal[0] = 1
+        vDSP_DFT_Execute(forward, inputReal, inputImag, sumRealA, sumImagA)
+        inputReal[0] = 0
         var impulseA = DSPSplitComplex(realp: sumRealA, imagp: sumImagA)
         var impulseB = DSPSplitComplex(realp: sumRealA, imagp: sumImagA)
         var product = DSPSplitComplex(realp: sumRealB, imagp: sumImagB)
-        vDSP_zvmul(&impulseA, 1, &impulseB, 1, &product, 1, vDSP_Length(fftSize), 1)
+        vDSP_zvmul(&impulseA, 1, &impulseB, 1, &product, 1, vDSP_Length(blockSize), 1)
+        sumRealB[0] = sumRealA[0] * sumRealA[0]
+        sumImagB[0] = sumImagA[0] * sumImagA[0]
         vDSP_DFT_Execute(inverse, sumRealB, sumImagB, sumRealA, sumImagA)
         let roundTrip = sumRealA[0]
         var scale: Float = roundTrip != 0 ? 1 / roundTrip : 1 / Float(fftSize)
 
         // Spectrum of each partition, zero-padded to the FFT size
+        var input = DSPSplitComplex(realp: inputReal, imagp: inputImag)
+        var partition = [Float](repeating: 0, count: blockSize)
         for k in 0..<partitions {
-            vDSP_vclr(timeReal, 1, vDSP_Length(fftSize))
-            vDSP_vclr(timeImag, 1, vDSP_Length(fftSize))
             let start = k * blockSize
-            for i in 0..<min(blockSize, taps.count - start) {
-                timeReal[i] = taps[start + i]
+            let count = min(blockSize, taps.count - start)
+            for i in 0..<blockSize {
+                partition[i] = i < count ? taps[start + i] : 0
             }
-            vDSP_DFT_Execute(forward, timeReal, timeImag, kernelReal + k * fftSize, kernelImag + k * fftSize)
+            partition.withUnsafeBufferPointer { samples in
+                samples.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: blockSize / 2) {
+                    vDSP_ctoz($0, 2, &input, 1, vDSP_Length(blockSize / 2))
+                }
+            }
+            vDSP_DFT_Execute(forward, inputReal, inputImag, kernelReal + k * blockSize, kernelImag + k * blockSize)
         }
-        vDSP_vsmul(kernelReal, 1, &scale, kernelReal, 1, vDSP_Length(partitions * fftSize))
-        vDSP_vsmul(kernelImag, 1, &scale, kernelImag, 1, vDSP_Length(partitions * fftSize))
-        vDSP_vclr(timeReal, 1, vDSP_Length(fftSize))
-        vDSP_vclr(timeImag, 1, vDSP_Length(fftSize))
+        vDSP_vsmul(kernelReal, 1, &scale, kernelReal, 1, vDSP_Length(partitions * blockSize))
+        vDSP_vsmul(kernelImag, 1, &scale, kernelImag, 1, vDSP_Length(partitions * blockSize))
+        vDSP_vclr(inputReal, 1, vDSP_Length(blockSize))
+        vDSP_vclr(inputImag, 1, vDSP_Length(blockSize))
     }
 
     deinit {
         vDSP_DFT_DestroySetup(forward)
         vDSP_DFT_DestroySetup(inverse)
         for pointer in [kernelReal, kernelImag, lineReal, lineImag, block, ready, overlap,
-                        timeReal, timeImag, sumRealA, sumImagA, sumRealB, sumImagB] {
+                        inputReal, inputImag, sumRealA, sumImagA, sumRealB, sumImagB, time] {
             pointer.deallocate()
         }
         fill.deallocate()
@@ -280,41 +298,55 @@ final class FIRPartitionStage: @unchecked Sendable {
 
     /// The channel's input block is complete: compute what this stage owes the next block.
     private func step(channel: Int) {
-        let n = fftSize
         let b = blockSize
-        let length = vDSP_Length(n)
+        let bins = vDSP_Length(b)
         let floatSize = MemoryLayout<Float>.size
 
         // Spectrum of the completed block (zero-padded) into the ring, as the newest entry
-        memcpy(timeReal, block + channel * b, b * floatSize)
-        vDSP_vclr(timeReal + b, 1, vDSP_Length(b))
-        vDSP_vclr(timeImag, 1, length)
+        var input = DSPSplitComplex(realp: inputReal, imagp: inputImag)
+        (block + channel * b).withMemoryRebound(to: DSPComplex.self, capacity: b / 2) {
+            vDSP_ctoz($0, 2, &input, 1, vDSP_Length(b / 2))
+        }
         let slot = (newest[channel] + partitionCount - 1) % partitionCount
         newest[channel] = slot
-        let base = channel * partitionCount * n
-        vDSP_DFT_Execute(forward, timeReal, timeImag, lineReal + base + slot * n, lineImag + base + slot * n)
+        let base = channel * partitionCount * b
+        vDSP_DFT_Execute(forward, inputReal, inputImag, lineReal + base + slot * b, lineImag + base + slot * b)
 
         // Σ spectrum(block m−1−k) · partition k, alternating between two accumulators so that
-        // no vDSP call ever writes the buffer it reads
+        // no vDSP call ever writes the buffer it reads. Bin 0 holds DC and Nyquist, two real
+        // values that multiply separately, so it is summed on the side and set afterwards.
         var sourceReal = sumRealA, sourceImag = sumImagA
         var targetReal = sumRealB, targetImag = sumImagB
-        vDSP_vclr(sourceReal, 1, length)
-        vDSP_vclr(sourceImag, 1, length)
+        vDSP_vclr(sourceReal, 1, bins)
+        vDSP_vclr(sourceImag, 1, bins)
+        var dc: Float = 0
+        var nyquist: Float = 0
         for k in 0..<partitionCount {
             let entry = (slot + k) % partitionCount
-            var spectrum = DSPSplitComplex(realp: lineReal + base + entry * n, imagp: lineImag + base + entry * n)
-            var partition = DSPSplitComplex(realp: kernelReal + k * n, imagp: kernelImag + k * n)
+            let spectrumReal = lineReal + base + entry * b, spectrumImag = lineImag + base + entry * b
+            let partitionReal = kernelReal + k * b, partitionImag = kernelImag + k * b
+            dc += spectrumReal[0] * partitionReal[0]
+            nyquist += spectrumImag[0] * partitionImag[0]
+            var spectrum = DSPSplitComplex(realp: spectrumReal, imagp: spectrumImag)
+            var partition = DSPSplitComplex(realp: partitionReal, imagp: partitionImag)
             var sum = DSPSplitComplex(realp: sourceReal, imagp: sourceImag)
             var result = DSPSplitComplex(realp: targetReal, imagp: targetImag)
-            vDSP_zvma(&spectrum, 1, &partition, 1, &sum, 1, &result, 1, length)
+            vDSP_zvma(&spectrum, 1, &partition, 1, &sum, 1, &result, 1, bins)
             swap(&sourceReal, &targetReal)
             swap(&sourceImag, &targetImag)
         }
+        sourceReal[0] = dc
+        sourceImag[0] = nyquist
 
-        // Back to time (2 blocks long): the first block plus what the previous result left
-        // over is this stage's share of the next block; the second block is left over in turn
-        vDSP_DFT_Execute(inverse, sourceReal, sourceImag, timeReal, timeImag)
-        vDSP_vadd(timeReal, 1, overlap + channel * b, 1, ready + channel * b, 1, vDSP_Length(b))
-        memcpy(overlap + channel * b, timeReal + b, b * floatSize)
+        // Back to time (2 blocks long), into the free accumulator then in sample order: the
+        // first block plus what the previous result left over is this stage's share of the
+        // next block; the second block is left over in turn
+        vDSP_DFT_Execute(inverse, sourceReal, sourceImag, targetReal, targetImag)
+        var result = DSPSplitComplex(realp: targetReal, imagp: targetImag)
+        time.withMemoryRebound(to: DSPComplex.self, capacity: b) {
+            vDSP_ztoc(&result, 1, $0, 2, bins)
+        }
+        vDSP_vadd(time, 1, overlap + channel * b, 1, ready + channel * b, 1, bins)
+        memcpy(overlap + channel * b, time + b, b * floatSize)
     }
 }
