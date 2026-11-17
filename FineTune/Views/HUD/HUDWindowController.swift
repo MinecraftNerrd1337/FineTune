@@ -50,7 +50,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
             if let observer {
                 DistributedNotificationCenter.default().removeObserver(observer)
             }
-            panel?.orderOut(nil)
+            // MainThreadCleanup runs its work on the main thread, which the compiler cannot see
+            MainActor.assumeIsolated { panel?.orderOut(nil) }
         }
     }
 
