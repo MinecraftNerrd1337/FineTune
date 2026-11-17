@@ -35,8 +35,10 @@ final class FIRProcessor: @unchecked Sendable {
     private nonisolated(unsafe) var _target: Int32 = 0
     /// Position of the crossfade: 0 = slot 0 alone, 1 = slot 1 alone. Audio thread only.
     private nonisolated(unsafe) var _fade: Float = 0
-    /// Asks the audio thread to jump to the target without fading.
-    private nonisolated(unsafe) var _snap = false
+    /// Bumped to ask the audio thread to jump to the target without fading.
+    private nonisolated(unsafe) var _snapSerial: UInt32 = 0
+    /// The last `_snapSerial` the audio thread acted on. Audio thread only.
+    private nonisolated(unsafe) var handledSnapSerial: UInt32 = 0
     /// Crossfade progress per frame.
     private nonisolated(unsafe) var _fadeStep: Float = 1.0 / (0.03 * 48_000)
     /// Calls of `process` so far (wraps). 0 = the audio thread has not used this processor yet.
@@ -85,7 +87,7 @@ final class FIRProcessor: @unchecked Sendable {
         if audioThreadIdle || _renderCount == 0 {
             // One filter in the target slot, and the audio thread goes straight to it
             let target = _target
-            _snap = true
+            _snapSerial &+= 1
             setSlot(target, to: convolver)
             setSlot(target == 0 ? 1 : 0, to: nil)
             OSMemoryBarrier()
@@ -110,7 +112,7 @@ final class FIRProcessor: @unchecked Sendable {
             // A crossfade that does not end: the audio thread is not running, so nothing is
             // audible. Have it jump to the new filter when it resumes.
             let other: Int32 = target == 0 ? 1 : 0
-            _snap = true
+            _snapSerial &+= 1
             setSlot(other, to: convolver)
             OSMemoryBarrier()
             _target = other
@@ -121,6 +123,36 @@ final class FIRProcessor: @unchecked Sendable {
             self?.attemptInstall(convolver, generation: generation, retries: retries + 1)
         }
     }
+
+    /// Whether `swapAtOnce` can be used: no crossfade in progress, so the slot that is not the
+    /// target is free. Main thread only.
+    var canSwapAtOnce: Bool { _fade == Float(_target) }
+
+    /// Makes `convolver` the correction (nil = none) with no crossfade: the audio thread jumps
+    /// to it on its next buffer, which clicks. For a switch that must happen on the same
+    /// sample as another change (see `AutoEQProcessor`). Main thread only, when `canSwapAtOnce`.
+    func swapAtOnce(_ convolver: FIRConvolver?, sampleRate: Double) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        generation += 1
+        latencySamples = convolver?.latencySamples ?? 0
+        hasFilter = convolver != nil
+        _fadeStep = Float(1.0 / (Self.fadeSeconds * max(sampleRate, 8_000)))
+        let other: Int32 = _target == 0 ? 1 : 0
+        setSlot(other, to: convolver)
+        _snapSerial &+= 1
+        OSMemoryBarrier()
+        _target = other
+    }
+
+    /// What the audio thread reads to know which filter to play, taken together with the
+    /// owner's other settings (see `process(_:frameCount:state:)`).
+    struct State {
+        var target: Int32 = 0
+        var snapSerial: UInt32 = 0
+    }
+
+    /// The current `State`. Read by the audio thread.
+    var state: State { State(target: _target, snapSerial: _snapSerial) }
 
     private func setSlot(_ index: Int32, to convolver: FIRConvolver?) {
         let old: FIRConvolver?
@@ -143,13 +175,19 @@ final class FIRProcessor: @unchecked Sendable {
 
     /// Applies the correction in place to stereo interleaved audio. RT-safe.
     func process(_ samples: UnsafeMutablePointer<Float>, frameCount: Int) {
+        process(samples, frameCount: frameCount, state: state)
+    }
+
+    /// Applies the correction in place, playing the filter `state` says: a `State` read by the
+    /// owner at the same time as its other settings. RT-safe.
+    func process(_ samples: UnsafeMutablePointer<Float>, frameCount: Int, state: State) {
         _renderCount = _renderCount == UInt32.max ? 1 : _renderCount + 1
 
-        let target = _target
+        let target = state.target
         let goal: Float = target == 0 ? 0 : 1
         var fade = _fade
-        if _snap {
-            _snap = false
+        if state.snapSerial != handledSnapSerial {
+            handledSnapSerial = state.snapSerial
             fade = goal
             _fade = goal
         }

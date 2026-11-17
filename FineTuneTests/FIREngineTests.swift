@@ -530,21 +530,19 @@ struct AutoEQProcessorEngineTests {
         #expect(!processor.isEnabled)
     }
 
-    @Test("Without a profile a FIR correction fades out, then stops")
-    func firFadesOutThenStops() async throws {
+    @Test("Without a profile a FIR correction stops at once, preamp and filter together")
+    func firStopsAtOnce() {
         let processor = AutoEQProcessor(sampleRate: 48_000)
         processor.updateProfile(testProfile(engine: .minimumPhaseFIR))
         _ = impulseResponse(of: processor, frames: 512)
 
         processor.updateProfile(nil)
-        #expect(processor.isEnabled)   // still playing the fade-out
-        _ = impulseResponse(of: processor, frames: 4096)
-        try await Task.sleep(for: .milliseconds(900))
         #expect(!processor.isEnabled)
+        #expect(processor.latencySamples == 0)
     }
 
-    @Test("A profile applied during the fade-out cancels the stop")
-    func newProfileCancelsStop() async throws {
+    @Test("A profile applied right after switching off plays again")
+    func profileAfterStop() async throws {
         let processor = AutoEQProcessor(sampleRate: 48_000)
         processor.updateProfile(testProfile(engine: .minimumPhaseFIR))
         _ = impulseResponse(of: processor, frames: 512)
