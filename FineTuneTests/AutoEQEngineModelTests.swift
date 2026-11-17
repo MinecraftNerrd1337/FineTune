@@ -152,8 +152,16 @@ struct AutoEQResponseGraphicCurveTests {
         let peak = try #require(AutoEQResponse.peakDB(profile))
         #expect(abs(peak - 10) < 1e-6)
         let preamp = try #require(AutoEQResponse.recommendedPreampDB(profile))
-        // Peak plus the 0.2 dB margin, rounded away from zero to a tenth of a dB
-        #expect(preamp <= -10.2 + 1e-9 && preamp >= -10.3 - 1e-9)
+        // The peak boost as a cut, with no margin (as PEQdB recommends it)
+        #expect(abs(preamp + 10) < 1e-9)
+    }
+
+    @Test("A preamp equal to the peak boost cannot clip")
+    func clipRisk() {
+        #expect(AutoEQResponse.clipRiskDB(preampDB: -5.4, peakDB: 5.43) == 0)
+        #expect(AutoEQResponse.clipRiskDB(preampDB: -5.5, peakDB: 5.46) == 0)
+        #expect(AutoEQResponse.clipRiskDB(preampDB: -8, peakDB: 5) == 0)
+        #expect(abs(AutoEQResponse.clipRiskDB(preampDB: -5, peakDB: 5.46) - 0.5) < 1e-9)
     }
 }
 

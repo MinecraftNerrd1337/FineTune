@@ -7,14 +7,13 @@ import Foundation
 /// `sampleRate`. The FIR engines evaluate the exact curve, which is what they reproduce: for
 /// a filter list, the curve of its cookbook biquads at the preset's base rate (or of their
 /// analog prototypes, see `AutoEQBaseRate`); for a graphic preset, its interpolated curve.
-/// The preamp recommendation (rendered peak plus a safety margin) follows the approach of
-/// GlassEQ's `EQProfileAnalysis.recommendedPreampDB` (GPL v3, Juho Koskela).
+/// The preamp recommendation (the opposite of the rendered peak) follows the approach of
+/// GlassEQ's `EQProfileAnalysis.recommendedPreampDB` (GPL v3, Juho Koskela), without its
+/// safety margin, like PEQdB and most AutoEQ tools.
 enum AutoEQResponse {
     static let minFrequency = 20.0
     static let maxFrequency = 20_000.0
     static let defaultSampleRate = 48_000.0
-    /// Margin the recommended preamp keeps below the input level at the curve's peak.
-    static let recommendedHeadroomDB = 0.2
 
     /// `count` frequencies spaced evenly on a log scale.
     static func logFrequencies(count: Int, from low: Double = minFrequency, to high: Double = maxFrequency) -> [Double] {
@@ -145,13 +144,19 @@ enum AutoEQResponse {
         return curve(of: profile, frequencies: frequencies, sampleRate: sampleRate).max()
     }
 
-    /// Preamp that keeps the curve's peak `recommendedHeadroomDB` below the input level.
-    /// Never positive: a curve that only cuts gets 0 dB.
+    /// Preamp that brings the curve's peak back to the input level: the peak boost, as shown
+    /// (to a tenth of a dB), with the opposite sign. Never positive: a curve that only cuts gets 0 dB.
     static func recommendedPreampDB(_ profile: AutoEQProfile) -> Double? {
         guard let peak = peakDB(profile) else { return nil }
-        let attenuation = max(peak + recommendedHeadroomDB, 0)
-        guard attenuation > 0 else { return 0 }
-        return -((attenuation * 10).rounded(.up) / 10)
+        let attenuation = (max(peak, 0) * 10).rounded() / 10
+        return attenuation > 0 ? -attenuation : 0
+    }
+
+    /// How far a preamp lets the curve's peak above the input level, in dB, to a tenth of a dB
+    /// as the EQ Manager shows both. 0 when the preamp matches the peak boost or is lower.
+    static func clipRiskDB(preampDB: Double, peakDB: Double) -> Double {
+        let risk = ((preampDB + peakDB) * 10).rounded() / 10
+        return max(risk, 0)
     }
 
     // MARK: - Biquad (digital)

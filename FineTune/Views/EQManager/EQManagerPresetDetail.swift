@@ -256,7 +256,7 @@ struct EQManagerPresetDetail: View {
     private var preampSection: some View {
         let recommended = AutoEQResponse.recommendedPreampDB(preset)
         let peak = AutoEQResponse.peakDB(preset)
-        let clipRisk = recommended.map { Double(preset.preampDB) - $0 } ?? 0
+        let clipRisk = peak.map { AutoEQResponse.clipRiskDB(preampDB: Double(preset.preampDB), peakDB: $0) } ?? 0
 
         return VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             SettingsSection("Preamp") {
@@ -291,13 +291,13 @@ struct EQManagerPresetDetail: View {
                 row("Peak boost") { valueText(peak.map { String(format: "%+.1f dB", $0) } ?? "—") }
             }
 
-            if clipRisk > 0.05 {
+            if clipRisk > 0 {
                 Label(String(format: "Can clip by up to %.1f dB", clipRisk), systemImage: "exclamationmark.triangle")
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 4)
             }
-            Text("Recommended: peak boost plus \(String(format: "%.1f", AutoEQResponse.recommendedHeadroomDB)) dB of margin, so the corrected sound never exceeds the original level.")
+            Text("Recommended: the peak boost as a cut, so the corrected sound never exceeds the original level.")
                 .font(.system(size: 10))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
