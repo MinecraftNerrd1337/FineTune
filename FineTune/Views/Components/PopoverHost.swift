@@ -1,6 +1,7 @@
 // FineTune/Views/Components/PopoverHost.swift
 import SwiftUI
 import AppKit
+import FluidMenuBarExtra
 
 /// Borderless panels return `canBecomeKey == false` by default,
 /// which prevents text fields from receiving focus/keyboard input.
@@ -135,6 +136,14 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
                 let mouseLocation = NSEvent.mouseLocation
                 let isInPanel = panel.frame.contains(mouseLocation)
                 let isInTrigger = triggerFrame.contains(mouseLocation)
+                // With "Keep Panel Open", clicks in Settings or the EQ Manager leave this
+                // dropdown open, like the menu bar panel; only clicks in the menu bar panel close it.
+                let isInAppWindow = event.window.map {
+                    !($0 is NSPanel) && $0.styleMask.contains(.titled)
+                } ?? false
+                if isInAppWindow && !FluidMenuBarExtraBehavior.dismissesOnFocusLoss {
+                    return event
+                }
                 // Only dismiss if click is outside both panel and trigger button
                 // Let the trigger button handle its own clicks (toggle behavior)
                 if !isInPanel && !isInTrigger {
@@ -142,6 +151,10 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
                 }
                 return event  // Don't consume
             }
+
+            // With "Keep Panel Open", the dropdown stays up like the menu bar panel when
+            // the user clicks in another app or switches apps.
+            guard FluidMenuBarExtraBehavior.dismissesOnFocusLoss else { return }
 
             // Global monitor: clicks in OTHER apps (dismisses panel + parent)
             globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in

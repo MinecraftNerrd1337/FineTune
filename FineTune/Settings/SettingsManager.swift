@@ -62,6 +62,7 @@ nonisolated struct AppSettings: Codable, Equatable {
 
     // Panel
     var panelSize: MenuBarPanelSize = .comfortable  // Overall menu bar panel size and density
+    var keepPanelOpen: Bool = false  // Panel stays open when clicking elsewhere; closed by the menu bar icon
 
     init() {}
 
@@ -91,10 +92,14 @@ nonisolated struct AppSettings: Codable, Equatable {
         panelSize = try c.decodeIfPresent(MenuBarPanelSize.self, forKey: .panelSize)
             ?? legacy.decodeIfPresent(MenuBarPanelSize.self, forKey: .popupSize)
             ?? .comfortable
+        keepPanelOpen = try c.decodeIfPresent(Bool.self, forKey: .keepPanelOpen)
+            ?? legacy.decodeIfPresent(Bool.self, forKey: .keepPopupOpen)
+            ?? false
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
         case popupSize
+        case keepPopupOpen
     }
 }
 

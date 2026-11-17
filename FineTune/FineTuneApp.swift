@@ -112,6 +112,9 @@ struct FineTuneApp: App {
         let engine = AudioEngine(permission: permission, settingsManager: settings, autoEQProfileManager: profileManager)
         _audioEngine = State(initialValue: engine)
 
+        // "Keep Panel Open": the panel ignores focus loss and only the menu bar icon closes it.
+        FluidMenuBarExtraBehavior.dismissesOnFocusLossProvider = { !settings.appSettings.keepPanelOpen }
+
         // Media keys / HUD services — instantiated at app scope so the tap
         // and HUD panel outlive panel open/close cycles.
         let accessibilityService = AccessibilityPermissionService()

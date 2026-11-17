@@ -79,6 +79,10 @@ final class FluidMenuBarExtraStatusItem: NSObject, NSWindowDelegate {
 
         assert(nil == window.statusItem)
         window.statusItem = self
+        // The status item is created and driven on the main thread.
+        MainActor.assumeIsolated {
+            FluidMenuBarExtraBehavior.current = self
+        }
 
         statusItemVisibilityObservation = observe(\.statusItem.isVisible, options: .new) {
             [weak self] _, change in
@@ -132,6 +136,11 @@ final class FluidMenuBarExtraStatusItem: NSObject, NSWindowDelegate {
     }
 
     private func didPressStatusBarButton(_ sender: NSStatusBarButton) {
+        let willOpen = !window.isVisible
+        MainActor.assumeIsolated {
+            FluidMenuBarExtraBehavior.onStatusItemPress?(willOpen)
+        }
+
         if window.isVisible {
             dismissWindow()
             return
@@ -160,7 +169,15 @@ final class FluidMenuBarExtraStatusItem: NSObject, NSWindowDelegate {
 
     func windowDidResignKey(_ notification: Notification) {
         globalEventMonitor?.stop()
-        dismissWindow()
+        if FluidMenuBarExtraBehavior.dismissesOnFocusLoss {
+            dismissWindow()
+        }
+    }
+
+    func dismissWindowIfVisible() {
+        if window.isVisible {
+            dismissWindow()
+        }
     }
     
     func showWindow() {

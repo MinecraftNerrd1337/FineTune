@@ -54,6 +54,16 @@ struct GeneralTab: View {
             }
             SettingsRowDivider()
             SettingsRow(
+                "Keep Panel Open",
+                description: "Clicking elsewhere leaves the panel open. Click the menu bar icon to close it"
+            ) {
+                Toggle("", isOn: $settings.appSettings.keepPanelOpen)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
                 "Device Disconnect Alerts",
                 description: "Show notification when an audio device disconnects"
             ) {

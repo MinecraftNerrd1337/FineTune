@@ -1,5 +1,6 @@
 // FineTune/Views/MenuBarPanelView.swift
 import AudioToolbox
+import FluidMenuBarExtra
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -317,7 +318,7 @@ struct MenuBarPanelView: View {
                 expandedRowID = nil
             }
         } else {
-            NSApp.keyWindow?.resignKey()
+            FluidMenuBarExtraBehavior.dismiss()
         }
     }
 
@@ -1465,7 +1466,7 @@ struct MenuBarPanelView: View {
                 }
                 audioEngine.setDefaultOutputDevice(device.id)
             }
-            NSApp.keyWindow?.resignKey()
+            FluidMenuBarExtraBehavior.dismiss()
             return .handled
         case .app(let persistenceID):
             if let app = audioEngine.apps.first(where: { $0.persistenceIdentifier == persistenceID }),
