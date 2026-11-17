@@ -33,8 +33,11 @@ final class EQManagerListening {
 
     var deviceUID: String?
     var source: Source = .shown
-    /// Raised by `open(on:)`, so the window shows the preset that device uses.
+    /// Raised by `open(on:fromDeviceMenu:)`, so the window shows the preset that device uses.
     private(set) var openRequest = 0
+    /// The last `open` came from the device's AutoEQ menu: a device with no AutoEQ preset then
+    /// shows none, instead of keeping the preset shown.
+    @ObservationIgnored private(set) var openedFromDeviceMenu = false
 
     /// Updates while a band is dragged are sent at most this often: a FIR engine designs its
     /// filter on each one.
@@ -45,10 +48,12 @@ final class EQManagerListening {
     @ObservationIgnored private var lastSend = ContinuousClock.now - .seconds(1)
     @ObservationIgnored private var pendingSend: Task<Void, Never>?
 
-    /// Listen on a device and show its preset (the EQ Manager opened from its AutoEQ menu).
-    func open(on deviceUID: String) {
+    /// Listen on a device and show its preset (from the Listen menu, or the EQ Manager opened
+    /// from the device's AutoEQ menu).
+    func open(on deviceUID: String, fromDeviceMenu: Bool = false) {
         self.deviceUID = deviceUID
         source = .shown
+        openedFromDeviceMenu = fromDeviceMenu
         openRequest += 1
     }
 

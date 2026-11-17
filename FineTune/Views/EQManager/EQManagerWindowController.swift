@@ -29,13 +29,13 @@ final class EQManagerWindowController {
     }
 
     /// Shows the window. With a device (opened from its AutoEQ menu), the window listens on it
-    /// and shows the preset it uses.
+    /// and shows the preset it uses, or none.
     func show(listeningOn deviceUID: String? = nil) {
         guard let settings, let audioEngine else { return }
         if window == nil {
             window = makeWindow(settings: settings, audioEngine: audioEngine)
         }
-        if let deviceUID { listening.open(on: deviceUID) }
+        if let deviceUID { listening.open(on: deviceUID, fromDeviceMenu: true) }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }

@@ -52,22 +52,8 @@ struct EQManagerRootView: View {
         }
         .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
         .sheet(item: $chooserPurpose) { purpose in
-            EQManagerPresetChooser(
-                settings: settings,
-                profileManager: profileManager,
-                selectedPresetID: purpose == .select ? editor?.draft.id : nil,
-                title: purpose == .select ? "Choose a Preset" : "Replace Bands With a Preset",
-                allowsCreation: purpose == .select,
-                onChoose: { profile in
-                    chooserPurpose = nil
-                    switch purpose {
-                    case .select: editor = EQManagerEditor(profile: profile)
-                    case .replace: replaceContents(with: profile)
-                    }
-                },
-                onCancel: { chooserPurpose = nil }
-            )
-            .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+            presetChooser(purpose)
+                .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         }
         .sheet(item: $newPresetRequest) { request in
             EQManagerNewPresetSheet(
@@ -122,7 +108,9 @@ struct EQManagerRootView: View {
             listening.update(listenTarget, engine: audioEngine)
         }
         .onChange(of: listening.openRequest, initial: true) { _, request in
-            if request > 0, let uid = listening.deviceUID { showPreset(inUseOn: uid) }
+            if request > 0, let uid = listening.deviceUID {
+                showPreset(inUseOn: uid, orNone: listening.openedFromDeviceMenu)
+            }
         }
         .onChange(of: audioEngine.outputDevices.map(\.uid)) { _, uids in
             if let uid = listening.deviceUID, !uids.contains(uid) { listening.stop(engine: audioEngine) }
@@ -433,7 +421,9 @@ struct EQManagerRootView: View {
                     }
                 } else {
                     listenBarDivider
-                    Text("Choose a preset to hear it here")
+                    Text(settings.getAutoEQSelection(for: uid) == nil
+                         ? "Choose a preset to hear it here"
+                         : "No preset shown: it plays its own AutoEQ")
                         .font(.system(size: 11))
                         .foregroundStyle(DesignTokens.Colors.textTertiary)
                 }
@@ -544,16 +534,57 @@ struct EQManagerRootView: View {
         return parts.joined(separator: "\n")
     }
 
+    /// The preset chooser, to show a preset or to replace the bands of the one shown.
+    private func presetChooser(_ purpose: ChooserPurpose) -> EQManagerPresetChooser {
+        let selects = purpose == .select
+        let inUse: EQManagerPresetChooser.InUse? = selects ? inUsePreset : nil
+        // The chooser opens outside edit mode only: nothing unsaved is lost
+        let onDeselect: (() -> Void)? = selects ? { showNoPreset() } : nil
+        return EQManagerPresetChooser(
+            settings: settings,
+            profileManager: profileManager,
+            selectedPresetID: selects ? editor?.draft.id : nil,
+            title: selects ? "Choose a Preset" : "Replace Bands With a Preset",
+            allowsCreation: selects,
+            inUse: inUse,
+            onChoose: { profile in
+                chooserPurpose = nil
+                switch purpose {
+                case .select: editor = EQManagerEditor(profile: profile)
+                case .replace: replaceContents(with: profile)
+                }
+            },
+            onDeselect: onDeselect,
+            onCancel: { chooserPurpose = nil }
+        )
+    }
+
+    private func showNoPreset() {
+        chooserPurpose = nil
+        editor = nil
+    }
+
+    /// The device listened on and the preset it uses, if it has one.
+    private var inUsePreset: EQManagerPresetChooser.InUse? {
+        guard let uid = listening.deviceUID,
+              let selection = settings.getAutoEQSelection(for: uid) else { return nil }
+        return EQManagerPresetChooser.InUse(deviceName: deviceName(uid), presetID: selection.profileID)
+    }
+
     private func deviceName(_ uid: String) -> String {
         audioEngine.outputDevices.first { $0.uid == uid }?.name ?? "this device"
     }
 
     /// Shows the preset a device uses, unless unsaved changes are on screen: they stay, and are
-    /// what the device plays.
-    private func showPreset(inUseOn uid: String) {
+    /// what the device plays. For a device with no AutoEQ preset, the preset shown stays (to hear
+    /// it there), or, with `orNone` (opened from the device's AutoEQ menu), none is shown.
+    private func showPreset(inUseOn uid: String, orNone: Bool) {
         if editor?.hasChanges == true { return }
-        guard let selection = settings.getAutoEQSelection(for: uid),
-              selection.profileID != editor?.original.id else { return }
+        guard let selection = settings.getAutoEQSelection(for: uid) else {
+            if orNone { editor = nil }
+            return
+        }
+        guard selection.profileID != editor?.original.id else { return }
         let id = selection.profileID
         Task { @MainActor in
             guard let profile = await profileManager.resolveProfile(for: id),

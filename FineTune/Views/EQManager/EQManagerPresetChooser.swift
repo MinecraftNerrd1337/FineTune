@@ -14,7 +14,18 @@ struct EQManagerPresetChooser: View {
     var title = "Choose a Preset"
     /// Shows the New Preset and Import buttons.
     var allowsCreation = true
+    /// A device and the preset it uses.
+    struct InUse {
+        let deviceName: String
+        let presetID: String
+    }
+
+    /// The device listened on and the preset it uses, listed first to go back to it.
+    var inUse: InUse? = nil
     let onChoose: (AutoEQProfile) -> Void
+    /// Lists the preset shown first, with a cross on hover that shows none without choosing
+    /// another preset.
+    var onDeselect: (() -> Void)? = nil
     let onCancel: () -> Void
 
     private enum Mode { case choose, create }
@@ -161,19 +172,29 @@ struct EQManagerPresetChooser: View {
                         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                     let presets = profileManager.localPresets.map { libraryEntry($0) }
                     let templates = profileManager.localTemplates.map { libraryEntry($0) }
+                    let shortcuts = shortcutEntries
+                    let hasShortcuts = shortcuts.shown != nil || shortcuts.inUse != nil
 
+                    // Shortcuts first, without a title: the preset shown, then the one the device
+                    // listened on uses (a single row when they are the same)
+                    if let shown = shortcuts.shown {
+                        row(shown, icon: shown.id == inUse?.presetID ? "ear" : nil, hoverKey: "shown", onDeselect: onDeselect)
+                    }
+                    if let inUseEntry = shortcuts.inUse {
+                        row(inUseEntry, icon: "ear", hoverKey: "inUse")
+                    }
                     // A favorite is listed twice (in Favorites and in its own section): each row
                     // gets an identity of its own, or the lazy stack leaves a blank row
                     if !favorites.isEmpty {
-                        sectionTitle("Favorites", isFirst: true)
+                        sectionTitle("Favorites", isFirst: !hasShortcuts)
                         ForEach(favorites.map { SectionEntry(section: "favorites", entry: $0) }) { row($0.entry) }
                     }
                     if !presets.isEmpty {
-                        sectionTitle("My Presets", isFirst: favorites.isEmpty)
+                        sectionTitle("My Presets", isFirst: !hasShortcuts && favorites.isEmpty)
                         ForEach(presets.map { SectionEntry(section: "presets", entry: $0) }) { row($0.entry) }
                     }
                     if !templates.isEmpty {
-                        sectionTitle("Templates", isFirst: favorites.isEmpty && presets.isEmpty)
+                        sectionTitle("Templates", isFirst: !hasShortcuts && favorites.isEmpty && presets.isEmpty)
                         ForEach(templates.map { SectionEntry(section: "templates", entry: $0) }) { row($0.entry) }
                     }
                     if favorites.isEmpty && presets.isEmpty && templates.isEmpty {
@@ -195,6 +216,28 @@ struct EQManagerPresetChooser: View {
             .padding(DesignTokens.Spacing.sm)
         }
         .frame(maxHeight: .infinity)
+    }
+
+    /// The rows listed before Favorites: the preset shown (captioned as in use when it is),
+    /// and the preset the device listened on uses, when it is another one.
+    private var shortcutEntries: (shown: AutoEQCatalogEntry?, inUse: AutoEQCatalogEntry?) {
+        let inUseEntry = inUseEntry
+        guard onDeselect != nil, let id = selectedPresetID, let shown = libraryOrCatalogEntry(id) else {
+            return (nil, inUseEntry)
+        }
+        if let inUseEntry, inUseEntry.id == shown.id { return (inUseEntry, nil) }
+        return (shown, inUseEntry)
+    }
+
+    /// The preset the device listened on uses, captioned with that device.
+    private var inUseEntry: AutoEQCatalogEntry? {
+        guard let inUse, let entry = libraryOrCatalogEntry(inUse.presetID) else { return nil }
+        return AutoEQCatalogEntry(id: entry.id, name: entry.name,
+                                  measuredBy: "In use on \(inUse.deviceName)", relativePath: entry.relativePath)
+    }
+
+    private func libraryOrCatalogEntry(_ id: String) -> AutoEQCatalogEntry? {
+        profileManager.entry(for: id) ?? profileManager.profile(for: id).map { libraryEntry($0) }
     }
 
     private func libraryEntry(_ profile: AutoEQProfile) -> AutoEQCatalogEntry {
@@ -244,14 +287,24 @@ struct EQManagerPresetChooser: View {
             .padding(.bottom, DesignTokens.Spacing.xxs)
     }
 
-    private func row(_ entry: AutoEQCatalogEntry) -> some View {
+    /// A preset; `hoverKey` sets a shortcut row apart from the same preset in its section.
+    /// `onDeselect` adds a cross on hover to the preset shown.
+    private func row(
+        _ entry: AutoEQCatalogEntry,
+        icon: String? = nil,
+        hoverKey: String? = nil,
+        onDeselect: (() -> Void)? = nil
+    ) -> some View {
         let isSelected = entry.id == selectedPresetID
+        let hoverID = hoverKey.map { "\($0)/\(entry.id)" } ?? entry.id
+        let isHovered = hoveredID == hoverID
         let isFavorite = settings.isAutoEQFavorite(id: entry.id)
         let _ = libraryRevision
         let isCatalogEntry = profileManager.profile(for: entry.id)?.source.isLocal != true
             && profileManager.catalogEntry(for: entry.id) != nil
 
         return HStack(spacing: DesignTokens.Spacing.sm) {
+            if let icon { rowIcon(icon) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name)
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
@@ -271,10 +324,20 @@ struct EQManagerPresetChooser: View {
             if scope == .catalog && isCatalogEntry {
                 downloadControl(for: entry)
             }
-            if isSelected {
+            if isSelected, let onDeselect, isHovered {
+                Button("Show No Preset", systemImage: "xmark.circle.fill", action: onDeselect)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .contentShape(Rectangle())
+                    .help("Show no preset, without choosing another one")
+            } else if isSelected {
                 Image(systemName: "checkmark")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.accentColor)
+                    .frame(width: onDeselect == nil ? nil : 22)
             }
             Button {
                 if isFavorite {
@@ -290,19 +353,29 @@ struct EQManagerPresetChooser: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .opacity(isFavorite || hoveredID == entry.id ? 1 : 0)
+            .opacity(isFavorite || isHovered ? 1 : 0)
             .accessibilityLabel(isFavorite ? "Remove from favorites" : "Add to favorites")
         }
         .padding(.horizontal, DesignTokens.Spacing.sm)
         .frame(height: 34)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(hoveredID == entry.id ? Color.accentColor.opacity(0.15) : Color.clear)
-        )
+        .background(rowBackground(isSelected: isSelected, isHovered: isHovered))
         .contentShape(Rectangle())
-        .onHover { hoveredID = $0 ? entry.id : (hoveredID == entry.id ? nil : hoveredID) }
+        .onHover { hoveredID = $0 ? hoverID : (hoveredID == hoverID ? nil : hoveredID) }
         .onTapGesture { choose(entry) }
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isSelected ? AccessibilityTraits([.isButton, .isSelected]) : .isButton)
+    }
+
+    private func rowIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 11))
+            .foregroundStyle(DesignTokens.Colors.textSecondary)
+            .frame(width: 16)
+    }
+
+    /// The preset shown keeps a tint, so it stands out without hovering.
+    private func rowBackground(isSelected: Bool, isHovered: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(Color.accentColor.opacity(isHovered ? 0.18 : isSelected ? 0.10 : 0))
     }
 
     @ViewBuilder
