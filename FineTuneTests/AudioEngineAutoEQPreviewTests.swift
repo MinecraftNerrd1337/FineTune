@@ -149,9 +149,14 @@ struct AudioEngineAutoEQPreviewTests {
         listening.update(.profile(previewProfile("three")), engine: fix.engine)
         #expect(lastAutoEQEvent(tap) == .updateAutoEQProfile(profileID: "one"))
 
-        try await Task.sleep(for: .milliseconds(200))
+        // Up to 2 s: the tests running alongside share the main actor and can delay the send
+        for _ in 0..<100 where lastAutoEQEvent(tap) != .updateAutoEQProfile(profileID: "three") {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         #expect(lastAutoEQEvent(tap) == .updateAutoEQProfile(profileID: "three"))
         #expect(!tap.events.contains(.updateAutoEQProfile(profileID: "two")))
+        // The pending send holds `listening` weakly: keep it until here, as the window does
+        withExtendedLifetime(listening) {}
     }
 
     @Test("Moving to another device or stopping gives the device its own AutoEQ back")
