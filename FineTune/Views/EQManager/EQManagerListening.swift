@@ -19,8 +19,6 @@ final class EQManagerListening {
         case saved
         /// The device's own AutoEQ, as it plays without the EQ Manager.
         case inUse
-        /// The shown preset with its correction off: preamp only, at the same level.
-        case off
 
         var id: Self { self }
     }
