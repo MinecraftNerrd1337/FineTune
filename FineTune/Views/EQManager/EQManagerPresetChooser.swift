@@ -162,17 +162,19 @@ struct EQManagerPresetChooser: View {
                     let presets = profileManager.localPresets.map { libraryEntry($0) }
                     let templates = profileManager.localTemplates.map { libraryEntry($0) }
 
+                    // A favorite is listed twice (in Favorites and in its own section): each row
+                    // gets an identity of its own, or the lazy stack leaves a blank row
                     if !favorites.isEmpty {
-                        sectionTitle("Favorites")
-                        ForEach(favorites) { row($0) }
+                        sectionTitle("Favorites", isFirst: true)
+                        ForEach(favorites.map { SectionEntry(section: "favorites", entry: $0) }) { row($0.entry) }
                     }
                     if !presets.isEmpty {
-                        sectionTitle("My Presets")
-                        ForEach(presets) { row($0) }
+                        sectionTitle("My Presets", isFirst: favorites.isEmpty)
+                        ForEach(presets.map { SectionEntry(section: "presets", entry: $0) }) { row($0.entry) }
                     }
                     if !templates.isEmpty {
-                        sectionTitle("Templates")
-                        ForEach(templates) { row($0) }
+                        sectionTitle("Templates", isFirst: favorites.isEmpty && presets.isEmpty)
+                        ForEach(templates.map { SectionEntry(section: "templates", entry: $0) }) { row($0.entry) }
                     }
                     if favorites.isEmpty && presets.isEmpty && templates.isEmpty {
                         emptyMessage("No presets yet. Create one, import a file, or download one from the AutoEQ catalog.")
@@ -224,13 +226,21 @@ struct EQManagerPresetChooser: View {
         searchResult = profileManager.search(query: debouncedQuery, limit: 100, scope: scope)
     }
 
-    private func sectionTitle(_ title: String) -> some View {
+    /// A row of one section of the library list.
+    private struct SectionEntry: Identifiable {
+        let section: String
+        let entry: AutoEQCatalogEntry
+        var id: String { "\(section)/\(entry.id)" }
+    }
+
+    /// A section header; the ones after the first get more room above them.
+    private func sectionTitle(_ title: String, isFirst: Bool) -> some View {
         Text(title.uppercased())
             .font(.system(size: 9, weight: .bold))
             .tracking(1.0)
             .foregroundStyle(DesignTokens.Colors.textTertiary)
             .padding(.horizontal, DesignTokens.Spacing.sm)
-            .padding(.top, DesignTokens.Spacing.sm)
+            .padding(.top, isFirst ? DesignTokens.Spacing.sm : DesignTokens.Spacing.xl)
             .padding(.bottom, DesignTokens.Spacing.xxs)
     }
 
