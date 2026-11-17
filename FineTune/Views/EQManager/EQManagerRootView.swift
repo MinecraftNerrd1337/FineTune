@@ -36,7 +36,6 @@ struct EQManagerRootView: View {
     @State private var newPresetRequest: EQManagerNewPresetRequest?
     @State private var isClearHistoryConfirmationPresented = false
     @State private var conversionRequest: EQManagerConversionRequest?
-    @State private var isDevicePopoverPresented = false
 
     private var profileManager: AutoEQProfileManager { audioEngine.autoEQProfileManager }
 
@@ -139,7 +138,6 @@ struct EQManagerRootView: View {
             Spacer()
 
             if let editor {
-                deviceMenu(editor)
                 historyMenu(editor)
                 convertMenu(editor)
                 if editor.isEditing {
@@ -253,110 +251,13 @@ struct EQManagerRootView: View {
         }
     }
 
-    // MARK: - Devices
-
-    /// The output devices that play their AutoEQ with the preset shown, as the wand menu of a
-    /// device's row sets it: a button showing how many use it, and a popover listing every
-    /// device with a switch. Turning a device on selects the preset for it and turns its
-    /// correction on; turning it off turns its correction off and keeps the selection, as the
-    /// wand's Correction switch does. Outside edit mode only: a device plays the stored preset.
-    @ViewBuilder
-    private func deviceMenu(_ editor: EQManagerEditor) -> some View {
-        if !editor.isEditing {
-            let preset = editor.draft
-            let users = audioEngine.outputDevices.filter { $0.supportsAutoEQ && plays($0.uid, preset.id) }
-            Button {
-                isDevicePopoverPresented.toggle()
-            } label: {
-                HStack(spacing: DesignTokens.Spacing.xs) {
-                    Label("Devices", systemImage: "headphones")
-                    if !users.isEmpty {
-                        Text("\(users.count)")
-                            .font(.system(size: 10, weight: .semibold))
-                            .monospacedDigit()
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(DesignTokens.Colors.accentPrimary.opacity(0.2)))
-                    }
-                }
-            }
-            .fixedSize()
-            .help(users.isEmpty
-                  ? "Choose the output devices that use this preset"
-                  : "Used on \(users.map(\.name).formatted(.list(type: .and))). Choose the output devices that use this preset")
-            .popover(isPresented: $isDevicePopoverPresented, arrowEdge: .bottom) {
-                devicePopover(preset)
-            }
-        }
-    }
-
-    private func devicePopover(_ preset: AutoEQProfile) -> some View {
-        let devices = audioEngine.outputDevices.filter(\.supportsAutoEQ)
-        return VStack(alignment: .leading, spacing: DesignTokens.Spacing.sm) {
-            Text("Use This Preset On")
-                .font(.system(size: 13, weight: .semibold))
-            if devices.isEmpty {
-                Text("No connected output supports AutoEQ")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignTokens.Colors.textSecondary)
-            } else {
-                ForEach(devices) { device in
-                    HStack(spacing: DesignTokens.Spacing.md) {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(device.name)
-                                .font(.system(size: 12, weight: .medium))
-                                .lineLimit(1)
-                            Text(deviceStatus(device.uid, presetID: preset.id))
-                                .font(.system(size: 10))
-                                .foregroundStyle(DesignTokens.Colors.textSecondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: DesignTokens.Spacing.lg)
-                        Toggle(device.name, isOn: Binding(
-                            get: { plays(device.uid, preset.id) },
-                            set: { use in setPreset(preset.id, playsOn: device.uid, use) }
-                        ))
-                        .labelsHidden()
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                    }
-                }
-                Divider()
-                Text("A device uses one preset: turning it on here replaces the one it uses. Turning it off turns its correction off.")
-                    .font(.system(size: 10))
-                    .foregroundStyle(DesignTokens.Colors.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(DesignTokens.Spacing.md)
-        .frame(width: 280)
-    }
-
-    /// What the device's AutoEQ plays, next to its switch.
-    private func deviceStatus(_ uid: String, presetID: String) -> String {
-        guard let selection = settings.getAutoEQSelection(for: uid) else { return "No AutoEQ preset" }
-        if selection.profileID == presetID {
-            return selection.isEnabled ? "Uses this preset" : "Uses this preset, correction off"
-        }
-        let other = profileManager.profile(for: selection.profileID)?.name ?? "another preset"
-        return selection.isEnabled ? "Uses \(other)" : "Uses \(other), correction off"
-    }
+    // MARK: - Listening
 
     /// Whether the device's AutoEQ plays this preset now.
     private func plays(_ deviceUID: String, _ presetID: String) -> Bool {
         guard let selection = settings.getAutoEQSelection(for: deviceUID) else { return false }
         return selection.profileID == presetID && selection.isEnabled
     }
-
-    private func setPreset(_ presetID: String, playsOn deviceUID: String, _ use: Bool) {
-        if use {
-            audioEngine.setAutoEQProfile(for: deviceUID, profileID: presetID)
-        } else {
-            audioEngine.setAutoEQEnabled(for: deviceUID, enabled: false)
-        }
-    }
-
-    // MARK: - Listening
 
     /// The output device that plays the preset shown, as it is edited.
     private var listenMenu: some View {
