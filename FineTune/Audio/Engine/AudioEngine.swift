@@ -296,6 +296,14 @@ final class AudioEngine {
         // Wire callbacks — needed for both test and production mode
         wireCallbacks()
 
+        #if !APP_STORE
+        // Set here rather than in the start-up task below, which holds self strongly
+        ddc.onProbeCompleted = { [weak self] in
+            self?.deviceVolumeMonitor.refreshAfterDDCProbe()
+            self?.refreshAllTapOutputStates()
+        }
+        #endif
+
         if startMonitorsAutomatically {
             Task { @MainActor in
                 if self.permission.status == .authorized {
@@ -307,10 +315,6 @@ final class AudioEngine {
                 self.deviceKeepAlive.start()
 
                 #if !APP_STORE
-                ddc.onProbeCompleted = { [weak self] in
-                    self?.deviceVolumeMonitor.refreshAfterDDCProbe()
-                    self?.refreshAllTapOutputStates()
-                }
                 ddc.start()
                 #endif
 
