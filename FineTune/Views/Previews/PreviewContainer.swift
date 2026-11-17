@@ -2,13 +2,13 @@
 import SwiftUI
 
 /// Container view for consistent preview styling
-/// Wraps content with dark material background matching the app's menu bar popup
+/// Wraps content with dark material background matching the app's menu bar panel
 struct PreviewContainer<Content: View>: View {
     let width: CGFloat
     let content: Content
 
     init(
-        width: CGFloat = DesignTokens.Dimensions.popupWidth,
+        width: CGFloat = DesignTokens.Dimensions.panelWidth,
         @ViewBuilder content: () -> Content
     ) {
         self.width = width

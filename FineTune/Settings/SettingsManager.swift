@@ -60,8 +60,8 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Appearance
     var appearance: AppearancePreference = .system  // Follow system appearance, or lock light/dark
 
-    // Popup
-    var popupSize: MenuBarPopupSize = .comfortable  // Overall menu bar popup size and density
+    // Panel
+    var panelSize: MenuBarPanelSize = .comfortable  // Overall menu bar panel size and density
 
     init() {}
 
@@ -86,7 +86,15 @@ nonisolated struct AppSettings: Codable, Equatable {
         volumeHotkeyStep = try c.decodeIfPresent(VolumeHotkeyStep.self, forKey: .volumeHotkeyStep) ?? .normal
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system
-        popupSize = try c.decodeIfPresent(MenuBarPopupSize.self, forKey: .popupSize) ?? .comfortable
+        // settings.json written before the popup → panel rename uses the old keys.
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        panelSize = try c.decodeIfPresent(MenuBarPanelSize.self, forKey: .panelSize)
+            ?? legacy.decodeIfPresent(MenuBarPanelSize.self, forKey: .popupSize)
+            ?? .comfortable
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case popupSize
     }
 }
 

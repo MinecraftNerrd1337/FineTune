@@ -32,14 +32,14 @@ struct ClassicStyleHUDStructureTests {
 @MainActor
 struct HUDDeviceNameSmokeTests {
 
-    private func makeController(popupVisible: Bool = false) -> HUDWindowController {
+    private func makeController(panelVisible: Bool = false) -> HUDWindowController {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         let settings = SettingsManager(directory: tempDir)
         let status = MediaKeyStatus()
-        let popup = PopupVisibilityService()
-        popup.isVisible = popupVisible
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, popupVisibility: popup)
+        let menuBarPanel = PanelVisibilityService()
+        menuBarPanel.isVisible = panelVisible
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, panelVisibility: menuBarPanel)
         hud.frameProvider = { NSRect(x: 0, y: 23, width: 1440, height: 877) }
         return hud
     }

@@ -95,13 +95,13 @@ enum DesignTokens {
 
         // MARK: Glass Effects
 
-        /// Popup background overlay. Sits over NSVisualEffectView's `.popover`
-        /// material. Light bumped from 0.10 → 0.50 so the popup reads as
+        /// Panel background overlay. Sits over NSVisualEffectView's `.popover`
+        /// material. Light bumped from 0.10 → 0.50 so the panel reads as
         /// crisp white-tilted glass over arbitrary wallpapers (Control Center
         /// sweet spot) instead of muddy gray. The earlier 0.55 wash killed
         /// vibrancy entirely; 0.50 keeps a hint of desktop tint.
-        static let popupOverlay = dynamicColor(
-            name: "popupOverlay",
+        static let panelOverlay = dynamicColor(
+            name: "panelOverlay",
             light: NSColor.white.withAlphaComponent(0.50),
             dark: NSColor.black.withAlphaComponent(0.4)
         )
@@ -154,7 +154,7 @@ enum DesignTokens {
             dark: NSColor.white.withAlphaComponent(0.07)
         )
 
-        /// Default row fill. Transparent — rows blend with the popup
+        /// Default row fill. Transparent — rows blend with the panel
         /// material at rest, like System Settings / Notification Center.
         /// Hover reveals `hoverSurface` as the meaningful interaction signal.
         static let glassFill = dynamicColor(
@@ -198,7 +198,7 @@ enum DesignTokens {
         // MARK: Cards & Badges
 
         /// Lifted-card fill used by the EQ panel and Settings sections.
-        /// Light reads as a white card on the popup glass; dark reads as
+        /// Light reads as a white card on the panel glass; dark reads as
         /// a subtle translucent surface on the dark glass. Pairs with
         /// `eqCardBorder` for the hairline edge.
         static let eqCardBackground = dynamicColor(
@@ -374,15 +374,15 @@ enum DesignTokens {
     enum Dimensions {
         // MARK: Base Configuration
 
-        /// Main popup width
-        static let popupWidth: CGFloat = 510
+        /// Main panel width
+        static let panelWidth: CGFloat = 510
 
         /// Content padding
         static var contentPadding: CGFloat { Spacing.lg }
 
         /// Available content width after padding
         static var contentWidth: CGFloat {
-            popupWidth - (contentPadding * 2)
+            panelWidth - (contentPadding * 2)
         }
 
         // MARK: Fixed Dimensions
@@ -392,7 +392,7 @@ enum DesignTokens {
 
         // MARK: Corner Radii (rounded style - 10pt)
 
-        /// Corner radius for popup
+        /// Corner radius for panel
         static let cornerRadius: CGFloat = 12
 
         /// Corner radius for row cards (glass bars)

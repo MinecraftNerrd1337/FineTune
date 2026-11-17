@@ -118,7 +118,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
 
             // Make panel key so text fields can receive focus.
             // Temporarily suppress the parent's delegate to prevent
-            // FluidMenuBarExtra from dismissing the popup on resign-key.
+            // FluidMenuBarExtra from dismissing the menu bar panel on resign-key.
             let savedDelegate = parentWindow.delegate
             parentWindow.delegate = nil
             panel.makeKeyAndOrderFront(nil)
@@ -230,7 +230,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
 
             if let parentWindow = parentWindow {
                 if reKeyParent {
-                    // Restore key status — parent popup stays visible
+                    // Restore key status — the menu bar panel stays visible
                     parentWindow.makeKey()
                 } else {
                     // External dismiss — re-key then resign so FluidMenuBarExtra

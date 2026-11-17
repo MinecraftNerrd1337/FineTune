@@ -1,9 +1,9 @@
-// FineTune/Views/MenuBar/PopupKeyboardNavModel.swift
+// FineTune/Views/MenuBar/PanelKeyboardNavModel.swift
 import Foundation
 
 @MainActor
 @Observable
-final class PopupKeyboardNavModel {
+final class PanelKeyboardNavModel {
     enum RowID: Hashable {
         case device(uid: String)
         case app(persistenceID: String)

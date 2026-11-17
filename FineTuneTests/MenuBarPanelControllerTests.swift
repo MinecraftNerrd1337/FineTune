@@ -1,22 +1,22 @@
-// FineTuneTests/MenuBarPopupControllerTests.swift
+// FineTuneTests/MenuBarPanelControllerTests.swift
 import Testing
 import AppKit
 @testable import FineTune
 
-@Suite("MenuBarPopupController", .serialized)
+@Suite("MenuBarPanelController", .serialized)
 @MainActor
-struct MenuBarPopupControllerTests {
+struct MenuBarPanelControllerTests {
     @Test("toggle is a no-op when no matching status item exists")
     func noMatchingItem() {
         // Use a deliberately unique accessibility title so no real status item
         // (e.g. one materialized by another concurrently-running test) can match.
-        let controller = MenuBarPopupController(accessibilityTitle: "FineTuneTest-NoSuchItem-\(UUID().uuidString)")
+        let controller = MenuBarPanelController(accessibilityTitle: "FineTuneTest-NoSuchItem-\(UUID().uuidString)")
         controller.toggle()  // must not crash; logs a debug message and returns
     }
 
     @Test("findStatusItem returns nil when no matching status item exists")
     func findReturnsNilWhenNoMatch() {
-        let controller = MenuBarPopupController(accessibilityTitle: "FineTuneTest-NoSuchItem-\(UUID().uuidString)")
+        let controller = MenuBarPanelController(accessibilityTitle: "FineTuneTest-NoSuchItem-\(UUID().uuidString)")
         #expect(controller.findStatusItem() == nil)
     }
 
@@ -30,7 +30,7 @@ struct MenuBarPopupControllerTests {
         // Materialize the button window so KVC has a fully-formed window to walk.
         _ = statusItem.button?.window?.windowNumber
 
-        let controller = MenuBarPopupController(accessibilityTitle: title)
+        let controller = MenuBarPanelController(accessibilityTitle: title)
         let found = controller.findStatusItem()
 
         #expect(found === statusItem)
@@ -44,7 +44,7 @@ struct MenuBarPopupControllerTests {
         defer { NSStatusBar.system.removeStatusItem(other) }
         _ = other.button?.window?.windowNumber
 
-        let controller = MenuBarPopupController(accessibilityTitle: "FineTuneTest-Searching-\(UUID().uuidString)")
+        let controller = MenuBarPanelController(accessibilityTitle: "FineTuneTest-Searching-\(UUID().uuidString)")
         #expect(controller.findStatusItem() == nil)
     }
 
@@ -62,7 +62,7 @@ struct MenuBarPopupControllerTests {
         defer { NSStatusBar.system.removeStatusItem(statusItem) }
         _ = statusItem.button?.window?.windowNumber
 
-        let controller = MenuBarPopupController(accessibilityTitle: title)
+        let controller = MenuBarPanelController(accessibilityTitle: title)
         controller.toggle()  // must not crash
     }
 }

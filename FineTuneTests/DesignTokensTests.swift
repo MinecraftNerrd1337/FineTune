@@ -56,15 +56,15 @@ struct DesignTokensSpacingTests {
 @Suite("DesignTokens — Dimensions")
 struct DesignTokensDimensionTests {
 
-    @Test("Popup width is positive and reasonable")
-    func popupWidth() {
-        #expect(DesignTokens.Dimensions.popupWidth > 300)
-        #expect(DesignTokens.Dimensions.popupWidth < 1000)
+    @Test("Panel width is positive and reasonable")
+    func panelWidth() {
+        #expect(DesignTokens.Dimensions.panelWidth > 300)
+        #expect(DesignTokens.Dimensions.panelWidth < 1000)
     }
 
-    @Test("contentWidth is popupWidth minus double padding")
+    @Test("contentWidth is panelWidth minus double padding")
     func contentWidthFormula() {
-        let expected = DesignTokens.Dimensions.popupWidth - (DesignTokens.Dimensions.contentPadding * 2)
+        let expected = DesignTokens.Dimensions.panelWidth - (DesignTokens.Dimensions.contentPadding * 2)
         #expect(DesignTokens.Dimensions.contentWidth == expected)
     }
 

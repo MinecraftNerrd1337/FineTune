@@ -1,8 +1,8 @@
-// FineTune/Shortcuts/MenuBarPopupController.swift
+// FineTune/Shortcuts/MenuBarPanelController.swift
 import AppKit
 import os
 
-/// Toggles the FineTune menu-bar popup from outside the SwiftUI scene chain
+/// Toggles the FineTune menu-bar panel from outside the SwiftUI scene chain
 /// (e.g. when a global hotkey fires).
 ///
 /// Locates the underlying `NSStatusItem` via `NSApp.windows` + KVC introspection
@@ -13,22 +13,22 @@ import os
 /// machinery. The technique is package-agnostic and avoids needing any callback
 /// wiring (no `onStatusItemReady`, no Scene-reference capture).
 ///
-/// Once the status item is located, we toggle the popup by posting a synthetic
+/// Once the status item is located, we toggle the panel by posting a synthetic
 /// `.leftMouseDown` event aimed at the button's window. `FluidMenuBarExtra`
 /// installs a `LocalEventMonitor` that filters events on the status button's
 /// window — the synthetic event satisfies that filter and re-uses the package's
 /// existing visible→dismiss / hidden→show toggle logic, including the
 /// screen-edge framing math.
 @MainActor
-protocol MenuBarPopupControlling: AnyObject {
+protocol MenuBarPanelControlling: AnyObject {
     func toggle()
 }
 
 @MainActor
-final class MenuBarPopupController: MenuBarPopupControlling {
+final class MenuBarPanelController: MenuBarPanelControlling {
     private static let logger = Logger(
         subsystem: "com.finetuneapp.FineTune",
-        category: "MenuBarPopupController"
+        category: "MenuBarPanelController"
     )
 
     /// Accessibility title used to identify FineTune's status item among any

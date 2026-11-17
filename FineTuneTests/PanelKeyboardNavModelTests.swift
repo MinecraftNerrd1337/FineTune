@@ -1,4 +1,4 @@
-// FineTuneTests/PopupKeyboardNavModelTests.swift
+// FineTuneTests/PanelKeyboardNavModelTests.swift
 import Testing
 import AppKit
 import AudioToolbox
@@ -9,10 +9,10 @@ private func makeDevice(uid: String, id: AudioDeviceID = 1) -> AudioDevice {
     AudioDevice(id: id, uid: uid, name: "Device \(uid)", icon: nil, supportsAutoEQ: false)
 }
 
-@Suite("PopupKeyboardNavModel") @MainActor
-struct PopupKeyboardNavModelTests {
+@Suite("PanelKeyboardNavModel") @MainActor
+struct PanelKeyboardNavModelTests {
     @Test func syncOrderProducesDevicesThenApps() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -30,7 +30,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func syncOrderEditingPriorityClearsList() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -41,7 +41,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func nextAfterNilReturnsFirstRow() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -52,12 +52,12 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func nextAfterNilOnEmptyReturnsNil() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         #expect(model.next(after: nil) == nil)
     }
 
     @Test func nextAfterLastReturnsNilNoWrap() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -68,7 +68,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func nextAfterFirstDeviceReturnsSecondDevice() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -80,7 +80,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func nextAfterLastDeviceCrossesIntoApps() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -92,7 +92,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func previousBeforeNilReturnsNil() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -103,7 +103,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func previousBeforeFirstRowReturnsNil() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -114,7 +114,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func previousBeforeFirstAppCrossesBackIntoDevices() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],
@@ -125,7 +125,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func defaultFocusPrefersDefaultOutputDevice() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -137,7 +137,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func defaultFocusNilUIDReturnsFirstRow() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -149,7 +149,7 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func defaultFocusUnknownUIDFallsBackToFirstRow() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1", id: 1)
         let dev2 = makeDevice(uid: "dev2", id: 2)
         model.syncOrder(
@@ -161,12 +161,12 @@ struct PopupKeyboardNavModelTests {
     }
 
     @Test func defaultFocusOnEmptyReturnsNil() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         #expect(model.defaultFocus(defaultOutputUID: "dev1") == nil)
     }
 
     @Test func syncOrderDropsExitedApps() {
-        let model = PopupKeyboardNavModel()
+        let model = PanelKeyboardNavModel()
         let dev1 = makeDevice(uid: "dev1")
         model.syncOrder(
             activeDevices: [dev1],

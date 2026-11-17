@@ -8,7 +8,7 @@ import os
 final class HUDWindowController: MediaKeyHUDPresenting {
     private let settingsManager: SettingsManager
     private let mediaKeyStatus: MediaKeyStatus
-    private let popupVisibility: PopupVisibilityService
+    private let panelVisibility: PanelVisibilityService
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "HUDWindowController")
 
     // Read from the nonisolated deinit, which hands them to the main thread.
@@ -33,11 +33,11 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     init(
         settingsManager: SettingsManager,
         mediaKeyStatus: MediaKeyStatus,
-        popupVisibility: PopupVisibilityService
+        panelVisibility: PanelVisibilityService
     ) {
         self.settingsManager = settingsManager
         self.mediaKeyStatus = mediaKeyStatus
-        self.popupVisibility = popupVisibility
+        self.panelVisibility = panelVisibility
         subscribeToSettingsChangedNotification()
     }
 
@@ -72,7 +72,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
 
     // MARK: - Public API
 
-    /// Displays the HUD. Skipped when the foreground app is fullscreen or the popup is visible.
+    /// Displays the HUD. Skipped when the foreground app is fullscreen or the menu bar panel is visible.
     func show(sliderFraction: Double, mute: Bool, deviceName: String) {
         showCallCount += 1
         showDidUpdatePanel = false
@@ -81,8 +81,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
             logger.debug("Skipping HUD show: foreground app is fullscreen")
             return
         }
-        guard !popupVisibility.isVisible else {
-            logger.debug("Skipping HUD show: popup is visible")
+        guard !panelVisibility.isVisible else {
+            logger.debug("Skipping HUD show: menu bar panel is visible")
             return
         }
 
@@ -188,8 +188,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         showCallCount += 1
         showDidUpdatePanel = false
 
-        guard !popupVisibility.isVisible else {
-            logger.debug("Skipping per-app HUD: popup is visible")
+        guard !panelVisibility.isVisible else {
+            logger.debug("Skipping per-app HUD: menu bar panel is visible")
             return
         }
 

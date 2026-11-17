@@ -29,7 +29,7 @@ final class MediaKeyMonitor {
     private let settingsManager: SettingsManager
     private let accessibility: any AccessibilityTrustProviding
     private let hudController: MediaKeyHUDPresenting
-    private let popupVisibility: PopupVisibilityService
+    private let panelVisibility: PanelVisibilityService
     private let mediaKeyStatus: MediaKeyStatus
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "MediaKeyMonitor")
 
@@ -69,7 +69,7 @@ final class MediaKeyMonitor {
         settingsManager: SettingsManager,
         accessibility: any AccessibilityTrustProviding,
         hudController: MediaKeyHUDPresenting,
-        popupVisibility: PopupVisibilityService,
+        panelVisibility: PanelVisibilityService,
         mediaKeyStatus: MediaKeyStatus
     ) {
         self.decoder = decoder
@@ -77,7 +77,7 @@ final class MediaKeyMonitor {
         self.settingsManager = settingsManager
         self.accessibility = accessibility
         self.hudController = hudController
-        self.popupVisibility = popupVisibility
+        self.panelVisibility = panelVisibility
         self.mediaKeyStatus = mediaKeyStatus
         subscribeToWorkspaceLifecycle()
     }
@@ -270,7 +270,7 @@ final class MediaKeyMonitor {
 
     /// `.ddc` tier coalesces repeats to an 80 ms floor; hardware/software pass them through.
     /// Mute repeats are dropped upstream. Stepping operates on slider-position; HUD receives
-    /// the slider fraction so it always matches the popup device row.
+    /// the slider fraction so it always matches the panel device row.
     func handleCore(
         event: MediaKeyEvent,
         deviceID: AudioDeviceID,
@@ -282,7 +282,7 @@ final class MediaKeyMonitor {
         setMute: (AudioDeviceID, Bool) -> Void,
         playFeedback: (Float) -> Void = { _ in }
     ) {
-        let shouldShowHUD = !popupVisibility.isVisible
+        let shouldShowHUD = !panelVisibility.isVisible
         let sliderDelta = settingsManager.appSettings.volumeHotkeyStep.sliderDelta
         let currentSlider = VolumeMapping.sliderFraction(forSystemGain: currentVolume, tier: tier)
 

@@ -42,12 +42,12 @@ struct FineTuneApp: App {
     @State private var audioEngine: AudioEngine
     @State private var accessibility: AccessibilityPermissionService
     @State private var mediaKeyStatus: MediaKeyStatus
-    @State private var popupVisibility: PopupVisibilityService
+    @State private var panelVisibility: PanelVisibilityService
     @State private var hudController: HUDWindowController
     @State private var mediaKeyMonitor: MediaKeyMonitor
     @State private var feedbackPlayer: VolumeFeedbackPlayer
     @State private var iconCoordinator: MenuBarIconCoordinator
-    @State private var menuBarPopupController: MenuBarPopupController
+    @State private var menuBarPanelController: MenuBarPanelController
     @State private var shortcutsRegistry: ShortcutsRegistry
     @State private var resolver: TargetAppResolver
     @StateObject private var updateManager = UpdateManager()
@@ -83,19 +83,19 @@ struct FineTuneApp: App {
         // `deviceVolumeMonitor` is declared as `any DeviceVolumeProviding` on
         // AudioEngine so tests can inject mocks; in production it's always the
         // concrete `DeviceVolumeMonitor` that this view consumes directly.
-        MenuBarPopupView(
+        MenuBarPanelView(
             audioEngine: audioEngine,
             deviceVolumeMonitor: audioEngine.deviceVolumeMonitor as! DeviceVolumeMonitor,
             updateManager: updateManager,
             permission: audioEngine.permission,
             accessibility: accessibility,
             mediaKeyStatus: mediaKeyStatus,
-            popupVisibility: popupVisibility,
+            panelVisibility: panelVisibility,
             hudController: hudController,
             mediaKeyMonitor: mediaKeyMonitor
         )
         .task {
-            // Idempotent: subsequent task runs (popup re-open) are no-ops inside start().
+            // Idempotent: subsequent task runs (panel re-open) are no-ops inside start().
             shortcutsRegistry.start()
         }
     }
@@ -113,11 +113,11 @@ struct FineTuneApp: App {
         _audioEngine = State(initialValue: engine)
 
         // Media keys / HUD services — instantiated at app scope so the tap
-        // and HUD panel outlive popup open/close cycles.
+        // and HUD panel outlive panel open/close cycles.
         let accessibilityService = AccessibilityPermissionService()
         let statusService = MediaKeyStatus()
-        let popupService = PopupVisibilityService()
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: statusService, popupVisibility: popupService)
+        let panelService = PanelVisibilityService()
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: statusService, panelVisibility: panelService)
         let feedbackPlayer = VolumeFeedbackPlayer()
 
         // Wire the interactive Tahoe slider back to the device volume monitor.
@@ -150,13 +150,13 @@ struct FineTuneApp: App {
             settingsManager: settings,
             accessibility: accessibilityService,
             hudController: hud,
-            popupVisibility: popupService,
+            panelVisibility: panelService,
             mediaKeyStatus: statusService
         )
         monitor.feedbackPlayer = feedbackPlayer
         _accessibility = State(initialValue: accessibilityService)
         _mediaKeyStatus = State(initialValue: statusService)
-        _popupVisibility = State(initialValue: popupService)
+        _panelVisibility = State(initialValue: panelService)
         _hudController = State(initialValue: hud)
         _mediaKeyMonitor = State(initialValue: monitor)
         _feedbackPlayer = State(initialValue: feedbackPlayer)
@@ -195,7 +195,7 @@ struct FineTuneApp: App {
         // before the user first opens Settings. The trust-flip callback wires
         // the monitor to reconcile its tap state whenever trust changes — this
         // is the single source of truth for retroactive start/stop (a `.onChange`
-        // inside MenuBarPopupView would miss flips when the popup is closed).
+        // inside MenuBarPanelView would miss flips when the panel is closed).
         accessibilityService.onTrustChanged = { [weak monitor] _ in
             monitor?.reconcile()
         }
@@ -204,21 +204,21 @@ struct FineTuneApp: App {
 
         // Global hotkeys (KeyboardShortcuts SPM, Carbon-backed; no Accessibility
         // permission required for the hotkey itself). Registry start() is deferred
-        // to a SwiftUI `.task` on the popup content so the FluidMenuBarExtra
+        // to a SwiftUI `.task` on the panel content so the FluidMenuBarExtra
         // status item has been materialized before any hotkey can fire.
-        let popupController = MenuBarPopupController()
+        let panelController = MenuBarPanelController()
         let resolver = TargetAppResolver(
             ownBundleID: Bundle.main.bundleIdentifier ?? "com.finetuneapp.FineTune"
         )
         resolver.start()
         let registry = ShortcutsRegistry(
             settings: settings,
-            popupController: popupController,
+            panelController: panelController,
             resolver: resolver,
             audioEngine: engine,
             hud: hud
         )
-        _menuBarPopupController = State(initialValue: popupController)
+        _menuBarPanelController = State(initialValue: panelController)
         _shortcutsRegistry = State(initialValue: registry)
         _resolver = State(initialValue: resolver)
 

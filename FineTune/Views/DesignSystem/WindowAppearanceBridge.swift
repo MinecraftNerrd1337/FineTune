@@ -65,7 +65,7 @@ final class WindowAppearanceTrackerView: NSView {
 /// descendant views so child popovers / panels can mirror the preference to
 /// their own `NSPanel.appearance` and `.preferredColorScheme(...)`.
 ///
-/// Set at popup / HUD roots (`MenuBarPopupView`, `HUDWindowController`) so
+/// Set at panel / HUD roots (`MenuBarPanelView`, `HUDWindowController`) so
 /// nested pickers (`PopoverHost` consumers) can wire it through without each
 /// intermediate view threading a binding to `appSettings`.
 private struct AppearancePreferenceKey: EnvironmentKey {

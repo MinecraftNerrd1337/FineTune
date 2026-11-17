@@ -31,26 +31,26 @@ struct VisualEffectBackground: NSViewRepresentable {
 // MARK: - Colors
 
 extension Color {
-    /// Popup background overlay - uses theme-aware color from DesignTokens
+    /// Panel background overlay - uses theme-aware color from DesignTokens
     /// Darker than before for more contrast with floating glass rows
-    static var popupBackgroundOverlay: Color { DesignTokens.Colors.popupOverlay }
+    static var panelBackgroundOverlay: Color { DesignTokens.Colors.panelOverlay }
 }
 
 // MARK: - View Extensions
 
 extension View {
-    /// Applies the popup's translucent glass background. Adapts to light and
+    /// Applies the panel's translucent glass background. Adapts to light and
     /// dark via DesignTokens; the underlying NSVisualEffectView uses the
     /// `.popover` material so it tracks system appearance natively.
     /// Name kept for source compatibility; rename pending a follow-up sweep.
     func darkGlassBackground() -> some View {
         self
-            .background(Color.popupBackgroundOverlay)
+            .background(Color.panelBackgroundOverlay)
             .background(VisualEffectBackground(material: .popover, blendingMode: .behindWindow))
     }
 
     /// Applies the lifted-card background used by the EQ panel.
-    /// Light reads as a white card on the popup glass; dark reads as a
+    /// Light reads as a white card on the panel glass; dark reads as a
     /// translucent surface on the dark glass. Replaces the prior recessed
     /// treatment which read as a heavy gray block on whiter light glass.
     func eqCardBackground() -> some View {
@@ -61,7 +61,7 @@ extension View {
 // MARK: - Lifted Card Background Modifier (EQ panel)
 
 /// Lifted-card background used by the EQ panel.
-/// Light: opaque-ish white card on the popup glass with a hairline edge
+/// Light: opaque-ish white card on the panel glass with a hairline edge
 /// and a soft shadow that lifts the card off the surface. Dark: translucent
 /// white on the dark glass with a slightly stronger hairline. Tokens come
 /// from `DesignTokens.Colors.eqCardBackground` and `eqCardBorder`.
@@ -91,7 +91,7 @@ struct LiftedCardBackgroundModifier: ViewModifier {
 
 // MARK: - Previews
 
-#Preview("Dark Glass Popup Background") {
+#Preview("Dark Glass Panel Background") {
     VStack(spacing: 16) {
         Text("OUTPUT DEVICES")
             .sectionHeaderStyle()

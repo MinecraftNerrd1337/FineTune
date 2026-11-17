@@ -8,7 +8,7 @@ struct EditablePercentage: View {
     @Binding var percentage: Int
     let range: ClosedRange<Int>
     var onCommit: ((Int) -> Void)? = nil
-    /// True when this row is the popup's keyboard selection (gates keyboard entry).
+    /// True when this row is the panel's keyboard selection (gates keyboard entry).
     var isRowFocused: Bool = false
 
     @State private var isEditing = false
@@ -17,9 +17,9 @@ struct EditablePercentage: View {
     @FocusState private var isFocused: Bool
     @State private var coordinator = ClickOutsideCoordinator()
     @State private var componentFrame: CGRect = .zero
-    @Environment(PopupTextEntryCoordinator.self) private var textEntry: PopupTextEntryCoordinator?
+    @Environment(PanelTextEntryCoordinator.self) private var textEntry: PanelTextEntryCoordinator?
 
-    /// Popup-owned keyboard entry, so first responder never leaves the nav anchor.
+    /// Panel-owned keyboard entry, so first responder never leaves the nav anchor.
     private var keyboardBuffer: String? {
         isRowFocused ? textEntry?.buffer : nil
     }
@@ -107,7 +107,7 @@ struct EditablePercentage: View {
         .onChange(of: isEditing) { _, editing in
             if !editing {
                 coordinator.removeMonitors()
-                // Mouse edit released first responder; ask the popup to refocus the nav anchor.
+                // Mouse edit released first responder; ask the panel to refocus the nav anchor.
                 textEntry?.navRestoreNonce += 1
             }
         }
@@ -177,13 +177,13 @@ private struct FramePreferenceKey: PreferenceKey {
 
 // MARK: - Keyboard Entry Coordinator
 
-/// Shared between the menu-bar popup and its rows. The popup owns keyboard percentage
+/// Shared between the menu-bar panel and its rows. The panel owns keyboard percentage
 /// entry — first responder never leaves the nav anchor — and writes `buffer`; the
 /// keyboard-focused row's field renders it and commits when `commitNonce` changes. A
-/// field raises `navRestoreNonce` when a *mouse* edit ends so the popup refocuses the anchor.
+/// field raises `navRestoreNonce` when a *mouse* edit ends so the panel refocuses the anchor.
 @MainActor
 @Observable
-final class PopupTextEntryCoordinator {
+final class PanelTextEntryCoordinator {
     var buffer: String? = nil
     var commitNonce: Int = 0
     var navRestoreNonce: Int = 0

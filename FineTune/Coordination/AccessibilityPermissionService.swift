@@ -19,7 +19,7 @@ final class AccessibilityPermissionService: AccessibilityTrustProviding {
     private(set) var isTrustedCached: Bool
 
     /// Invoked on the main actor whenever `isTrustedCached` flips. Global path —
-    /// `.onChange` in a view is insufficient because the popup may not be mounted.
+    /// `.onChange` in a view is insufficient because the panel may not be mounted.
     var onTrustChanged: ((Bool) -> Void)?
 
     private var trustObserver: NSObjectProtocol?

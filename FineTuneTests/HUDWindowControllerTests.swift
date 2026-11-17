@@ -1,6 +1,6 @@
 // FineTuneTests/HUDWindowControllerTests.swift
 // Tests for HUDWindowController: position math, hide-timer reset semantics,
-// style-specific hide delay, and popup-guard behavior.
+// style-specific hide delay, and menu-bar-panel guard behavior.
 //
 // NSPanel/NSScreen creation is avoided — position math is tested via the pure
 // static method, and timer behavior is tested via the hideDelayOverride hook.
@@ -126,14 +126,14 @@ struct HUDWindowControllerPositionTests {
 @MainActor
 struct HUDWindowControllerTimerTests {
 
-    private func makeController(popupVisible: Bool = false) -> HUDWindowController {
+    private func makeController(panelVisible: Bool = false) -> HUDWindowController {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         let settings = SettingsManager(directory: tempDir)
         let status = MediaKeyStatus()
-        let popup = PopupVisibilityService()
-        popup.isVisible = popupVisible
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, popupVisibility: popup)
+        let menuBarPanel = PanelVisibilityService()
+        menuBarPanel.isVisible = panelVisible
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, panelVisibility: menuBarPanel)
         // Stub out frame to avoid real NSScreen in tests.
         hud.frameProvider = { NSRect(x: 0, y: 23, width: 1440, height: 877) }
         return hud
@@ -151,7 +151,7 @@ struct HUDWindowControllerTimerTests {
 
     @Test("showCallCount increments even when the show is guard-skipped (counter tracks attempts)")
     func showCallCountTracksAttempts() {
-        // showCallCount is incremented before the fullscreen + popup guards, so
+        // showCallCount is incremented before the fullscreen + menu bar panel guards, so
         // it records every attempt regardless of whether the panel is actually shown.
         let hud = makeController()
         hud.show(sliderFraction: 0.5, mute: false, deviceName: "")
@@ -184,20 +184,20 @@ struct HUDWindowControllerTimerTests {
         #expect(hud.hideDelay(for: .classic) == .milliseconds(250))
     }
 
-    // MARK: - Popup-visibility guard (AC #23)
+    // MARK: - Panel-visibility guard (AC #23)
 
-    @Test("popupGuardSuppressesShow: popup visible ⇒ show() does not update panel")
-    func popupGuardSuppressesShow() {
-        let hud = makeController(popupVisible: true)
+    @Test("menuBarPanelGuardSuppressesShow: menu bar panel visible ⇒ show() does not update the HUD panel")
+    func menuBarPanelGuardSuppressesShow() {
+        let hud = makeController(panelVisible: true)
         hud.show(sliderFraction: 0.5, mute: false, deviceName: "Test Device")
         // Attempt is counted, but panel was not updated.
         #expect(hud.showCallCount == 1)
         #expect(hud.showDidUpdatePanel == false)
     }
 
-    @Test("Popup hidden ⇒ show() updates panel")
-    func popupHiddenShowUpdatesPanel() {
-        let hud = makeController(popupVisible: false)
+    @Test("Menu bar panel hidden ⇒ show() updates the HUD panel")
+    func menuBarPanelHiddenShowUpdatesHUD() {
+        let hud = makeController(panelVisible: false)
         hud.show(sliderFraction: 0.5, mute: false, deviceName: "Test Device")
         #expect(hud.showCallCount == 1)
         #expect(hud.showDidUpdatePanel == true)

@@ -7,14 +7,14 @@ import Foundation
 /// in `ShortcutsRegistry.dispatch(_:)`. The `rawValue` is the persistence key
 /// in `AppSettings.customShortcuts` and must be stable across releases.
 enum ShortcutAction: String, CaseIterable, Codable, Sendable {
-    case togglePopup
+    case togglePanel = "togglePopup"  // Persisted key, kept from when the panel was called the popup
     case targetAppVolumeUp = "frontmostAppVolumeUp"
     case targetAppVolumeDown = "frontmostAppVolumeDown"
     case targetAppMuteToggle = "frontmostAppMuteToggle"
 
     var displayName: String {
         switch self {
-        case .togglePopup: "Toggle FineTune Popup"
+        case .togglePanel: "Toggle FineTune Panel"
         case .targetAppVolumeUp: "App Volume Up"
         case .targetAppVolumeDown: "App Volume Down"
         case .targetAppMuteToggle: "App Mute"
@@ -27,7 +27,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     var supportsRepeat: Bool {
         switch self {
         case .targetAppVolumeUp, .targetAppVolumeDown: true
-        case .togglePopup, .targetAppMuteToggle: false
+        case .togglePanel, .targetAppMuteToggle: false
         }
     }
 }

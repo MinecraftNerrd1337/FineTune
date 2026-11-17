@@ -33,7 +33,7 @@ struct ShortcutsTab: View {
         SettingsSection("Volume") {
             SettingsRow(
                 "Volume Step",
-                description: "How much each keypress changes the volume. Applies to media keys, configured hotkeys, and arrow-key nav in the popup."
+                description: "How much each keypress changes the volume. Applies to media keys, configured hotkeys, and arrow-key nav in the panel."
             ) {
                 Picker("", selection: $settings.appSettings.volumeHotkeyStep) {
                     ForEach(VolumeHotkeyStep.allCases) { step in
@@ -110,7 +110,7 @@ struct ShortcutsTab: View {
 
     private func description(for action: ShortcutAction) -> String {
         switch action {
-        case .togglePopup: "Show or hide the menu bar popup"
+        case .togglePanel: "Show or hide the menu bar panel"
         case .targetAppVolumeUp: "Raise volume for the app playing audio"
         case .targetAppVolumeDown: "Lower volume for the app playing audio"
         case .targetAppMuteToggle: "Mute or unmute the app playing audio"
