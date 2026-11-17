@@ -228,7 +228,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				79SNAP0002F0600000008D52A /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */,
-				79FLUID0002F0600000008D52 /* XCRemoteSwiftPackageReference "FluidMenuBarExtra" */,
+				79FLUID0002F0600000008D52 /* XCLocalSwiftPackageReference "Packages/FluidMenuBarExtra" */,
 				79SPARK002F0600000008D52 /* XCRemoteSwiftPackageReference "Sparkle" */,
 				25AD8733711702DDEA8EAD12 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 			);
@@ -628,6 +628,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		79FLUID0002F0600000008D52 /* XCLocalSwiftPackageReference "Packages/FluidMenuBarExtra" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/FluidMenuBarExtra;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		25AD8733711702DDEA8EAD12 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -635,14 +642,6 @@
 			requirement = {
 				kind = upToNextMajorVersion;
 				minimumVersion = 2.0.0;
-			};
-		};
-		79FLUID0002F0600000008D52 /* XCRemoteSwiftPackageReference "FluidMenuBarExtra" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/wadetregaskis/FluidMenuBarExtra";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
 			};
 		};
 		79SNAP0002F0600000008D52A /* XCRemoteSwiftPackageReference "swift-snapshot-testing" */ = {
@@ -671,7 +670,7 @@
 		};
 		79FLUID0022F0600000008D52 /* FluidMenuBarExtra */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 79FLUID0002F0600000008D52 /* XCRemoteSwiftPackageReference "FluidMenuBarExtra" */;
+			package = 79FLUID0002F0600000008D52 /* XCLocalSwiftPackageReference "Packages/FluidMenuBarExtra" */;
 			productName = FluidMenuBarExtra;
 		};
 		79SNAP0012F0600000008D52A /* SnapshotTesting */ = {

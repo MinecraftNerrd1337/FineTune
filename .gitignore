@@ -37,3 +37,6 @@ scripts/spikes/
 
 # Brainstorming session artifacts
 .superpowers/
+
+# Xcode state of local packages
+**/.swiftpm/xcode/xcuserdata/
