@@ -232,7 +232,8 @@ struct DeviceRow: View {
                         isCorrectionEnabled: autoEQEnabled,
                         onCorrectionToggle: onAutoEQToggle,
                         preampEnabled: autoEQPreampEnabled,
-                        onPreampToggle: onAutoEQPreampToggle
+                        onPreampToggle: onAutoEQPreampToggle,
+                        deviceUID: device.uid
                     )
                 }
             }

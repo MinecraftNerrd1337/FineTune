@@ -85,6 +85,8 @@ The EQ Manager keeps two kinds of profiles:
 
 The **Use On** menu of the EQ Manager plays the preset shown on your output devices: check a device to make its AutoEQ use the preset, uncheck it to turn its correction off (its selection is kept, as with the wand's **Correction** switch).
 
+To hear a preset as you edit it, pick a device in the **Listen** menu (or open the EQ Manager from that device's AutoEQ menu, which listens on it and shows its preset). That device then plays the preset shown, unsaved changes included, and nothing is stored. The bar below the toolbar compares by ear: **Edited** (with your changes), **Saved**, **In Use** (what the device plays without the EQ Manager) and **Off** (correction off, preamp kept, at the same level). **Use on** makes the device keep the preset shown. **Stop Listening**, or closing the window, gives the device its own AutoEQ back.
+
 Changing the bands of a template saves a new preset, which remembers its template (**Replace → With Its Template** brings its bands back). The new preset can take over from the template on the devices that used it.
 
 Saving a preset asks for confirmation first (turn it off in **Settings → Audio → EQ Manager Presets**, or with the checkbox of the dialog), and the version it replaces is kept in the preset's **History** menu, where any earlier version can be restored. The number of versions kept is a setting (10 by default, 0 turns the history off). **Reset All Settings** keeps your presets and templates.

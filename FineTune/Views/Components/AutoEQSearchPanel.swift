@@ -18,6 +18,8 @@ struct AutoEQSearchPanel: View {
     var onCorrectionToggle: ((Bool) -> Void)?
     var preampEnabled: Bool = true
     var onPreampToggle: (() -> Void)?
+    /// The device whose AutoEQ this panel sets: the EQ Manager opens listening on it.
+    var deviceUID: String?
 
     @State private var hoveredID: String?
     @State private var highlightedIndex: Int?
@@ -344,7 +346,7 @@ struct AutoEQSearchPanel: View {
             // With it, both stay open.
             let stepAside = FluidMenuBarExtraBehavior.dismissesOnFocusLoss
             if stepAside { onDismiss() }
-            EQManagerWindowController.shared.show()
+            EQManagerWindowController.shared.show(listeningOn: deviceUID)
             if stepAside { FluidMenuBarExtraBehavior.dismiss() }
         } label: {
             HStack {

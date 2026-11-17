@@ -15,6 +15,7 @@ struct AutoEQPicker: View {
     var onCorrectionToggle: ((Bool) -> Void)?
     var preampEnabled: Bool = true
     var onPreampToggle: (() -> Void)?
+    var deviceUID: String?
 
     @State private var isExpanded = false
     @State private var isButtonHovered = false
@@ -107,7 +108,8 @@ struct AutoEQPicker: View {
                 isCorrectionEnabled: isCorrectionEnabled,
                 onCorrectionToggle: onCorrectionToggle,
                 preampEnabled: preampEnabled,
-                onPreampToggle: onPreampToggle
+                onPreampToggle: onPreampToggle,
+                deviceUID: deviceUID
             )
         }
         .frame(width: popoverWidth)

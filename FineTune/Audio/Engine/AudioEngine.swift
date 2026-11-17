@@ -35,6 +35,8 @@ final class AudioEngine {
     /// Set by `startGuardIfNeeded`, cleared by `stopStartGuard`: nothing else starts the guard.
     private var startGuardActive = false
     private var routingRebuildTask: Task<Void, Never>?
+    /// deviceUID → what the device plays while the EQ Manager listens on it (nil: no correction).
+    private var autoEQPreviews: [String: AutoEQProfile?] = [:]
 
     /// Factory for creating tap controllers. Overridable for testing.
     private let tapFactory: @MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling
@@ -975,6 +977,7 @@ final class AudioEngine {
     /// device has no correction, nil when the device is unknown or its profile still loading.
     private func immediateAutoEQProfile(for deviceUID: String) -> AutoEQProfile?? {
         guard let device = deviceMonitor.device(for: deviceUID) else { return nil }
+        if device.supportsAutoEQ, let preview = autoEQPreviews[deviceUID] { return .some(preview) }
         guard device.supportsAutoEQ, let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
             return .some(nil)
         }
@@ -1084,6 +1087,23 @@ final class AudioEngine {
         }
     }
 
+    // MARK: - AutoEQ Preview (EQ Manager)
+
+    /// Makes a device play `profile` (nil: no correction) instead of its stored AutoEQ, until
+    /// `endAutoEQPreview(on:)`. Nothing is stored: the EQ Manager plays the preset it shows,
+    /// saved or not, on the device it listens on.
+    func previewAutoEQ(_ profile: AutoEQProfile?, on deviceUID: String) {
+        if let current = autoEQPreviews[deviceUID], current == profile { return }
+        autoEQPreviews.updateValue(profile, forKey: deviceUID)
+        applyAutoEQToTaps(for: deviceUID)
+    }
+
+    /// The device plays its stored AutoEQ again.
+    func endAutoEQPreview(on deviceUID: String) {
+        guard autoEQPreviews.removeValue(forKey: deviceUID) != nil else { return }
+        applyAutoEQToTaps(for: deviceUID)
+    }
+
     /// Re-apply a preset to every tap whose device uses it (after it was edited and saved).
     func reapplyAutoEQProfile(id profileID: String) {
         for tap in taps.values {
@@ -1129,6 +1149,7 @@ final class AudioEngine {
     /// Synchronous in-memory AutoEQ profile lookup. nil = not yet cached.
     private func autoEQProfileForActivation(deviceUID: String) -> AutoEQProfile? {
         guard let device = deviceMonitor.device(for: deviceUID), device.supportsAutoEQ else { return nil }
+        if let preview = autoEQPreviews[deviceUID] { return preview }
         guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
               let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
         return Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled)
@@ -1136,7 +1157,7 @@ final class AudioEngine {
 
     /// The profile handed to the processor. With the correction switched off, the filters are
     /// dropped but the preamp stays, so switching the correction on and off compares at equal level.
-    private static func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
+    static func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
         guard !correctionEnabled else { return profile }
         var preampOnly = profile
         preampOnly.filters = []
@@ -1187,6 +1208,12 @@ final class AudioEngine {
         guard device.supportsAutoEQ else {
             apply(nil)
             logger.debug("AutoEQ skip for \(tap.app.name): \(device.name) doesn't support AutoEQ")
+            return
+        }
+
+        // The EQ Manager is listening on this device: it plays the preset shown there
+        if let preview = autoEQPreviews[deviceUID] {
+            apply(preview)
             return
         }
 
