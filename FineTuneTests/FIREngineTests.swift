@@ -328,6 +328,12 @@ struct FIRConvolverTests {
 @Suite("FIRProcessor")
 struct FIRProcessorTests {
 
+    /// A convolver for `taps`. Unwrapped here, where the type is not optional: passed straight
+    /// to `install`, which takes an optional, `#require` would check nothing.
+    private func filter(_ taps: [Float], latencySamples: Int = 0) throws -> FIRConvolver {
+        try #require(FIRConvolver(taps: taps, latencySamples: latencySamples))
+    }
+
     /// Feeds `frames` frames of a constant 1 and returns the left channel.
     private func render(_ processor: FIRProcessor, frames: Int) -> [Float] {
         var left: [Float] = []
@@ -356,7 +362,7 @@ struct FIRProcessorTests {
     @Test("A filter installed before audio starts applies from the first sample")
     func installBeforeAudio() throws {
         let processor = FIRProcessor()
-        processor.install(try #require(FIRConvolver(taps: [0.5], latencySamples: 12)), sampleRate: 48_000)
+        processor.install(try filter([0.5], latencySamples: 12), sampleRate: 48_000)
         #expect(processor.hasFilter)
         #expect(processor.latencySamples == 12)
         #expect(render(processor, frames: 1000).allSatisfy { abs($0 - 0.5) < 1e-6 })
@@ -366,7 +372,7 @@ struct FIRProcessorTests {
     func fadesIn() throws {
         let processor = FIRProcessor()
         _ = render(processor, frames: 256)
-        processor.install(try #require(FIRConvolver(taps: [0.5])), sampleRate: 48_000)
+        processor.install(try filter([0.5]), sampleRate: 48_000)
 
         let fadeFrames = Int(FIRProcessor.fadeSeconds * 48_000)
         let output = render(processor, frames: fadeFrames + 512)
@@ -383,7 +389,7 @@ struct FIRProcessorTests {
     @Test("Removing the filter fades back to the untouched signal")
     func fadesOut() throws {
         let processor = FIRProcessor()
-        processor.install(try #require(FIRConvolver(taps: [0.5])), sampleRate: 48_000)
+        processor.install(try filter([0.5]), sampleRate: 48_000)
         _ = render(processor, frames: 256)
         processor.install(nil, sampleRate: 48_000)
         #expect(!processor.hasFilter)
@@ -397,9 +403,9 @@ struct FIRProcessorTests {
     func installDuringFade() async throws {
         let processor = FIRProcessor()
         _ = render(processor, frames: 256)
-        processor.install(try #require(FIRConvolver(taps: [0.5])), sampleRate: 48_000)
+        processor.install(try filter([0.5]), sampleRate: 48_000)
         _ = render(processor, frames: 256)   // first crossfade under way
-        processor.install(try #require(FIRConvolver(taps: [0.25])), sampleRate: 48_000)
+        processor.install(try filter([0.25]), sampleRate: 48_000)
 
         // The first crossfade completes on the first filter
         let first = render(processor, frames: 2048)
@@ -414,9 +420,9 @@ struct FIRProcessorTests {
     @Test("With audio stopped, a new filter replaces the old one directly")
     func installWhileIdle() throws {
         let processor = FIRProcessor()
-        processor.install(try #require(FIRConvolver(taps: [0.5])), sampleRate: 48_000)
+        processor.install(try filter([0.5]), sampleRate: 48_000)
         _ = render(processor, frames: 256)
-        processor.install(try #require(FIRConvolver(taps: [0.25])), sampleRate: 48_000, audioThreadIdle: true)
+        processor.install(try filter([0.25]), sampleRate: 48_000, audioThreadIdle: true)
         #expect(render(processor, frames: 256).allSatisfy { abs($0 - 0.25) < 1e-6 })
     }
 }
