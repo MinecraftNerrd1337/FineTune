@@ -83,7 +83,7 @@ The EQ Manager keeps two kinds of profiles:
 - **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate, correction engine and precision can be edited.
 - **Presets**: created in the EQ Manager, empty or from a template, and edited in place.
 
-The **Use On** menu of the EQ Manager plays the preset shown on your output devices: check a device to make its AutoEQ use the preset, uncheck it to turn its correction off (its selection is kept, as with the wand's **Correction** switch).
+The **Devices** button of the EQ Manager shows how many output devices use the preset shown, and opens a list of them with what each one uses now. A preset can be used on several devices. Turn a device on to make its AutoEQ use the preset, off to turn its correction off (its selection is kept, as with the wand's **Correction** switch).
 
 To hear a preset as you edit it, pick a device in the **Listen** menu (or open the EQ Manager from that device's AutoEQ menu, which listens on it and shows its preset). That device then plays the preset shown, unsaved changes included, and nothing is stored. The bar below the toolbar compares by ear: **Edited** (with your changes), **Saved** and **In Use** (what the device plays without the EQ Manager). Its **Correction** and **Preamp** switches are the ones of the device's AutoEQ menu: turning Correction off plays the preset's preamp only, at the same level, and both switches stay as you leave them once the EQ Manager is closed. **Use on** makes the device keep the preset shown. **Stop Listening**, or closing the window, gives the device its own AutoEQ back.
 
