@@ -134,12 +134,35 @@ nonisolated enum AutoEQBaseRate {
     }
 }
 
+/// How closely a linear-phase FIR preset follows its curve (`AutoEQProfile.linearPhaseToleranceDB`).
+///
+/// The linear-phase engine picks the shortest filter whose curve stays within this tolerance
+/// above 100 Hz (twice it at 20 Hz). A tighter tolerance gives a longer filter: more latency and
+/// more CPU. The latency still stops at 85 ms; the EQ Manager shows the error actually reached.
+nonisolated enum AutoEQLinearPhasePrecision {
+    /// The tolerance of presets that never chose one (`FIRDesign.linearPhaseToleranceDB`).
+    static let standard = 0.5
+    /// Tolerances offered in the EQ Manager, in dB, tightest first.
+    static let choices: [Double] = [0.05, 0.1, 0.25, 0.5, 1.0]
+
+    /// The value to store for a chosen tolerance: nil for the standard one or an unknown value.
+    static func stored(_ tolerance: Double?) -> Double? {
+        guard let tolerance, tolerance != standard, choices.contains(tolerance) else { return nil }
+        return tolerance
+    }
+
+    static func label(_ tolerance: Double) -> String {
+        let value = "±\(String(format: "%g", tolerance)) dB"
+        return tolerance == standard ? "\(value) (Standard)" : value
+    }
+}
+
 /// A headphone/speaker correction profile.
 ///
 /// Profiles come in two roles (see `isTemplate`):
 /// - a **template** is what comes from outside: an imported file, a profile of the AutoEQ catalog
 ///   or a downloaded copy of one. Its correction (bands or curve, and preamp) never changes;
-///   only its name, base rate and engine can be edited.
+///   only its name, base rate, engine and precision can be edited.
 /// - a **preset** is created in the EQ Manager, empty or from a template (`templateID`), and is
 ///   edited in place. Its earlier versions are kept by `AutoEQPresetHistoryStore`.
 nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
@@ -161,6 +184,9 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     var curve: [AutoEQCurvePoint]
     /// The template a preset was created from. Nil for templates and for presets made from scratch.
     var templateID: String?
+    /// Tolerance of the linear-phase FIR engine, in dB. Nil for the standard one. See
+    /// `AutoEQLinearPhasePrecision` and `effectiveLinearPhaseToleranceDB`.
+    var linearPhaseToleranceDB: Double?
 
     static let maxFilters = 128
     static let maxCurvePoints = 1024
@@ -169,6 +195,7 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
 
     enum CodingKeys: String, CodingKey {
         case id, name, source, preampDB, filters, measuredBy, optimizedSampleRate, kind, engine, curve, templateID
+        case linearPhaseToleranceDB
     }
 
     init(
@@ -179,7 +206,8 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         kind: AutoEQPresetKind = .parametric,
         engine: AutoEQCorrectionEngine = .biquad,
         curve: [AutoEQCurvePoint] = [],
-        templateID: String? = nil
+        templateID: String? = nil,
+        linearPhaseToleranceDB: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -192,6 +220,7 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         self.engine = engine
         self.curve = curve
         self.templateID = templateID
+        self.linearPhaseToleranceDB = linearPhaseToleranceDB
     }
 
     init(from decoder: Decoder) throws {
@@ -207,6 +236,7 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
         engine = try container.decodeIfPresent(AutoEQCorrectionEngine.self, forKey: .engine) ?? .biquad
         curve = try container.decodeIfPresent([AutoEQCurvePoint].self, forKey: .curve) ?? []
         templateID = try container.decodeIfPresent(String.self, forKey: .templateID)
+        linearPhaseToleranceDB = try container.decodeIfPresent(Double.self, forKey: .linearPhaseToleranceDB)
     }
 }
 
@@ -216,7 +246,7 @@ nonisolated extension AutoEQProfile {
     var isTemplate: Bool { source.isTemplate }
 
     /// Whether two profiles apply the same correction: same kind, bands or curve, and preamp.
-    /// Name, base rate and engine are settings of the profile, not part of its correction.
+    /// Name, base rate, engine and precision are settings of the profile, not part of its correction.
     func hasSameCorrection(as other: AutoEQProfile) -> Bool {
         kind == other.kind && filters == other.filters && curve == other.curve && preampDB == other.preampDB
     }
@@ -240,6 +270,11 @@ nonisolated extension AutoEQProfile {
     /// one cannot render this kind of preset (a graphic preset left on a biquad engine).
     var effectiveEngine: AutoEQCorrectionEngine {
         AutoEQCorrectionEngine.available(for: kind).contains(engine) ? engine : .minimumPhaseFIR
+    }
+
+    /// The tolerance the linear-phase FIR engine designs this preset's filter for, in dB.
+    var effectiveLinearPhaseToleranceDB: Double {
+        linearPhaseToleranceDB ?? AutoEQLinearPhasePrecision.standard
     }
 
     /// The base rate for the response math: nil for analog filters.
@@ -298,7 +333,8 @@ extension AutoEQProfile {
             kind: kind,
             engine: engine,
             curve: Array(validCurve.prefix(Self.maxCurvePoints)),
-            templateID: templateID
+            templateID: templateID,
+            linearPhaseToleranceDB: AutoEQLinearPhasePrecision.stored(linearPhaseToleranceDB)
         )
     }
 }

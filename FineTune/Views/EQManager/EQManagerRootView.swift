@@ -365,6 +365,7 @@ struct EQManagerRootView: View {
             draft.name = old.name
             draft.optimizedSampleRate = old.optimizedSampleRate
             draft.engine = old.engine
+            draft.linearPhaseToleranceDB = old.linearPhaseToleranceDB
         }
     }
 

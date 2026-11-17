@@ -15,6 +15,8 @@ enum FIRKernelCache {
         let engine: AutoEQCorrectionEngine
         let baseRate: Double
         let sampleRate: Double
+        /// Linear-phase tolerance, 0 for minimum phase.
+        let toleranceDB: Double
         let kernel: FIRDesign.Kernel
     }
 
@@ -27,11 +29,12 @@ enum FIRKernelCache {
         dispatchPrecondition(condition: .onQueue(.main))
         let engine = profile.effectiveEngine
         guard engine.isFIR, profile.hasCorrection, sampleRate > 0 else { return nil }
+        let toleranceDB = engine == .linearPhaseFIR ? profile.effectiveLinearPhaseToleranceDB : 0
 
         if let index = entries.firstIndex(where: {
             $0.sampleRate == sampleRate && $0.engine == engine && $0.kind == profile.kind
                 && $0.filters == profile.filters && $0.curve == profile.curve
-                && $0.baseRate == profile.optimizedSampleRate
+                && $0.baseRate == profile.optimizedSampleRate && $0.toleranceDB == toleranceDB
         }) {
             let entry = entries.remove(at: index)
             entries.append(entry)
@@ -41,21 +44,29 @@ enum FIRKernelCache {
         let size = FIRDesign.gridSize(sampleRate: sampleRate)
         let target = AutoEQResponse.designGrid(of: profile, sampleRate: sampleRate, gridSize: size)
         let designed = engine == .linearPhaseFIR
-            ? FIRDesign.linearPhase(targetDB: target, sampleRate: sampleRate)
+            ? FIRDesign.linearPhase(targetDB: target, sampleRate: sampleRate, toleranceDB: toleranceDB)
             : FIRDesign.minimumPhase(targetDB: target, sampleRate: sampleRate)
         guard let kernel = designed else { return nil }
 
         entries.append(Entry(kind: profile.kind, filters: profile.filters, curve: profile.curve,
                              engine: engine, baseRate: profile.optimizedSampleRate,
-                             sampleRate: sampleRate, kernel: kernel))
+                             sampleRate: sampleRate, toleranceDB: toleranceDB, kernel: kernel))
         if entries.count > capacity { entries.removeFirst() }
         return kernel
     }
 
     /// Latency the preset's engine adds, in milliseconds (0 for every engine but linear-phase FIR).
     static func latencyMilliseconds(of profile: AutoEQProfile, sampleRate: Double) -> Double {
+        linearPhaseSummary(of: profile, sampleRate: sampleRate)?.latencyMS ?? 0
+    }
+
+    /// Latency and accuracy of the preset's linear-phase filter, for the EQ Manager. Nil when the
+    /// preset does not use that engine or has no curve.
+    static func linearPhaseSummary(
+        of profile: AutoEQProfile, sampleRate: Double
+    ) -> (latencyMS: Double, maxErrorDB: Double)? {
         guard profile.effectiveEngine == .linearPhaseFIR,
-              let kernel = kernel(for: profile, sampleRate: sampleRate) else { return 0 }
-        return Double(kernel.latencySamples) / sampleRate * 1000
+              let kernel = kernel(for: profile, sampleRate: sampleRate) else { return nil }
+        return (Double(kernel.latencySamples) / sampleRate * 1000, kernel.maxErrorDB)
     }
 }

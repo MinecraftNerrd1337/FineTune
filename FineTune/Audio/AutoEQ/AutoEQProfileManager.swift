@@ -85,13 +85,14 @@ final class AutoEQProfileManager {
 
     /// Earlier builds saved the edits of an imported file in place. Nothing is lost: the edited
     /// version becomes a preset made from the file, the file becomes a template again (keeping
-    /// the name, base rate and engine it was given), and the devices and favorite that used the
+    /// the name, base rate, engine and precision it was given), and the devices and favorite that used the
     /// edited version now use the preset. Runs once: the template then matches its file again.
     private func splitEditedImport(_ edited: AutoEQProfile, file: AutoEQProfile, store: SettingsManager) {
         var template = file
         template.name = edited.name
         template.optimizedSampleRate = edited.optimizedSampleRate
         template.engine = edited.engine
+        template.linearPhaseToleranceDB = edited.linearPhaseToleranceDB
         let preset = AutoEQProfile(
             id: UUID().uuidString,
             name: edited.name,
@@ -103,7 +104,8 @@ final class AutoEQProfileManager {
             kind: edited.kind,
             engine: edited.engine,
             curve: edited.curve,
-            templateID: file.id
+            templateID: file.id,
+            linearPhaseToleranceDB: edited.linearPhaseToleranceDB
         )
         store.saveAutoEQUserProfile(preset)
         store.saveAutoEQUserProfile(template)
@@ -228,7 +230,8 @@ final class AutoEQProfileManager {
             kind: draft.kind,
             engine: draft.engine,
             curve: draft.curve,
-            templateID: draft.isTemplate ? draft.id : draft.templateID
+            templateID: draft.isTemplate ? draft.id : draft.templateID,
+            linearPhaseToleranceDB: draft.linearPhaseToleranceDB
         )
         userProfileStore.saveAutoEQUserProfile(preset)
         if userProfileStore.isAutoEQFavorite(id: draft.id) {
@@ -262,7 +265,8 @@ final class AutoEQProfileManager {
             optimizedSampleRate: fetched.optimizedSampleRate,
             kind: fetched.kind,
             engine: fetched.engine,
-            curve: fetched.curve
+            curve: fetched.curve,
+            linearPhaseToleranceDB: fetched.linearPhaseToleranceDB
         )
         userProfileStore.saveAutoEQUserProfile(copy)
         profiles[copy.id] = copy

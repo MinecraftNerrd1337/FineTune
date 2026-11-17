@@ -31,7 +31,9 @@ nonisolated enum FIRDesign {
     /// Tolerance above 100 Hz, in dB. Below, it widens up to twice this at 20 Hz: the ear is
     /// less sensitive to small level errors there, and they are what long filters are spent on.
     static let minimumPhaseToleranceDB = 0.1
-    static let linearPhaseToleranceDB = 0.5
+    /// Default of the linear-phase design. Each preset can choose another
+    /// (`AutoEQProfile.linearPhaseToleranceDB`).
+    static let linearPhaseToleranceDB = AutoEQLinearPhasePrecision.standard
 
     /// 1 at 48 kHz and below, then 2, 4, 8…: design sizes grow with the sample rate so that
     /// resolution in Hz, and latency in milliseconds, stay the same.
@@ -122,7 +124,13 @@ nonisolated enum FIRDesign {
     // MARK: - Linear phase
 
     /// Same `targetDB` grid as `minimumPhase`.
-    static func linearPhase(targetDB: [Double], sampleRate: Double) -> Kernel? {
+    /// - Parameter toleranceDB: the largest deviation allowed above 100 Hz. A tighter one gives a
+    ///   longer filter, up to the longest of `linearPhaseHalfLengths`, which is used even when it
+    ///   does not reach the tolerance (`maxErrorDB` then says how close it gets).
+    static func linearPhase(
+        targetDB: [Double], sampleRate: Double, toleranceDB: Double = FIRDesign.linearPhaseToleranceDB
+    ) -> Kernel? {
+        guard toleranceDB > 0 else { return nil }
         let size = gridSize(sampleRate: sampleRate)
         guard targetDB.count == size / 2 + 1, let fft = DesignFFT(count: size) else { return nil }
 
@@ -142,7 +150,7 @@ nonisolated enum FIRDesign {
             guard 2 * half + 1 < size else { break }
             let taps = windowed(zeroPhase, half: half)
             let (ratio, maxError) = error(of: taps, targetDB: targetDB, sampleRate: sampleRate,
-                                          toleranceDB: linearPhaseToleranceDB, fft: fft)
+                                          toleranceDB: toleranceDB, fft: fft)
             best = Kernel(taps: taps.map { Float($0) }, latencySamples: half, maxErrorDB: maxError)
             if ratio <= 1 { break }
         }

@@ -11,8 +11,8 @@ struct EQManagerPresetDetail: View {
 
     @State private var selectedBand: Int?
     @State private var scaleDB: Double = 12
-    /// Latency of the preset's linear-phase filter in milliseconds; nil while it is computed.
-    @State private var latencyMS: Double?
+    /// Latency and accuracy of the preset's linear-phase filter; nil while they are computed.
+    @State private var linearPhase: LinearPhaseSummary?
 
     private var preset: AutoEQProfile { editor.draft }
     private var isEditing: Bool { editor.isEditing }
@@ -61,12 +61,18 @@ struct EQManagerPresetDetail: View {
         }
         .task(id: LatencyKey(preset)) {
             // Designing the filter takes a few milliseconds: wait until edits pause
-            latencyMS = nil
+            linearPhase = nil
             guard preset.effectiveEngine == .linearPhaseFIR, preset.hasCorrection else { return }
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled else { return }
-            latencyMS = FIRKernelCache.latencyMilliseconds(of: preset, sampleRate: AutoEQResponse.defaultSampleRate)
+            linearPhase = FIRKernelCache.linearPhaseSummary(of: preset, sampleRate: AutoEQResponse.defaultSampleRate)
+                .map { LinearPhaseSummary(latencyMS: $0.latencyMS, maxErrorDB: $0.maxErrorDB) }
         }
+    }
+
+    private struct LinearPhaseSummary {
+        let latencyMS: Double
+        let maxErrorDB: Double
     }
 
     /// What the latency of a preset depends on.
@@ -75,6 +81,7 @@ struct EQManagerPresetDetail: View {
         let filters: [AutoEQFilter]
         let curve: [AutoEQCurvePoint]
         let baseRate: Double
+        let toleranceDB: Double
 
         init(_ preset: AutoEQProfile) {
             engine = preset.effectiveEngine
@@ -83,14 +90,22 @@ struct EQManagerPresetDetail: View {
             filters = isLinear ? preset.filters : []
             curve = isLinear ? preset.curve : []
             baseRate = isLinear ? preset.optimizedSampleRate : 0
+            toleranceDB = isLinear ? preset.effectiveLinearPhaseToleranceDB : 0
         }
     }
 
     private var latencyText: String {
         guard preset.effectiveEngine == .linearPhaseFIR else { return "None" }
         guard preset.hasCorrection else { return "—" }
-        guard let latencyMS else { return "…" }
-        return String(format: "%.1f ms", latencyMS)
+        guard let linearPhase else { return "…" }
+        return String(format: "%.1f ms", linearPhase.latencyMS)
+    }
+
+    /// Largest deviation of the linear-phase filter from the curve, 20 Hz to 20 kHz.
+    private var maxErrorText: String {
+        guard preset.hasCorrection else { return "—" }
+        guard let linearPhase else { return "…" }
+        return String(format: "%.2f dB", linearPhase.maxErrorDB)
     }
 
     /// ±24 dB when the preset does not fit in ±12 dB.
@@ -180,8 +195,37 @@ struct EQManagerPresetDetail: View {
                 }
                 .help("Sample rate the filters were designed for. AutoEQ uses 44.1 kHz. The exact engines reproduce the curve the filters have at this rate, whatever the rate of the device.")
             }
+            if preset.effectiveEngine == .linearPhaseFIR {
+                Divider()
+                row("Precision") {
+                    if isEditing {
+                        Picker("Precision", selection: Binding(
+                            get: { preset.effectiveLinearPhaseToleranceDB },
+                            set: { tolerance in
+                                editor.apply { $0.linearPhaseToleranceDB = AutoEQLinearPhasePrecision.stored(tolerance) }
+                            }
+                        )) {
+                            ForEach(AutoEQLinearPhasePrecision.choices, id: \.self) {
+                                Text(AutoEQLinearPhasePrecision.label($0)).tag($0)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 170)
+                    } else {
+                        valueText(AutoEQLinearPhasePrecision.label(preset.effectiveLinearPhaseToleranceDB))
+                    }
+                }
+                .help("How closely the filter follows the curve above 100 Hz (twice as loosely at 20 Hz). A tighter precision needs a longer filter: more latency and more CPU. The latency stops at 85 ms, so a very tight precision may not be reached: Max error shows how close the filter gets.")
+            }
             Divider()
             row("Latency") { valueText(latencyText) }
+            if preset.effectiveEngine == .linearPhaseFIR {
+                Divider()
+                row("Max error") { valueText(maxErrorText) }
+                    .help("Largest difference between the filter and the curve, from 20 Hz to 20 kHz, at 48 kHz.")
+            }
             Divider()
             row("Role") { valueText(preset.isTemplate ? "Template" : "Preset") }
                 .help(preset.isTemplate

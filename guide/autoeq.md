@@ -65,6 +65,10 @@ A filter list is made for one sample rate: AutoEQ, like most tools, optimises it
 - **Biquad** re-tunes each filter's frequency for the device rate, as before.
 - **Analog** treats the filters as analog prototypes, for lists designed that way.
 
+### Linear-phase precision
+
+The **Linear-phase FIR** engine adds a latency: it uses the shortest filter that follows the curve closely enough. **Precision** (EQ Manager, edit mode, shown with that engine) sets how closely: ±0.5 dB above 100 Hz by default, from ±0.05 to ±1 dB, and twice as loose at 20 Hz. A tighter precision gives a longer filter, so more latency and a little more CPU. The latency stops at 85 ms: **Latency** and **Max error** show what the filter actually reaches.
+
 ## Where to Get Profiles
 
 - **Built-in search** — The easiest way. Thousands of headphones are available directly in FineTune.
@@ -76,7 +80,7 @@ A filter list is made for one sample rate: AutoEQ, like most tools, optimises it
 
 The EQ Manager keeps two kinds of profiles:
 
-- **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate and correction engine can be edited.
+- **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate, correction engine and precision can be edited.
 - **Presets**: created in the EQ Manager, empty or from a template, and edited in place.
 
 The **Use On** menu of the EQ Manager plays the preset shown on your output devices: check a device to make its AutoEQ use the preset, uncheck it to turn its correction off (its selection is kept, as with the wand's **Correction** switch).
