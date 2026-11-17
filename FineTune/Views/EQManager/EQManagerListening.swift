@@ -11,14 +11,15 @@ import Foundation
 @MainActor
 final class EQManagerListening {
 
-    /// What the listened device plays, to compare by ear.
+    /// What the listened device plays, to compare by ear. Only the user changes it: a source
+    /// stays chosen when another preset is shown.
     enum Source: String, CaseIterable, Identifiable {
-        /// The preset shown, with its unsaved changes.
-        case shown
+        /// The device's own AutoEQ, as it plays without the EQ Manager.
+        case assigned
         /// The preset shown as saved, without its unsaved changes.
         case saved
-        /// The device's own AutoEQ, as it plays without the EQ Manager.
-        case inUse
+        /// The preset shown, with its unsaved changes.
+        case shown
 
         var id: Self { self }
     }

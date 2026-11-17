@@ -106,6 +106,11 @@ struct EQManagerRootView: View {
         .onChange(of: listening.deviceUID) { _, _ in
             listening.update(listenTarget, engine: audioEngine)
         }
+        // Saved goes once the changes are saved or discarded: the edits it was compared with
+        // are now the preset shown, and it must not come back chosen with the next change
+        .onChange(of: editor?.hasChanges == true) { _, hasChanges in
+            if !hasChanges && listening.source == .saved { listening.source = .shown }
+        }
         .onChange(of: listening.openRequest, initial: true) { _, request in
             if request > 0, let uid = listening.deviceUID {
                 showPreset(inUseOn: uid, orNone: listening.openedFromDeviceMenu)
@@ -303,23 +308,21 @@ struct EQManagerRootView: View {
                         .foregroundStyle(DesignTokens.Colors.textPrimary)
                 }
                 .lineLimit(1)
-                if let editor {
-                    // Only when there is something to compare: the edits, or another preset in use
-                    if listenSources.count > 1 {
-                        listenBarDivider
-                        Picker("Hear", selection: Binding(
-                            get: { effectiveListenSource },
-                            set: { listening.source = $0 }
-                        )) {
-                            ForEach(listenSources) { source in
-                                Text(listenLabel(source, editor)).tag(source)
-                            }
+                if editor != nil {
+                    // Always the same choices, so the one chosen never changes by itself
+                    listenBarDivider
+                    Picker("Hear", selection: Binding(
+                        get: { effectiveListenSource },
+                        set: { listening.source = $0 }
+                    )) {
+                        ForEach(listenSources) { source in
+                            Text(listenLabel(source)).tag(source)
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
-                        .help(listenHelp(uid, name: name))
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .help(listenHelp(uid, name: name))
                 } else {
                     listenBarDivider
                     Text(settings.getAutoEQSelection(for: uid) == nil
@@ -384,11 +387,9 @@ struct EQManagerRootView: View {
 
     /// The comparisons that differ from one another for the preset shown.
     private var listenSources: [EQManagerListening.Source] {
-        guard let editor, let uid = listening.deviceUID else { return [] }
-        var sources: [EQManagerListening.Source] = [.shown]
-        if editor.hasChanges { sources.append(.saved) }
-        if !plays(uid, editor.original.id) { sources.append(.inUse) }
-        return sources
+        guard let editor, listening.deviceUID != nil else { return [] }
+        // Saved is the preset shown without its changes: only while there are some
+        return editor.hasChanges ? [.assigned, .saved, .shown] : [.assigned, .shown]
     }
 
     /// The chosen comparison, or the preset shown once the chosen one no longer applies.
@@ -407,7 +408,7 @@ struct EQManagerRootView: View {
         switch effectiveListenSource {
         case .shown: return heard(editor.draft)
         case .saved: return heard(editor.original)
-        case .inUse: return .stored
+        case .assigned: return .stored
         }
     }
 
@@ -416,23 +417,27 @@ struct EQManagerRootView: View {
         settings.getAutoEQSelection(for: uid)?.isEnabled ?? true
     }
 
-    private func listenLabel(_ source: EQManagerListening.Source, _ editor: EQManagerEditor) -> String {
+    private func listenLabel(_ source: EQManagerListening.Source) -> String {
         switch source {
-        case .shown: return editor.hasChanges ? "Edited" : "This Preset"
+        case .assigned: return "Assigned"
         case .saved: return "Saved"
-        case .inUse: return "In Use"
+        case .shown: return "Shown Below"
         }
     }
 
     private func listenHelp(_ uid: String, name: String) -> String {
-        var parts = ["Edited: with your unsaved changes.", "Saved: as stored."]
+        let assigned: String
         if let selection = settings.getAutoEQSelection(for: uid) {
             let preset = profileManager.profile(for: selection.profileID)?.name ?? "another preset"
-            parts.append("In Use: what \(name) plays without the EQ Manager (\(preset)\(selection.isEnabled ? "" : ", correction off")).")
+            assigned = "\(preset)\(selection.isEnabled ? "" : ", correction off")"
         } else {
-            parts.append("In Use: what \(name) plays without the EQ Manager (no correction).")
+            assigned = "no correction"
         }
-        return parts.joined(separator: "\n")
+        return [
+            "Assigned: what \(name) plays without the EQ Manager (\(assigned)).",
+            "Saved: the preset shown below, as stored.",
+            "Shown Below: the preset shown below, with your unsaved changes.",
+        ].joined(separator: "\n")
     }
 
     /// The preset chooser, to show a preset or to replace the bands of the one shown.
