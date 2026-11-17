@@ -76,6 +76,8 @@ final class ProcessTapController: ProcessTapControlling {
     private nonisolated(unsafe) var _activationHostTime: UInt64 = 0
     /// Set once any audio callback has rendered at least one buffer.
     private nonisolated(unsafe) var _hasRenderedAudio: Bool = false
+    /// Host tick of the last buffer whose captured input was audible (`StartGuard`).
+    private nonisolated(unsafe) var _lastCapturedAudioHostTime: UInt64 = 0
 
     /// Callback role identification — RT-safe via atomic UInt32 reads.
     /// Each IO proc closure captures an immutable callbackID at creation.
@@ -178,6 +180,7 @@ final class ProcessTapController: ProcessTapControlling {
 
     var audioLevel: Float { crossfadeState.isActive ? max(_peakLevel, _secondaryPeakLevel) : _peakLevel }
     var isForceSilenced: Bool { _forceSilence }
+    var lastCapturedAudioHostTime: UInt64 { _lastCapturedAudioHostTime }
 
     var capturedProcessObjectIDs: Set<AudioObjectID> {
         var captured = Set<AudioObjectID>()
@@ -186,6 +189,9 @@ final class ProcessTapController: ProcessTapControlling {
         }
         return captured
     }
+
+    /// Input peak above which a buffer counts as the app's audio for `lastCapturedAudioHostTime`.
+    nonisolated private static let capturedAudioThreshold: Float = 0.0001
 
     nonisolated private static let hostTimeNanosScale: Double = {
         var info = mach_timebase_info_data_t()
@@ -751,6 +757,7 @@ final class ProcessTapController: ProcessTapControlling {
         _lastRenderHostTime = 0
         _activationHostTime = mach_absolute_time()
         _hasRenderedAudio = false
+        _lastCapturedAudioHostTime = 0
 
         // Create process tap. Prefer stream-specific tap for multichannel devices to avoid
         // stereo matrix attenuation on interfaces with many output channels.
@@ -1019,6 +1026,7 @@ final class ProcessTapController: ProcessTapControlling {
         _lastRenderHostTime = 0
         _activationHostTime = 0
         _hasRenderedAudio = false
+        _lastCapturedAudioHostTime = 0
 
         crossfadeTask?.cancel()
         crossfadeTask = nil
@@ -1769,6 +1777,7 @@ final class ProcessTapController: ProcessTapControlling {
             }
         }
         let rawPeak = min(maxPeak, 1.0)
+        if rawPeak > Self.capturedAudioThreshold { _lastCapturedAudioHostTime = renderHostTime }
 
         if isPrimary {
             _peakLevel = _peakLevel + levelSmoothingFactor * (rawPeak - _peakLevel)

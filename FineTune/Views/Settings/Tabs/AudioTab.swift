@@ -53,6 +53,9 @@ struct AudioTab: View {
         .onChange(of: settings.appSettings.perDeviceMixingEnabled) { _, _ in
             audioEngine.reconcileRoutingMode()
         }
+        .onChange(of: settings.appSettings.startGuardEnabled) { _, newValue in
+            audioEngine.setStartGuardEnabled(newValue)
+        }
     }
 
     // MARK: - Volume
@@ -121,6 +124,16 @@ struct AudioTab: View {
                 description: "Play the apps of each stereo output through one stream, so AutoEQ corrects their sum once per device. Multichannel and multi-device outputs stay per app"
             ) {
                 Toggle("", isOn: $settings.appSettings.perDeviceMixingEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
+                "Protect App Starts",
+                description: "Keep an app silent for the instant before FineTune takes it over, so its sound never starts without FineTune's volume"
+            ) {
+                Toggle("", isOn: $settings.appSettings.startGuardEnabled)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()

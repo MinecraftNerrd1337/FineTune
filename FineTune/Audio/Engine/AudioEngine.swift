@@ -27,6 +27,14 @@ final class AudioEngine {
 
     /// The per-DAC mixers of the per-DAC routing mode (`AppSettings.perDeviceMixingEnabled`).
     private let mixerRegistry: DeviceMixerRegistry
+    /// Mutes apps from their first sample until their tap carries them. Nil in tests.
+    private let startGuard: StartGuard?
+    private var startGuardState = StartGuardPolicy.State()
+    private var startGuardPending = false
+    private var startGuardTask: Task<Void, Never>?
+    /// Set by `startGuardIfNeeded`, cleared by `stopStartGuard`: nothing else starts the guard.
+    private var startGuardActive = false
+    private var routingRebuildTask: Task<Void, Never>?
 
     /// Factory for creating tap controllers. Overridable for testing.
     private let tapFactory: @MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling
@@ -235,6 +243,9 @@ final class AudioEngine {
 
         let registry = DeviceMixerRegistry(deviceMonitor: realDeviceMonitor)
         self.mixerRegistry = registry
+        // Real taps only, in the running app: tests never mute the Mac they run on
+        self.startGuard = tapFactory == nil && startMonitorsAutomatically
+            ? StartGuard() : nil
 
         // Tap factory: use provided factory or default to ProcessTapController
         if let factory = tapFactory {
@@ -304,6 +315,7 @@ final class AudioEngine {
                 // Start device volume monitor AFTER deviceMonitor.start() populates devices
                 self.deviceVolumeMonitor.start()
 
+                self.startGuardIfNeeded()
                 self.applyPersistedSettings()
                 self.registerNewDevicesInPriority()
                 if manager.appSettings.lockInputDevice {
@@ -326,6 +338,7 @@ final class AudioEngine {
                 guard let self else { return }
                 if self.permission.status == .authorized {
                     self.processMonitor.start()
+                    self.startGuardIfNeeded()
                     self.applyPersistedSettings()
                     self.startHealthMonitor()
                     self.logger.info("Audio capture authorized — process monitor started")
@@ -514,6 +527,7 @@ final class AudioEngine {
         appDeviceRouting.removeValue(forKey: app.id)
         followsDefault.remove(app.id)
         appliedPIDs.remove(app.id)
+        reconcileStartGuard()
     }
 
     // MARK: - Call Passthrough
@@ -556,15 +570,99 @@ final class AudioEngine {
 
     /// Rebuilds every tap after the routing mode changed (per app or per DAC). Routing state
     /// is kept; each app is re-tapped on the same devices with the new kind of controller.
+    ///
+    /// With the start guard on, every tapped app is first taken back under the guard, so it
+    /// stays silent between its old tap and its new one instead of playing directly.
     func reconcileRoutingMode() {
+        routingRebuildTask?.cancel()
+        routingRebuildTask = nil
+        guard let startGuard, startGuard.isRunning, !taps.isEmpty else {
+            rebuildTapsForRoutingMode()
+            return
+        }
+        startGuardState.forced.formUnion(taps.keys)
+        reconcileStartGuard()
+        routingRebuildTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: StartGuard.holdDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.routingRebuildTask = nil
+            self.rebuildTapsForRoutingMode()
+        }
+    }
+
+    private func rebuildTapsForRoutingMode() {
         for (pid, tap) in taps {
             tap.invalidate()
             appliedPIDs.remove(pid)
         }
         taps.removeAll()
         mixerRegistry.invalidateAll()
+        // The new taps let their apps go as soon as they carry them
+        startGuardState.forced.removeAll()
         applyPersistedSettings()
         logger.info("Routing mode: \(self.settingsManager.appSettings.perDeviceMixingEnabled ? "per DAC" : "per app", privacy: .public)")
+    }
+
+    // MARK: - Start Guard
+
+    /// Starts the start guard when it is enabled and taps can be made.
+    func startGuardIfNeeded() {
+        guard startGuard != nil, settingsManager.appSettings.startGuardEnabled,
+              permission.status == .authorized else { return }
+        startGuardActive = true
+        reconcileStartGuard()
+        guard startGuardTask == nil else { return }
+        startGuardTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                // Often while an app is held as it plays (its tap confirmation, the fail-safe),
+                // else only for the guard's watchdog
+                let pending = self?.startGuardPending ?? false
+                try? await Task.sleep(for: pending ? .milliseconds(100) : .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                self.reconcileStartGuard()
+            }
+        }
+    }
+
+    /// Stops the start guard: every app it held plays directly again.
+    func stopStartGuard() {
+        startGuardActive = false
+        startGuardTask?.cancel()
+        startGuardTask = nil
+        startGuard?.invalidate()
+        startGuardState = StartGuardPolicy.State()
+        startGuardPending = false
+    }
+
+    /// Settings → Audio → Protect App Starts.
+    func setStartGuardEnabled(_ enabled: Bool) {
+        if enabled { startGuardIfNeeded() } else { stopStartGuard() }
+    }
+
+    /// Holds every app FineTune will tap and has no tap carrying yet, lets the rest go.
+    private func reconcileStartGuard() {
+        guard let startGuard, startGuardActive,
+              settingsManager.appSettings.startGuardEnabled,
+              permission.status == .authorized else { return }
+        let apps = processMonitor.activeApps.map { app in
+            StartGuardPolicy.App(
+                pid: app.id,
+                processes: app.processObjectIDs,
+                isEligible: !settingsManager.isIgnored(app.persistenceIdentifier) && !isCallPassthrough(app),
+                isStreaming: processMonitor.isStreaming(app),
+                lastCapturedHostTime: taps[app.id]?.lastCapturedAudioHostTime ?? 0
+            )
+        }
+        let decision = StartGuardPolicy.decide(
+            apps: apps, state: startGuardState, now: mach_absolute_time(),
+            failSafeTicks: StartGuardPolicy.ticks(seconds: StartGuard.failSafeSeconds))
+        startGuardState = decision.state
+        startGuardPending = decision.isPending
+        for pid in decision.newlyReleased {
+            let name = processMonitor.activeApps.first { $0.id == pid }?.name ?? "PID \(pid)"
+            logger.warning("Start guard: \(name, privacy: .public) played \(StartGuard.failSafeSeconds)s with no tap carrying it, let go")
+        }
+        startGuard.update(held: decision.held, allProcesses: (try? AudioObjectID.readProcessList()) ?? [])
     }
 
     /// Unhide an app by its persistence identifier.
@@ -662,6 +760,7 @@ final class AudioEngine {
             processMonitor.start()
         }
         deviceMonitor.start()
+        startGuardIfNeeded()
         applyPersistedSettings()
         if permission.status == .authorized {
             startHealthMonitor()
@@ -677,6 +776,9 @@ final class AudioEngine {
 
     func stop() {
         stopHealthMonitor()
+        routingRebuildTask?.cancel()
+        routingRebuildTask = nil
+        stopStartGuard()
         processMonitor.stop()
         deviceMonitor.stop()
         for tap in taps.values {
@@ -705,6 +807,7 @@ final class AudioEngine {
 
         // 1. Clear persisted state
         settingsManager.resetAllSettings()
+        setStartGuardEnabled(settingsManager.appSettings.startGuardEnabled)
 
         // 2. Clear in-memory routing and tracking state
         appliedPIDs.removeAll()
@@ -1342,6 +1445,8 @@ final class AudioEngine {
 
     func applyPersistedSettings() {
         guard permission.status == .authorized else { return }
+        // New taps, released ones and changed settings all change what the guard holds
+        defer { reconcileStartGuard() }
 
         // Warm the AutoEQ cache for every (app, device) selection so that subsequent
         // tap activations can apply correction synchronously inside activate(initial:)
@@ -2042,6 +2147,8 @@ final class AudioEngine {
                 self.followsDefault.remove(pid)
                 self.appliedPIDs.remove(pid)  // Allow re-initialization if app resumes
                 self.pendingCleanup.removeValue(forKey: pid)
+                // Silent now, but held again before it plays
+                self.reconcileStartGuard()
             }
         }
 

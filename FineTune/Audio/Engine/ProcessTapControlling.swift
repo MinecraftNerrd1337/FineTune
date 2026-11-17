@@ -21,6 +21,9 @@ protocol ProcessTapControlling: AnyObject, Sendable {
     /// Can differ from `app.processObjectIDs`: macOS re-attaches a relaunched app's new
     /// processes to a tap that was built for its previous launch.
     var capturedProcessObjectIDs: Set<AudioObjectID> { get }
+    /// Host time of the last buffer in which the tap captured audible input, 0 before the
+    /// first. Once it is set the tap carries the app, and `StartGuard` lets the app go.
+    var lastCapturedAudioHostTime: UInt64 { get }
 
     func activate(initial: TapInitialState) throws
     func invalidate()
@@ -51,6 +54,9 @@ protocol ProcessTapControlling: AnyObject, Sendable {
 extension ProcessTapControlling {
     /// Default for conformers without a HAL tap (test doubles): nothing captured.
     var capturedProcessObjectIDs: Set<AudioObjectID> { [] }
+
+    /// Default for test doubles: nothing captured yet.
+    var lastCapturedAudioHostTime: UInt64 { 0 }
 
     /// Convenience activation with default state. Production callers must pass an
     /// `initial:` populated from persisted settings — defaults leave the first audio

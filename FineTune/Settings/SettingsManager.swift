@@ -43,6 +43,9 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Per-DAC routing: the apps of each plain stereo output device share one aggregate, so
     // AutoEQ runs once per device on their sum (`DeviceMixer`). Off = one aggregate per app.
     var perDeviceMixingEnabled: Bool = false
+    // Start guard: mute an app from its first sample until FineTune's tap carries it, so the
+    // start of its sound never plays without FineTune's volume (`StartGuard`).
+    var startGuardEnabled: Bool = true
 
     // Call Passthrough
     // Leave apps untapped while they capture audio input (voice/video calls).
@@ -89,6 +92,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         loudnessCompensationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessCompensationEnabled) ?? false
         loudnessEqualizationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessEqualizationEnabled) ?? false
         perDeviceMixingEnabled = try c.decodeIfPresent(Bool.self, forKey: .perDeviceMixingEnabled) ?? false
+        startGuardEnabled = try c.decodeIfPresent(Bool.self, forKey: .startGuardEnabled) ?? true
         callPassthroughEnabled = try c.decodeIfPresent(Bool.self, forKey: .callPassthroughEnabled) ?? true
         hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .tahoe
         mediaKeyControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediaKeyControlEnabled) ?? true

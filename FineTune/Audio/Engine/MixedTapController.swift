@@ -128,6 +128,14 @@ final class MixedTapController: ProcessTapControlling {
         }
     }
 
+    var lastCapturedAudioHostTime: UInt64 {
+        switch path {
+        case .mixed(_, let slot): return slot.lastAudibleHostTime
+        case .own(let tap): return tap.lastCapturedAudioHostTime
+        case .none: return 0
+        }
+    }
+
     var tapSourceDeviceUID: String? {
         if case .own(let tap) = path { return tap.tapSourceDeviceUID }
         return requestedTapSourceDeviceUID

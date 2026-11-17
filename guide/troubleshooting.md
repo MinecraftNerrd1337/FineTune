@@ -10,6 +10,12 @@ FineTune requires the **Screen & System Audio Recording** permission to capture 
 
 If you previously denied the permission prompt, you'll need to enable it manually from System Settings.
 
+## The start of a sound is cut, or an app stays silent
+
+FineTune takes an app over once it starts playing, which takes a moment. Until then the app would play directly at the device's volume, without FineTune's. **Settings → Audio → Protect App Starts** (on by default) keeps it silent for that moment instead: the first few tens of milliseconds of a sound that starts after a pause of more than 30 seconds are not heard. Switching **Mix Apps per Device** also goes silent for a moment instead of playing too loud. The protection plays nothing and keeps no output device busy, and it restarts by itself after the Mac wakes from sleep.
+
+An app FineTune could not take over plays again after 2 seconds. If an app still stays silent or loses the start of its sounds, turn **Protect App Starts** off and report the app.
+
 ## App not appearing
 
 FineTune only shows apps that are **actively playing audio**. If an app isn't visible:
