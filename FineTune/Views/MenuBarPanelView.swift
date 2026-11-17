@@ -120,6 +120,7 @@ struct MenuBarPanelView: View {
                 }
                 Spacer()
                 editPriorityButton
+                eqManagerButton
                 settingsButton
             }
             .padding(.bottom, DesignTokens.Spacing.xs)
@@ -274,6 +275,34 @@ struct MenuBarPanelView: View {
         .contentShape(Rectangle())
         .animation(.spring(response: 0.3, dampingFraction: 0.75), value: isEditingDevicePriority)
         .help(isEditingDevicePriority ? "Done reordering" : "Reorder devices")
+    }
+
+    // MARK: - EQ Manager Button
+
+    /// Opens the EQ Manager without going through a device's AutoEQ menu.
+    private var eqManagerButton: some View {
+        Button("EQ Manager", systemImage: "slider.vertical.3") {
+            openEQManager()
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .symbolRenderingMode(.hierarchical)
+        .foregroundStyle(DesignTokens.Colors.interactiveDefault)
+        .frame(
+            minWidth: DesignTokens.Dimensions.minTouchTarget,
+            minHeight: DesignTokens.Dimensions.minTouchTarget
+        )
+        .contentShape(Rectangle())
+        .help("Open the EQ Manager")
+    }
+
+    private func openEQManager() {
+        exitEditModeSaving()
+        // As from the AutoEQ popup: without "Keep Panel Open", the panel steps aside for the manager
+        let stepAside = FluidMenuBarExtraBehavior.dismissesOnFocusLoss
+        EQManagerWindowController.shared.show()
+        if stepAside { FluidMenuBarExtraBehavior.dismiss() }
     }
 
     // MARK: - Settings Button
