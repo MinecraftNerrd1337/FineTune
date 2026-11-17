@@ -4,6 +4,7 @@
 // and aggregate need the HAL and were measured with StartGuardSpike instead.
 
 import Testing
+import AudioToolbox
 import Foundation
 @testable import FineTune
 
@@ -60,7 +61,7 @@ struct StartGuardTests {
     }
 
     @Test("An app held while it plays is let go after the fail-safe delay, until it stops")
-    func failSafe() {
+    func failSafeLetsGo() {
         let start = 10 * second
         var decision = StartGuardPolicy.decide(
             apps: [app(10, processes: [100], streaming: true)],
