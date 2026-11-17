@@ -6,36 +6,37 @@ import Testing
 import SwiftUI
 @testable import FineTune
 
+/// The Tahoe HUD's glyph for a slider fraction, through its static mapping: building the view
+/// and reading its icon would read its @State outside a view hierarchy.
+private func tahoeIcon(_ fraction: Float) -> String {
+    TahoeStyleHUD.waveIconName(percent: TahoeStyleHUD.displayedPercent(fraction))
+}
+
 @Suite("HUD wave-icon thresholds use displayed-percent semantics")
 struct HUDThresholdTests {
     @Test("Tahoe icon: 0% → speaker.fill (muted glyph)")
     func tahoeZeroPercent() {
-        let hud = TahoeStyleHUD(sliderFraction: 0, mute: false, deviceName: "Test")
-        #expect(hud.waveIconNameForTest == "speaker.fill")
+        #expect(tahoeIcon(0) == "speaker.fill")
     }
 
     @Test("Tahoe icon: 33% → wave.1")
     func tahoeLow() {
-        let hud = TahoeStyleHUD(sliderFraction: 0.33, mute: false, deviceName: "Test")
-        #expect(hud.waveIconNameForTest == "speaker.wave.1.fill")
+        #expect(tahoeIcon(0.33) == "speaker.wave.1.fill")
     }
 
     @Test("Tahoe icon: 50% → wave.2")
     func tahoeMid() {
-        let hud = TahoeStyleHUD(sliderFraction: 0.50, mute: false, deviceName: "Test")
-        #expect(hud.waveIconNameForTest == "speaker.wave.2.fill")
+        #expect(tahoeIcon(0.50) == "speaker.wave.2.fill")
     }
 
     @Test("Tahoe icon: 67% → wave.3")
     func tahoeHigh() {
-        let hud = TahoeStyleHUD(sliderFraction: 0.67, mute: false, deviceName: "Test")
-        #expect(hud.waveIconNameForTest == "speaker.wave.3.fill")
+        #expect(tahoeIcon(0.67) == "speaker.wave.3.fill")
     }
 
     @Test("Tahoe icon: 100% → wave.3")
     func tahoeMax() {
-        let hud = TahoeStyleHUD(sliderFraction: 1.0, mute: false, deviceName: "Test")
-        #expect(hud.waveIconNameForTest == "speaker.wave.3.fill")
+        #expect(tahoeIcon(1.0) == "speaker.wave.3.fill")
     }
 
     @Test("Classic icon: 0% → speaker.fill")

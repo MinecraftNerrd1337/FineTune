@@ -30,7 +30,7 @@ struct TahoeStyleHUD: View {
     }
 
     private var displayedPercent: Int {
-        Int((displayFloat * 100).rounded())
+        Self.displayedPercent(displayFloat)
     }
 
     private var displayMute: Bool {
@@ -39,7 +39,18 @@ struct TahoeStyleHUD: View {
     }
 
     private var waveIconName: String {
-        switch displayedPercent {
+        Self.waveIconName(percent: displayedPercent)
+    }
+
+    /// Percent the label shows for a fraction (clamped to 0...1).
+    nonisolated static func displayedPercent(_ fraction: Float) -> Int {
+        Int((max(0, min(1, fraction)) * 100).rounded())
+    }
+
+    /// Glyph for a displayed percent, so that it always agrees with the label. Static so that
+    /// tests can check it without reading the view's state outside a view hierarchy.
+    nonisolated static func waveIconName(percent: Int) -> String {
+        switch percent {
         case 0:        return "speaker.fill"
         case 1...33:   return "speaker.wave.1.fill"
         case 34...66:  return "speaker.wave.2.fill"
@@ -50,10 +61,6 @@ struct TahoeStyleHUD: View {
     private var percentageText: String {
         "\(displayedPercent)%"
     }
-
-    #if DEBUG
-    var waveIconNameForTest: String { waveIconName }
-    #endif
 
     private var accessibilityDescription: String {
         let device = deviceName.isEmpty ? "Unknown device" : deviceName
