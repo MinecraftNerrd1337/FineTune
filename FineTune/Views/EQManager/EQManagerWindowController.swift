@@ -5,7 +5,11 @@ import AppKit
 /// Owns the "FineTune EQ Manager" window.
 ///
 /// FineTune is an LSUIElement agent, so like the Settings window this one gets no Dock icon
-/// and no app menu in the menu bar. The window is created on first use and reused afterwards.
+/// and no app menu in the menu bar. The window is created on first use and reused afterwards,
+/// so it keeps its size and place while FineTune runs.
+///
+/// It opens at `EQManagerRootView.size`, which is also its minimum size, and can be enlarged.
+/// Its place is kept across launches, its size is not: each launch opens it at that size.
 @MainActor
 final class EQManagerWindowController {
     static let shared = EQManagerWindowController()
@@ -34,20 +38,30 @@ final class EQManagerWindowController {
 
     private func makeWindow(settings: SettingsManager, audioEngine: AudioEngine) -> NSWindow {
         let root = EQManagerRootView(settings: settings, audioEngine: audioEngine)
-        let window = NSWindow(contentViewController: NSHostingController(rootView: root))
-        window.styleMask = [.titled, .closable, .miniaturizable]
+        let hosting = NSHostingController(rootView: root)
+        // The window takes its minimum size from the content and leaves the rest to the user
+        hosting.sizingOptions = [.minSize]
+        let window = NSWindow(contentViewController: hosting)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.title = EQManagerRootView.title
         window.tabbingMode = .disallowed
         window.isReleasedWhenClosed = false
         // Size the window before centering: the hosting view has not measured its content yet,
         // so center() would otherwise place a zero-sized frame and the window would grow off-center.
         window.setContentSize(EQManagerRootView.size)
+        window.contentMinSize = EQManagerRootView.size
         window.center()
 
         // Like Settings: centered on first open, then reopened where the user left it.
-        // The frame is kept in settings.json with the rest of FineTune's settings.
+        // The frame is kept in settings.json with the rest of FineTune's settings, but only its
+        // place is restored: the window opens at its standard size, its top-left corner where it was.
         if let savedFrame = settings.eqManagerWindowFrame {
             window.setFrame(from: savedFrame)
+            var frame = window.frame
+            let top = frame.maxY
+            frame.size = window.frameRect(forContentRect: NSRect(origin: .zero, size: EQManagerRootView.size)).size
+            frame.origin.y = top - frame.height
+            window.setFrame(frame, display: false)
             if window.screen == nil { window.center() }
         }
         for name in [NSWindow.didMoveNotification, NSWindow.willCloseNotification] {

@@ -46,7 +46,8 @@ struct EQManagerPresetDetail: View {
                     },
                     onDragEnded: { editor.endGesture() }
                 )
-                .frame(height: 220)
+                // 220 pt at the window's minimum size; grows with the band table as it is enlarged
+                .frame(minHeight: 220, maxHeight: .infinity)
 
                 bandsSection
             }

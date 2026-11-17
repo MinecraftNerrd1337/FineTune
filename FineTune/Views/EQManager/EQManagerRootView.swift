@@ -13,7 +13,8 @@ import UniformTypeIdentifiers
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
-    /// Same height as the Settings window, 1.4x its width (720).
+    /// Opening and minimum size: same height as the Settings window, 1.4x its width (720).
+    /// The window can grow from there; the graph and the band table share the extra height.
     static let size = CGSize(width: 1008, height: 560)
 
     @Bindable var settings: SettingsManager
@@ -42,7 +43,7 @@ struct EQManagerRootView: View {
             Divider()
             content
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
         .sheet(item: $chooserPurpose) { purpose in
             EQManagerPresetChooser(
                 settings: settings,
