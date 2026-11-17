@@ -33,8 +33,6 @@ final class StartGuard {
     /// Wait between taking every app back under the guard and destroying their taps: the
     /// spike measured about 30 ms before the guard holds an app again.
     nonisolated static let holdDelay: Duration = .milliseconds(100)
-    /// The aggregate is rebuilt when its IO has not run for this long while the Mac is awake.
-    nonisolated static let stallSeconds = 1.5
 
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "FineTune", category: "StartGuard")
 
@@ -43,28 +41,18 @@ final class StartGuard {
     private var aggregateID: AudioObjectID = .unknown
     private var procID: AudioDeviceIOProcID?
     private let queue = DispatchQueue(label: "FineTune.StartGuard", qos: .userInitiated)
-    /// IO cycles of the aggregate, written by its IO thread.
-    private let cycles = GuardCycleCounter()
-    private var lastCycles: UInt64 = 0
-    private var lastAdvance = Date()
     /// The exclusion list last given to the tap.
     private var written: [AudioObjectID] = []
     private var ownProcess: AudioObjectID = .unknown
     /// After a failure, the aggregate is not tried again before this date.
     private var retryAfter = Date.distantPast
-    private var isAsleep = false
-    /// Rebuilds in a row of an aggregate whose IO stalled: spaces out the next ones.
-    private var stallRebuilds = 0
+    /// One log line per stop of the aggregate, not one per check.
+    private var restartLogged = false
     /// Kept for the app's lifetime, like `DeviceKeepAlive`'s.
     private var workspaceObservers: [NSObjectProtocol] = []
 
     init() {
         let center = NSWorkspace.shared.notificationCenter
-        workspaceObservers.append(center.addObserver(
-            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isAsleep = true }
-        })
         for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
             workspaceObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.didWake() }
@@ -76,8 +64,10 @@ final class StartGuard {
 
     /// Holds `held` and lets every other process go. Starts the guard if needed, and rebuilds
     /// whatever no longer works: a tap or aggregate that Core Audio dropped (a restart of
-    /// coreaudiod), or an aggregate whose IO stopped (it should resume after sleep, and is
-    /// rebuilt if it does not).
+    /// coreaudiod), and starts the aggregate again if Core Audio stopped it (sleep).
+    ///
+    /// The aggregate's IO itself is not watched: with no device, its IO pauses while nothing
+    /// is captured, which is not a failure. Rebuilding it then only let held apps go.
     func update(held: Set<AudioObjectID>, allProcesses: [AudioObjectID]) {
         if tapID.isValid && tapID.readTapDescription() == nil {
             // Core Audio restarted: its process objects changed too, FineTune's included
@@ -97,15 +87,21 @@ final class StartGuard {
         }
 
         if aggregateID.isValid {
-            let problem = !aggregateID.isDeviceAlive() ? "lost" : (isStalled ? "stalled" : nil)
-            if let problem {
-                logger.warning("Start guard aggregate \(problem, privacy: .public); rebuilding it")
+            if !aggregateID.isDeviceAlive() {
+                logger.warning("Start guard aggregate lost; rebuilding it")
                 destroyAggregate()
-                // At once the first time, then after 2, 4, 8… up to 30 s if it keeps stalling
-                retryAfter = stallRebuilds == 0
-                    ? .distantPast
-                    : Date().addingTimeInterval(min(pow(2, Double(stallRebuilds)), 30))
-                stallRebuilds += 1
+            } else if !isAggregateStarted {
+                // Started again in place: same aggregate, same tap, nothing rebuilt
+                let err = AudioDeviceStart(aggregateID, procID)
+                if err != noErr {
+                    logger.warning("Start guard aggregate stopped and would not start (\(err)); rebuilding it")
+                    destroyAggregate()
+                } else if !restartLogged {
+                    logger.info("Start guard aggregate was stopped; started it again")
+                    restartLogged = true
+                }
+            } else {
+                restartLogged = false
             }
         }
         if !aggregateID.isValid && Date() >= retryAfter {
@@ -131,31 +127,29 @@ final class StartGuard {
         }
         written = []
         retryAfter = .distantPast
-        stallRebuilds = 0
         logger.info("Start guard stopped")
     }
 
     // MARK: - Watchdog
 
-    /// The aggregate's IO has not advanced for `stallSeconds` while the Mac is awake.
-    private var isStalled: Bool {
-        let now = Date()
-        let count = cycles.value
-        if count != lastCycles || isAsleep {
-            if count != lastCycles { stallRebuilds = 0 }
-            lastCycles = count
-            lastAdvance = now
-            return false
-        }
-        return now.timeIntervalSince(lastAdvance) > Self.stallSeconds
+    /// Whether this process's IO is started on the aggregate (`AudioDeviceStart`), whether or
+    /// not any audio flows through it.
+    private var isAggregateStarted: Bool {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceIsRunning,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(aggregateID, &address, 0, nil, &size, &running)
+        // Unreadable: leave it to the liveness check rather than restart blindly
+        return err != noErr || running != 0
     }
 
     private func didWake() {
-        isAsleep = false
-        // The IO gets `stallSeconds` to resume by itself before the watchdog rebuilds it
-        lastAdvance = Date()
+        // Checked again at the next update, with no wait for a failed start's back-off
         retryAfter = .distantPast
-        stallRebuilds = 0
     }
 
     // MARK: - Tap
@@ -230,13 +224,11 @@ final class StartGuard {
             return
         }
 
-        // Counts its cycles for the watchdog; the tap's audio is never read
-        let counter = cycles
+        // The tap's audio is never read: running the aggregate is what mutes
         err = AudioDeviceCreateIOProcIDWithBlock(&procID, id, queue) { @Sendable _, _, _, outOutputData, _ in
             for buffer in UnsafeMutableAudioBufferListPointer(outOutputData) {
                 if let data = buffer.mData { memset(data, 0, Int(buffer.mDataByteSize)) }
             }
-            counter.increment()
         }
         guard err == noErr else {
             logger.error("Could not create the start guard IO proc: \(err)")
@@ -249,8 +241,6 @@ final class StartGuard {
             destroyAggregate()
             return
         }
-        lastCycles = cycles.value
-        lastAdvance = Date()
         retryAfter = .distantPast
         logger.info("Start guard running")
     }
@@ -282,24 +272,6 @@ final class StartGuard {
             UInt32(MemoryLayout<pid_t>.size), &qualifier, &size, &object)
         return err == noErr ? object : .unknown
     }
-}
-
-/// Cycle count of the guard's IO, written by its IO thread only (an aligned 64-bit store),
-/// read by the main thread.
-private final class GuardCycleCounter: @unchecked Sendable {
-    private let storage: UnsafeMutablePointer<UInt64>
-
-    init() {
-        storage = .allocate(capacity: 1)
-        storage.initialize(to: 0)
-    }
-
-    deinit { storage.deallocate() }
-
-    var value: UInt64 { storage.pointee }
-
-    @inline(__always)
-    func increment() { storage.pointee &+= 1 }
 }
 
 // MARK: - Policy
