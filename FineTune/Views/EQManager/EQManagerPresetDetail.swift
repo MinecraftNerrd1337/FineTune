@@ -258,6 +258,7 @@ struct EQManagerPresetDetail: View {
         let recommended = AutoEQResponse.recommendedPreampDB(preset)
         let peak = AutoEQResponse.peakDB(preset)
         let clipRisk = peak.map { AutoEQResponse.clipRiskDB(preampDB: Double(preset.preampDB), peakDB: $0) } ?? 0
+        let perceived = AutoEQResponse.perceivedLevelChangeDB(preset)
 
         return VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             SettingsSection("Preamp") {
@@ -290,6 +291,8 @@ struct EQManagerPresetDetail: View {
                 }
                 Divider()
                 row("Peak boost") { valueText(peak.map { String(format: "%+.1f dB", $0) } ?? "—") }
+                Divider()
+                row("Perceived level") { valueText(perceived.map { String(format: "%+.1f dB", $0) } ?? "—") }
             }
 
             if clipRisk > 0 {
@@ -298,7 +301,7 @@ struct EQManagerPresetDetail: View {
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 4)
             }
-            Text("Recommended: the peak boost as a cut, so the corrected sound never exceeds the original level.")
+            Text("Recommended: the peak boost as a cut, so the corrected sound never exceeds the original level. Perceived level: how much quieter or louder the curve sounds (the RMS of music through it). With a device's correction off and its preamp on, FineTune adds that level to the preamp, so the loudness stays the same.")
                 .font(.system(size: 10))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

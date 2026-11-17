@@ -982,7 +982,7 @@ final class AudioEngine {
             return .some(nil)
         }
         guard let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
-        return .some(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
+        return .some(activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
     }
 
     private func applyTapOutputState(to tap: any ProcessTapControlling, for pid: pid_t, deviceUIDs: [String]? = nil) {
@@ -1152,17 +1152,38 @@ final class AudioEngine {
         if let preview = autoEQPreviews[deviceUID] { return preview }
         guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
               let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
-        return Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled)
+        return activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled)
     }
 
     /// The profile handed to the processor. With the correction switched off, the filters are
-    /// dropped but the preamp stays, so switching the correction on and off compares at equal level.
-    static func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
+    /// dropped but the preamp stays. With `levelMatched`, the level the correction takes away
+    /// (or adds) is applied too (`levelMatchDB`), so switching the correction on and off keeps
+    /// the same perceived level. The preset itself is left as it is.
+    static func activeAutoEQProfile(
+        _ profile: AutoEQProfile, correctionEnabled: Bool, levelMatched: Bool
+    ) -> AutoEQProfile {
         guard !correctionEnabled else { return profile }
         var preampOnly = profile
+        if levelMatched, let change = AutoEQResponse.perceivedLevelChangeDB(profile) {
+            preampOnly.levelMatchDB = Float(change)
+        }
         preampOnly.filters = []
         preampOnly.curve = []
         return preampOnly
+    }
+
+    /// `activeAutoEQProfile` with the level matching chosen in Settings.
+    func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
+        Self.activeAutoEQProfile(
+            profile, correctionEnabled: correctionEnabled,
+            levelMatched: settingsManager.appSettings.autoEQLevelMatchEnabled)
+    }
+
+    /// Re-applies AutoEQ to every tap (after the level matching setting changed).
+    func reapplyAllAutoEQ() {
+        for tap in taps.values {
+            applyAutoEQToTap(tap)
+        }
     }
 
     private func tapInitialState(forApp app: AudioApp, primaryDeviceUID: String, deviceVolume: Float) -> TapInitialState {
@@ -1225,7 +1246,7 @@ final class AudioEngine {
 
         // Try in-memory first (instant)
         if let profile = autoEQProfileManager.profile(for: selection.profileID) {
-            apply(Self.activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
+            apply(activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
             return
         }
 
@@ -1237,7 +1258,7 @@ final class AudioEngine {
             guard stillApplies() else { return }
             guard let latestSelection = settingsManager.getAutoEQSelection(for: deviceUID),
                   latestSelection.profileID == selection.profileID else { return }
-            apply(Self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
+            apply(self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
         }
     }
 

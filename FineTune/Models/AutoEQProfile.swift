@@ -187,6 +187,10 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     /// Tolerance of the linear-phase FIR engine, in dB. Nil for the standard one. See
     /// `AutoEQLinearPhasePrecision` and `effectiveLinearPhaseToleranceDB`.
     var linearPhaseToleranceDB: Double?
+    /// Gain added at runtime to the preamp, in dB, and bypassed with it by the Preamp switch:
+    /// set by `AudioEngine` when the correction is off, so the preset keeps the level it has when on
+    /// (see `AutoEQResponse.perceivedLevelChangeDB`). Never stored: not in `CodingKeys`.
+    var levelMatchDB: Float = 0
 
     static let maxFilters = 128
     static let maxCurvePoints = 1024
@@ -324,7 +328,7 @@ extension AutoEQProfile {
             .filter { $0.frequency > 0 && $0.frequency.isFinite && $0.gainDB.isFinite }
             .map { AutoEQCurvePoint(frequency: $0.frequency, gainDB: max(-30, min(30, $0.gainDB))) }
             .sorted { $0.frequency < $1.frequency }
-        return AutoEQProfile(
+        var result = AutoEQProfile(
             id: id, name: name, source: source,
             preampDB: clampedPreamp,
             filters: Array(validFilters.prefix(Self.maxFilters)),
@@ -336,6 +340,8 @@ extension AutoEQProfile {
             templateID: templateID,
             linearPhaseToleranceDB: AutoEQLinearPhasePrecision.stored(linearPhaseToleranceDB)
         )
+        result.levelMatchDB = levelMatchDB.isFinite ? max(-30, min(30, levelMatchDB)) : 0
+        return result
     }
 }
 

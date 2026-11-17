@@ -27,6 +27,7 @@ struct AudioTab: View {
             VStack(alignment: .leading, spacing: 24) {
                 volumeSection
                 devicesSection
+                autoEQSection
                 presetsSection
             }
             .padding(.horizontal, 20)
@@ -55,6 +56,9 @@ struct AudioTab: View {
         }
         .onChange(of: settings.appSettings.startGuardEnabled) { _, newValue in
             audioEngine.setStartGuardEnabled(newValue)
+        }
+        .onChange(of: settings.appSettings.autoEQLevelMatchEnabled) { _, _ in
+            audioEngine.reapplyAllAutoEQ()
         }
     }
 
@@ -179,6 +183,22 @@ struct AudioTab: View {
                     try? await Task.sleep(for: .seconds(2))
                     deviceVolumeMonitor.refreshAlertVolume()
                 }
+            }
+        }
+    }
+
+    // MARK: - AutoEQ
+
+    private var autoEQSection: some View {
+        SettingsSection("AutoEQ") {
+            SettingsRow(
+                "Same Loudness with Correction Off",
+                description: "With a device's correction off, add the level its curve takes away or adds to the preamp, so turning the correction off and on keeps the same loudness. Turning Preamp off turns it off too. The preset and its preamp are left as they are"
+            ) {
+                Toggle("", isOn: $settings.appSettings.autoEQLevelMatchEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
             }
         }
     }

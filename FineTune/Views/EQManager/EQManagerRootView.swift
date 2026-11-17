@@ -417,7 +417,7 @@ struct EQManagerRootView: View {
         case .shown: return .profile(editor.draft)
         case .saved: return .profile(editor.original)
         case .inUse: return .stored
-        case .off: return .profile(AudioEngine.activeAutoEQProfile(editor.draft, correctionEnabled: false))
+        case .off: return .profile(audioEngine.activeAutoEQProfile(editor.draft, correctionEnabled: false))
         }
     }
 

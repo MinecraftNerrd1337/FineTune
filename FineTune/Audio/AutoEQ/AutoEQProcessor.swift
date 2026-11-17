@@ -123,7 +123,10 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         let wasIdle = !isEnabled || replacingStaleFilter || attempt >= Self.maxRetries
 
         let validated = profile?.validated()
-        let preampLinear = validated.map { _preampEnabled ? powf(10.0, $0.preampDB / 20.0) : 1.0 } ?? 1.0
+        // The level match is part of the preamp: the Preamp switch bypasses both
+        let preampLinear = validated.map {
+            _preampEnabled ? powf(10.0, ($0.preampDB + $0.levelMatchDB) / 20.0) : 1.0
+        } ?? 1.0
         let preampStatus = self._preampEnabled ? "active" : "bypassed"
 
         // Nothing left to play: back to the input, then off
@@ -147,7 +150,7 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         if !wasIdle, let played = playedProfile, Self.sameCurve(played, validated) {
             _preampGain = preampLinear
             playedProfile = validated
-            logger.info("AutoEQ preamp: \"\(validated.name)\" — \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus))")
+            logger.info("AutoEQ preamp: \"\(validated.name)\" — \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus)), level match \(validated.levelMatchDB, format: .fixed(precision: 1)) dB")
             return
         }
 
@@ -176,7 +179,7 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
 
         switch curve {
         case .none:
-            logger.info("AutoEQ preamp only: \"\(validated.name)\" — preamp \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus))")
+            logger.info("AutoEQ preamp only: \"\(validated.name)\" — preamp \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus)), level match \(validated.levelMatchDB, format: .fixed(precision: 1)) dB")
         case .fir(let convolver):
             logger.info("AutoEQ applied: \"\(validated.name)\" — \(validated.effectiveEngine.displayName), latency \(convolver.latencySamples) samples, preamp \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus)), rate \(self.sampleRate, format: .fixed(precision: 0)) Hz")
         case .cascade(_, let sections):

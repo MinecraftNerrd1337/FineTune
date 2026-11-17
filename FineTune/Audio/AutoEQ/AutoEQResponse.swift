@@ -159,6 +159,40 @@ enum AutoEQResponse {
         return max(risk, 0)
     }
 
+    // MARK: - Perceived level
+
+    /// Power weight of the music spectrum `perceivedLevelChangeDB` assumes, per log-frequency
+    /// step: the same in every octave (pink noise) up to 500 Hz, then falling 3 dB per octave,
+    /// a simple model of the long-term spectrum of music.
+    private static func musicSpectrumWeight(_ frequency: Double) -> Double {
+        frequency <= 500 ? 1 : 500 / frequency
+    }
+
+    /// Frequencies and weights of `perceivedLevelChangeDB`: 1024 log-spaced frequencies from
+    /// 20 Hz to 20 kHz, each weighted by the music spectrum.
+    private static let levelGrid: (frequencies: [Double], weights: [Double], total: Double) = {
+        let frequencies = logFrequencies(count: 1024)
+        let weights = frequencies.map(musicSpectrumWeight)
+        return (frequencies, weights, weights.reduce(0, +))
+    }()
+
+    /// How much the preset changes the perceived level, preamp excluded, in dB: the change in
+    /// power (RMS) of music played through its curve, with music modelled as flat per octave up
+    /// to 500 Hz and falling 3 dB per octave above. 10 log10(Σ w · g / Σ w), with g the power
+    /// gain of the curve at each frequency and w the share of the music's power there. A curve
+    /// 10 dB down everywhere gives −10 dB. Never above the peak boost. Nil when the preset has
+    /// no correction.
+    static func perceivedLevelChangeDB(_ profile: AutoEQProfile) -> Double? {
+        guard profile.hasCorrection else { return nil }
+        let grid = levelGrid
+        let gains = curve(of: profile, frequencies: grid.frequencies)
+        var sum = 0.0
+        for i in gains.indices {
+            sum += grid.weights[i] * pow(10, gains[i] / 10)
+        }
+        return 10 * log10(max(sum / grid.total, 1e-30))
+    }
+
     // MARK: - Biquad (digital)
 
     /// |H(e^jw)| in dB for vDSP-style coefficients [b0, b1, b2, a1, a2].

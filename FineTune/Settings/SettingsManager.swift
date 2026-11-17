@@ -74,6 +74,11 @@ nonisolated struct AppSettings: Codable, Equatable {
     var confirmPresetSaves: Bool = true  // Ask before a save replaces the stored version of a preset
     var presetHistoryLimit: Int = AutoEQPresetHistoryStore.defaultLimit  // Earlier versions kept per preset (0 = none)
 
+    // AutoEQ
+    // With the correction off, play the level the correction takes away (or adds), so switching
+    // it on and off keeps the same perceived level (`AutoEQResponse.perceivedLevelChangeDB`).
+    var autoEQLevelMatchEnabled: Bool = true
+
     init() {}
 
     mutating func setUnifiedLoudnessEnabled(_ enabled: Bool) {
@@ -111,6 +116,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         let limitRange = AutoEQPresetHistoryStore.limitRange
         let storedLimit = try c.decodeIfPresent(Int.self, forKey: .presetHistoryLimit) ?? AutoEQPresetHistoryStore.defaultLimit
         presetHistoryLimit = min(max(storedLimit, limitRange.lowerBound), limitRange.upperBound)
+        autoEQLevelMatchEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoEQLevelMatchEnabled) ?? true
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
