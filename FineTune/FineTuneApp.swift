@@ -58,9 +58,8 @@ struct FineTuneApp: App {
     private let launchIconImage: NSImage
 
     var body: some Scene {
-        // Declared before FluidMenuBarExtra so this Settings scene wins over
-        // FluidMenuBarExtra's `Settings {}` placeholder. Both ⌘, and the
-        // gear button route here via openSettings().
+        // The app's only Settings scene (the vendored FluidMenuBarExtra no longer adds
+        // one). Both ⌘, and the gear button route here via openSettings().
         Settings {
             SettingsRootView(
                 settings: audioEngine.settingsManager,
@@ -72,6 +71,17 @@ struct FineTuneApp: App {
                 shortcutsRegistry: shortcutsRegistry,
                 updateManager: updateManager
             )
+        }
+        .commands {
+            // FineTune shows a menu bar only while Settings or the EQ Manager is open.
+            // There, ⌘Q closes those windows and FineTune stays in the menu bar.
+            // The panel's Quit button stays the way to quit.
+            CommandGroup(replacing: .appTermination) {
+                Button("Close FineTune Windows") {
+                    ActivationPolicyController.shared.closeAppWindows()
+                }
+                .keyboardShortcut("q")
+            }
         }
         FluidMenuBarExtra("FineTune", image: launchIconImage, isInserted: $showMenuBarExtra) {
             menuBarContent
@@ -116,6 +126,7 @@ struct FineTuneApp: App {
 
         // "Keep Panel Open": the panel ignores focus loss and only the menu bar icon closes it.
         FluidMenuBarExtraBehavior.dismissesOnFocusLossProvider = { !settings.appSettings.keepPanelOpen }
+        ActivationPolicyController.shared.start()
 
         // Media keys / HUD services — instantiated at app scope so the tap
         // and HUD panel outlive panel open/close cycles.

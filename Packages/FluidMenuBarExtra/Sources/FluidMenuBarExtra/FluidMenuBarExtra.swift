@@ -252,7 +252,10 @@ public struct FluidMenuBarExtra<Content: View>: Scene {
                                                            screenClippingBehaviour: screenClippingBehaviour)
         }
 
-        return Settings {}.onChange(of: isInserted) { state.statusItem?.isVisible = $0 }
+        // FineTune: an empty, never-inserted MenuBarExtra as the placeholder scene. Upstream used
+        // `Settings {}`, which added a second "Settings…" item next to the host app's own.
+        return MenuBarExtra(title, isInserted: .constant(false)) { EmptyView() }
+            .onChange(of: isInserted) { state.statusItem?.isVisible = $0 }
     }
 }
 
