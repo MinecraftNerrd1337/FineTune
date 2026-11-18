@@ -243,7 +243,7 @@ struct DeviceDetailSheet: View {
     }
 
     private var keepAliveCallout: some View {
-        Text("Streams silence to the device at all times, so it never stops or goes to standby. Turn on for DACs that click or pop when playback starts or stops.")
+        Text("Streams silence so the device never sleeps. For DACs that click or pop.")
             .font(DesignTokens.Typography.caption)
             .foregroundStyle(DesignTokens.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
