@@ -30,6 +30,9 @@ struct EQManagerRootView: View {
 
     @State private var editor: EQManagerEditor?
     @State private var chooserPurpose: ChooserPurpose?
+    /// A filter list picked in the chooser: its base rate sheet opens once the chooser is gone.
+    @State private var importAfterChooser: EQManagerImportRequest?
+    @State private var importRequest: EQManagerImportRequest?
     @State private var isReplaceImporterPresented = false
     @State private var alertMessage: String?
     @State private var isSaveConfirmationPresented = false
@@ -40,20 +43,8 @@ struct EQManagerRootView: View {
     private var profileManager: AutoEQProfileManager { audioEngine.autoEQProfileManager }
 
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            if listening.deviceUID != nil {
-                listenBar
-                Divider()
-            }
-            content
-        }
-        .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
-        .sheet(item: $chooserPurpose) { purpose in
-            presetChooser(purpose)
-                .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
-        }
+        // Split up so the compiler type-checks the body in reasonable time
+        withPresetSheets(layout)
         .sheet(item: $newPresetRequest) { request in
             EQManagerNewPresetSheet(
                 request: request,
@@ -461,8 +452,69 @@ struct EQManagerRootView: View {
                 }
             },
             onDeselect: onDeselect,
+            onImportFilterList: { request in
+                importAfterChooser = request
+                chooserPurpose = nil
+            },
             onCancel: { chooserPurpose = nil }
         )
+    }
+
+    // MARK: - Import
+
+    private var layout: some View {
+        VStack(spacing: 0) {
+            topBar
+            Divider()
+            if listening.deviceUID != nil {
+                listenBar
+                Divider()
+            }
+            content
+        }
+        .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
+    }
+
+    /// The preset chooser, and the import sheet that takes its place for a filter list.
+    private func withPresetSheets(_ view: some View) -> some View {
+        view
+            .sheet(item: $chooserPurpose, onDismiss: presentPendingImport) { purpose in
+                presetChooser(purpose)
+                    .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+            }
+            .sheet(item: $importRequest) { request in
+                importSheet(request)
+                    .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+            }
+    }
+
+    /// A sheet replaces another only once the first is gone.
+    private func presentPendingImport() {
+        guard let request = importAfterChooser else { return }
+        importAfterChooser = nil
+        importRequest = request
+    }
+
+    private func importSheet(_ request: EQManagerImportRequest) -> EQManagerImportSheet {
+        EQManagerImportSheet(
+            request: request,
+            onImport: { baseRate in
+                importRequest = nil
+                importFilterList(request, baseRate: baseRate)
+            },
+            onCancel: { importRequest = nil }
+        )
+    }
+
+    private func importFilterList(_ request: EQManagerImportRequest, baseRate: Double) {
+        let didAccess = request.url.startAccessingSecurityScopedResource()
+        defer { if didAccess { request.url.stopAccessingSecurityScopedResource() } }
+        guard let profile = profileManager.importProfile(from: request.url, name: request.name, baseRate: baseRate) else {
+            alertMessage = "Could not read \(request.url.lastPathComponent). Check the file format."
+            return
+        }
+        AutoEQBaseRate.lastImportRate = baseRate
+        editor = EQManagerEditor(profile: profile)
     }
 
     private func showNoPreset() {

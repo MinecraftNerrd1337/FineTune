@@ -25,8 +25,8 @@ Profiles are fetched on demand from the AutoEQ database and cached locally for o
 If you have a custom measurement or want to use a profile from another source:
 
 1. Open the **EQ Manager**, click the preset selector, then **Import File...**
-2. For a filter list, pick the **Base rate** next to the button: the sample rate the filters were designed for (44.1 kHz for AutoEQ's own profiles)
-3. Select your `.txt` file
+2. Select your `.txt` file
+3. For a filter list, FineTune then asks for the sample rate the filters were designed for (44.1 kHz for AutoEQ's own profiles). A graphic curve does not need one
 4. Use the **Correction** switch in the picker to A/B the profile without removing it
 
 FineTune accepts [EqualizerAPO](https://sourceforge.net/projects/equalizerapo/) ParametricEQ.txt files:

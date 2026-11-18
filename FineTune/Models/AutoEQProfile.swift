@@ -111,7 +111,7 @@ nonisolated enum AutoEQBaseRate {
     /// AutoEQ's default (`DEFAULT_FS` in autoeq/constants.py), used for its published results.
     static let autoEQDefault = 44_100.0
     /// Rates offered in the import dialogs and the EQ Manager.
-    static let choices: [Double] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, analog]
+    static let choices: [Double] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000, 352_800, 384_000, analog]
     /// The last rate chosen when importing a file (UserDefaults).
     static let lastImportRateKey = "AutoEQImportBaseRate"
 

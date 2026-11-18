@@ -26,6 +26,9 @@ struct EQManagerPresetChooser: View {
     /// Lists the preset shown first, with a cross on hover that shows none without choosing
     /// another preset.
     var onDeselect: (() -> Void)? = nil
+    /// A filter list picked to import: the chooser closes, and its base rate is asked for in a
+    /// sheet of its own. Without it, the list is imported at the last rate chosen.
+    var onImportFilterList: ((EQManagerImportRequest) -> Void)? = nil
     let onCancel: () -> Void
 
     private enum Mode { case choose, create }
@@ -44,8 +47,6 @@ struct EQManagerPresetChooser: View {
     @State private var loadingID: String?
     @State private var errorMessage: String?
     @State private var isImporterPresented = false
-    /// Sample rate the filters of an imported file were designed for.
-    @State private var importBaseRate = AutoEQBaseRate.lastImportRate
 
     @State private var newName = ""
     @State private var newKind: AutoEQPresetKind = .parametric
@@ -108,13 +109,6 @@ struct EQManagerPresetChooser: View {
                     }
                     Button("Import File...") { isImporterPresented = true }
                         .help("A ParametricEQ.txt or GraphicEQ.txt file from AutoEQ, Wavelet or Equalizer APO")
-                    Picker("Base rate", selection: $importBaseRate) {
-                        ForEach(AutoEQBaseRate.choices, id: \.self) { Text(AutoEQBaseRate.label($0)).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                    .help("Sample rate the imported filters were designed for (AutoEQ: 44.1 kHz). A graphic curve does not need one. It can be changed later.")
-                    .onChange(of: importBaseRate) { _, rate in AutoEQBaseRate.lastImportRate = rate }
                 }
                 Spacer()
                 Button("Cancel", action: onCancel)
@@ -533,14 +527,94 @@ struct EQManagerPresetChooser: View {
         }
     }
 
+    /// Reads the file first: a filter list then asks for its base rate, a graphic curve (in Hz)
+    /// is imported at once.
     private func importFile(_ url: URL) {
+        errorMessage = nil
         let didAccess = url.startAccessingSecurityScopedResource()
         defer { if didAccess { url.stopAccessingSecurityScopedResource() } }
         let name = url.deletingPathExtension().lastPathComponent
-        if let profile = profileManager.importProfile(from: url, name: name, baseRate: importBaseRate) {
+        guard let data = try? Data(contentsOf: url), let text = AutoEQParser.decodeText(data),
+              let parsed = AutoEQParser.parse(text: text, name: name, source: .imported) else {
+            errorMessage = "Could not read \(url.lastPathComponent). Check the file format."
+            return
+        }
+        if parsed.kind == .parametric, let onImportFilterList {
+            onImportFilterList(EQManagerImportRequest(url: url, name: name, bandCount: parsed.filters.count, preampDB: parsed.preampDB))
+            return
+        }
+        if let profile = profileManager.importProfile(from: url, name: name, baseRate: AutoEQBaseRate.lastImportRate) {
             onChoose(profile)
         } else {
             errorMessage = "Could not read \(url.lastPathComponent). Check the file format."
         }
+    }
+}
+
+// MARK: - Import Sheet
+
+/// A filter list (ParametricEQ.txt) picked to import, read once to show what it holds.
+struct EQManagerImportRequest: Identifiable {
+    let id = UUID()
+    let url: URL
+    let name: String
+    let bandCount: Int
+    let preampDB: Float
+}
+
+/// Asks for the sample rate the filters of an imported filter list were designed for: the file
+/// does not say it. A sheet of its own, so the question is not missed.
+struct EQManagerImportSheet: View {
+    let request: EQManagerImportRequest
+    let onImport: (_ baseRate: Double) -> Void
+    let onCancel: () -> Void
+
+    @State private var baseRate = AutoEQBaseRate.lastImportRate
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Text("Import “\(request.name)”")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+                .lineLimit(2)
+
+            Text(summary)
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+
+            VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+                Text("Filters designed for")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                Picker("Filters designed for", selection: $baseRate) {
+                    ForEach(AutoEQBaseRate.choices, id: \.self) { Text(AutoEQBaseRate.label($0)).tag($0) }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+            }
+
+            Text("A filter list is made for one sample rate, which the file does not say. AutoEQ's own profiles are made for 44.1 kHz; other tools often use 48 kHz. If unsure, keep 44.1 kHz: it can be changed later in the preset's Base rate.")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Import") { onImport(baseRate) }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(DesignTokens.Spacing.lg)
+        .frame(width: 400, height: 250)
+    }
+
+    private var summary: String {
+        let bands = request.bandCount == 1 ? "1 band" : "\(request.bandCount) bands"
+        return "Filter list: \(bands), preamp \(String(format: "%+.1f", request.preampDB)) dB"
     }
 }
