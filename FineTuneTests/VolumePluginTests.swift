@@ -830,3 +830,201 @@ struct VolumePluginMenuTests {
         #expect(menu(compatible: ["a"], choice: .plugin("a")).caption == "Starting the plugin…")
     }
 }
+
+// MARK: - Bundled iBasso plugin
+
+@Suite("Volume plugins — iBasso DC plugin")
+struct IBassoPluginTests {
+    private static let file = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("plugins/iBasso DC.finetuneplugin")
+
+    private func makeIBassoSession(
+        productName: String, vendorID: Int = 0x262A, productID: Int = 0,
+        transport: RecordingTransport, events: EventLog
+    ) throws -> VolumePluginSession {
+        let file = VolumePluginLoader.load(Self.file)
+        #expect(file.loadError == nil)
+        let manifest = try #require(file.manifest)
+        let script = try #require(file.script)
+        return VolumePluginSession(
+            manifest: manifest,
+            script: script,
+            scriptURL: file.fileURL,
+            transport: transport,
+            info: VolumePluginSession.DeviceInfo(
+                name: productName, uid: "uid-\(productName)",
+                vendorID: vendorID, productID: productID, productName: productName),
+            onEvent: { events.append($0) }
+        )
+    }
+
+    /// The DC06's register writes: both registers of the left chip, then of the right one
+    private static func chipWrites(_ value: UInt8) -> [[UInt8]] {
+        [
+            padded([1, 0x11, 0x98, 0x90, 0x10, 0x00, 0x01, value]),
+            padded([2, 0x11, 0x98, 0x90, 0x0F, 0x00, 0x01, value]),
+            padded([3, 0x11, 0x98, 0x92, 0x10, 0x00, 0x01, value]),
+            padded([4, 0x11, 0x98, 0x92, 0x0F, 0x00, 0x01, value]),
+        ]
+    }
+
+    /// The level given to the controller: two-byte offset writes to 0xA2, left then right
+    private static func controllerWrites(_ value: UInt8) -> [[UInt8]] {
+        [
+            padded([19, 0x11, 0xA0, 0xA2, 0x00, 0x10, 0x01, value]),
+            padded([20, 0x11, 0xA0, 0xA2, 0x00, 0x11, 0x01, value]),
+        ]
+    }
+
+    /// The reads of the controller's level, left then right, that the models with one start with
+    private static let levelReads: [[UInt8]] = [
+        padded([0x15, 0x12, 0xE4, 0xA2, 0x00, 0x10, 0x01]),
+        padded([0x16, 0x12, 0xE4, 0xA2, 0x00, 0x11, 0x01]),
+    ]
+
+    @Test("It is one file, and matches iBasso's models by name, and the DC03 Pro by product ID")
+    func matching() throws {
+        let file = VolumePluginLoader.load(Self.file)
+        #expect(file.loadError == nil)
+        #expect(file.id == "finetune.ibasso-dc")
+        let manifest = try #require(file.manifest)
+        #expect(manifest.hid.outputReportLength == nil)
+        func matches(_ vendorID: Int, _ productID: Int, _ name: String?) -> Bool {
+            VolumePluginMatching.hidMatches(
+                anyOf: manifest.match, vendorID: vendorID, productID: productID, productName: name, usagePairs: [])
+        }
+        #expect(matches(0x262A, 0x1234, "iBasso-DC06-Pro"))
+        #expect(matches(0x262A, 0x1234, "iBasso-DC06"))
+        #expect(matches(0x262A, 0x187E, nil))
+        #expect(matches(0x2FC6, 0x1234, "iBasso DC07 Pro"))
+        #expect(matches(0x0661, 0x1234, "DC04U"))
+        #expect(!matches(0x2FC6, 0x1234, "iBasso DC-Elite"))
+        #expect(!matches(0x2FC6, 0x1234, "Another DAC"))
+        #expect(!matches(0x1234, 0x1234, "iBasso-DC06-Pro"))
+    }
+
+    @Test("DC06 Pro: the level the controller answers with when the plugin starts wins")
+    func readsTheLevel() async throws {
+        let transport = RecordingTransport()
+        let events = EventLog()
+        let session = try makeIBassoSession(productName: "iBasso-DC06-Pro", transport: transport, events: events)
+        // Each answer starts with its read's command number, with the attenuation in byte 4: the
+        // left channel at step 50, the right one at step 60
+        let attached = await start(session, volume: 0.9, thenReports: [
+            [0x16, 0x12, 0x00, 0x00, 40, 0x00, 0x00, 0x00],
+            [0x15, 0x12, 0x00, 0x00, 50, 0x00, 0x00, 0x00],
+        ])
+        #expect(attached?.volume == 0.6)
+        #expect(transport.reports == Self.levelReads)
+        #expect(events.failures.isEmpty)
+        session.close()
+    }
+
+    @Test("DC06 Pro: without an answer, the chips, then the controller, which a mute leaves at the level")
+    func dc06Pro() async throws {
+        let transport = RecordingTransport()
+        let session = try makeIBassoSession(productName: "iBasso-DC06-Pro", transport: transport, events: EventLog())
+        _ = await start(session, volume: 1.0)
+        #expect(transport.reports == Self.levelReads + Self.chipWrites(0) + Self.controllerWrites(0))
+
+        session.request(volume: 0.5)
+        await idle(session)
+        #expect(Array(transport.reports.suffix(6)) == Self.chipWrites(50) + Self.controllerWrites(50))
+
+        let before = transport.reports.count
+        session.request(muted: true)
+        await idle(session)
+        #expect(Array(transport.reports.dropFirst(before)) == Self.chipWrites(255))
+
+        session.request(muted: false)
+        await idle(session)
+        #expect(Array(transport.reports.suffix(6)) == Self.chipWrites(50) + Self.controllerWrites(50))
+        session.close()
+    }
+
+    @Test("DC06: the chips alone, with no controller to read the level of")
+    func dc06() async throws {
+        let transport = RecordingTransport()
+        let session = try makeIBassoSession(productName: "iBasso-DC06", transport: transport, events: EventLog())
+        _ = await start(session, volume: 0.01)
+        #expect(transport.reports == Self.chipWrites(155))
+        session.close()
+    }
+
+    @Test("DC03 Pro: four-byte offset writes, with the controller's copy of each channel")
+    func dc03Pro() async throws {
+        let transport = RecordingTransport()
+        // Known by its product ID when its name is empty
+        let session = try makeIBassoSession(productName: "", productID: 0x187E, transport: transport, events: EventLog())
+        _ = await start(session, volume: 0.5)
+        let reports = transport.reports
+        try #require(reports.count == 12)
+        #expect(Array(reports.prefix(2)) == Self.levelReads)
+        #expect(reports[2] == padded([1, 0x11, 0x88, 0x60, 0x00, 0x00, 0x05, 0x09, 0x00, 0x01, 0x00, 50]))
+        #expect(reports[8] == Self.controllerWrites(50)[0])
+        #expect(reports[11] == Self.controllerWrites(50)[1])
+        #expect(reports.allSatisfy { $0.count == 16 })
+        session.close()
+    }
+
+    @Test("DC07 Pro and DC04U: one frame holding the step")
+    func frames() async throws {
+        let eightByte = RecordingTransport()
+        let dc07 = try makeIBassoSession(productName: "iBasso DC07 Pro", vendorID: 0x2FC6, transport: eightByte, events: EventLog())
+        _ = await start(dc07, volume: 0.3)
+        #expect(eightByte.reports == [[0x01, 0x10, 0xEF, 30, 30, 0, 0, 0]])
+        dc07.close()
+
+        let sixtyFourByte = RecordingTransport()
+        let dc04u = try makeIBassoSession(productName: "DC04U", vendorID: 0x0661, transport: sixtyFourByte, events: EventLog())
+        _ = await start(dc04u, volume: 0.3)
+        #expect(sixtyFourByte.reports == [padded([0x4B, 0x01, 0x3F, 0x08, 0x01, 0x10, 30, 30], to: 64)])
+        dc04u.close()
+    }
+
+    @Test("A level set with the DAC's buttons reaches FineTune, and ends a mute")
+    func levelsFromTheDAC() async throws {
+        let dc06Events = EventLog()
+        let tonfaEvents = EventLog()
+        let macchiatoEvents = EventLog()
+        let dc06 = try makeIBassoSession(
+            productName: "iBasso-DC06-Pro", transport: RecordingTransport(), events: dc06Events)
+        let tonfa = try makeIBassoSession(
+            productName: "iBasso DC-Tonfa", vendorID: 0x2FC6, transport: RecordingTransport(), events: tonfaEvents)
+        let macchiato = try makeIBassoSession(
+            productName: "Macchiato", vendorID: 0x0661, transport: RecordingTransport(), events: macchiatoEvents)
+        _ = await start(dc06, volume: 0.5, muted: true)
+        _ = await start(tonfa, volume: 0.5)
+        _ = await start(macchiato, volume: 0.5)
+        // Past the window in which a report is taken as the DAC echoing FineTune
+        try await Task.sleep(for: .milliseconds(VolumePluginSession.echoWindowMS + 100))
+
+        dc06.handleInputReport(reportID: 0, bytes: [0, 0, 0, 0, 0xFE, 0x01, 0, 0, 20, 20, 0, 0, 0, 0, 0, 0])
+        tonfa.handleInputReport(reportID: 0, bytes: [0, 0x12, 0, 0, 30, 0, 0, 0])
+        macchiato.handleInputReport(reportID: 0, bytes: padded([0, 0, 0, 0, 0, 0x10, 42], to: 64))
+        await idle(dc06)
+        await idle(tonfa)
+        await idle(macchiato)
+
+        #expect(dc06Events.reportedMutes == [false])
+        #expect(dc06Events.reportedVolumes == [0.8])
+        #expect(tonfaEvents.reportedVolumes == [0.3])
+        #expect(macchiatoEvents.reportedVolumes == [0.42])
+        dc06.close()
+        tonfa.close()
+        macchiato.close()
+    }
+
+    @Test("A model the plugin doesn't know fails instead of getting commands")
+    func unknownModel() async throws {
+        let transport = RecordingTransport()
+        let events = EventLog()
+        let session = try makeIBassoSession(
+            productName: "iBasso DC-Elite", vendorID: 0x2FC6, transport: transport, events: events)
+        #expect(await start(session, volume: 0.5) == nil)
+        #expect(transport.reports.isEmpty)
+        #expect(events.failures.count == 1)
+    }
+}

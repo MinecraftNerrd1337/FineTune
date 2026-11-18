@@ -98,6 +98,7 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 ## Documentation
 
 - **[AutoEQ & Headphone Correction](guide/autoeq.md)** — Apply frequency correction from the [AutoEQ](https://github.com/jaakkopasanen/AutoEq) project, import [EqualizerAPO](https://sourceforge.net/projects/equalizerapo/) profiles, or browse [autoeq.app](https://www.autoeq.app/)
+- **[Volume Plugins](guide/volume-plugins.md)** — Hardware volume for DACs whose level macOS can't set, through a small plugin that sends the DAC's own commands
 - **[URL Schemes](guide/url-schemes.md)** — Automate FineTune from Terminal, [Shortcuts](https://support.apple.com/guide/shortcuts-mac), [Raycast](https://raycast.com), or scripts
 - **[Troubleshooting](guide/troubleshooting.md)** — Permission issues, missing apps, audio problems
 
