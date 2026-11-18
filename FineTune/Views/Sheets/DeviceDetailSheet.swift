@@ -69,11 +69,14 @@ struct DeviceDetailSheet: View {
                 hogModeRow(hogLine)
             }
 
-            if Self.shouldShowToggle(autoTier: autoDetectedTier) {
-                separator
+            // Always shown, so every device says how its volume is set
+            separator
+            if Self.canChooseSoftware(autoTier: autoDetectedTier) {
                 softwareToggle
-                calloutText
+            } else {
+                softwareOnlyRow
             }
+            calloutText
 
             if let onKeepAliveChange {
                 separator
@@ -169,6 +172,20 @@ struct DeviceDetailSheet: View {
         }
     }
 
+    /// For a device with no other backend: the software volume is the only one, so there is
+    /// nothing to switch.
+    private var softwareOnlyRow: some View {
+        HStack(spacing: DesignTokens.Spacing.xs) {
+            autoBadge
+
+            Text("Volume set by FineTune")
+                .font(DesignTokens.Typography.pickerText)
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+
+            Spacer(minLength: 0)
+        }
+    }
+
     /// OFF writes `nil` (clears the pin, re-runs auto-detect); ON pins `.software`.
     private var useSoftwareBinding: Binding<Bool> {
         Binding(
@@ -183,7 +200,9 @@ struct DeviceDetailSheet: View {
     // MARK: - Callout
 
     private var calloutText: some View {
-        Text("Turn on only if the volume slider doesn't work. FineTune remembers this for each device.")
+        Text(Self.canChooseSoftware(autoTier: autoDetectedTier)
+             ? "Turn on only if the volume slider doesn't work. FineTune remembers this for each device."
+             : "This device has no volume control of its own that FineTune can use.")
             .font(DesignTokens.Typography.caption)
             .foregroundStyle(DesignTokens.Colors.textTertiary)
             .fixedSize(horizontal: false, vertical: true)
@@ -258,8 +277,9 @@ struct DeviceDetailSheet: View {
         }
     }
 
-    /// Hidden when auto-tier is already `.software` — no alternative backend to switch to.
-    static func shouldShowToggle(autoTier: VolumeControlTier) -> Bool {
+    /// The toggle is shown unless auto-tier is already `.software`: there is no other backend to
+    /// switch from. The row then shows the "Auto: Software" badge without a switch.
+    static func canChooseSoftware(autoTier: VolumeControlTier) -> Bool {
         autoTier != .software
     }
 }
