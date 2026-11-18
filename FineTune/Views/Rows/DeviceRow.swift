@@ -52,6 +52,9 @@ struct DeviceRow: View {
     let onMasterVolumeChange: ((Float) -> Void)?
     let optionKeyEditsMasterVolume: Bool
 
+    /// The volume plugin that sets the device's level, marked by a puzzle piece on its badge
+    let volumePluginName: String?
+
     @State private var sliderValue: Double
     /// Slider position of the master volume, mirrored like `sliderValue` for the device volume.
     @State private var masterSliderValue: Double
@@ -138,7 +141,8 @@ struct DeviceRow: View {
         iconOverrideSymbol: String? = nil,
         masterVolume: Float = 1.0,
         onMasterVolumeChange: ((Float) -> Void)? = nil,
-        optionKeyEditsMasterVolume: Bool = false
+        optionKeyEditsMasterVolume: Bool = false,
+        volumePluginName: String? = nil
     ) {
         self.device = device
         self.isDefault = isDefault
@@ -164,6 +168,7 @@ struct DeviceRow: View {
         self.masterVolume = masterVolume
         self.onMasterVolumeChange = onMasterVolumeChange
         self.optionKeyEditsMasterVolume = optionKeyEditsMasterVolume
+        self.volumePluginName = volumePluginName
         self._sliderValue = State(initialValue: Self.volumeToSlider(volume, backend: volumeBackend))
         self._masterSliderValue = State(initialValue: VolumeMapping.gainToSlider(masterVolume))
     }
@@ -188,6 +193,41 @@ struct DeviceRow: View {
             }
     }
 
+    // MARK: - Volume Plugin Mark
+
+    /// Where the puzzle piece sits, from the badge's top trailing corner
+    private static let pluginMarkOffset = CGSize(width: 3, height: -3)
+    /// The gap the piece cuts around itself in the badge
+    private static let pluginMarkGap: CGFloat = 1.5
+
+    /// The device's badge. When a plugin sets the device's level, a puzzle piece sits on its top
+    /// corner, so the DACs a plugin drives stand out in the list. The piece cuts its own shape,
+    /// a little larger, out of the badge.
+    @ViewBuilder
+    private var badge: some View {
+        if let volumePluginName, volumeBackend == .plugin {
+            DeviceBadge(icon: displayIcon, isSelected: isDefault)
+                .mask {
+                    ZStack(alignment: .topTrailing) {
+                        Rectangle()
+                        PuzzlePieceMark(spread: Self.pluginMarkGap)
+                            .offset(Self.pluginMarkOffset)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+                .overlay(alignment: .topTrailing) {
+                    PuzzlePieceMark()
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                        .offset(Self.pluginMarkOffset)
+                        .help("Volume set by the “\(volumePluginName)” plugin")
+                        .accessibilityLabel("Volume set by the “\(volumePluginName)” plugin")
+                }
+        } else {
+            DeviceBadge(icon: displayIcon, isSelected: isDefault)
+        }
+    }
+
     // MARK: - Device Header
 
     private var deviceHeader: some View {
@@ -196,7 +236,7 @@ struct DeviceRow: View {
             // Selection is now signalled by accent-colored gradient on the
             // badge plus bold device name; the row-level gesture in `body`
             // handles tap-to-set-default.
-            DeviceBadge(icon: displayIcon, isSelected: isDefault)
+            badge
 
             // Device name + optional AutoEQ profile subtitle + AutoEQ picker
             HStack(spacing: DesignTokens.Spacing.xs) {
@@ -408,5 +448,33 @@ extension DeviceRow {
                 onMuteToggle: {}
             )
         }
+    }
+}
+
+// MARK: - Puzzle Piece Mark
+
+/// The puzzle piece on the badge of a device a volume plugin drives. With a spread, the piece is
+/// that much larger on every side, for the gap it cuts around itself in the badge.
+private struct PuzzlePieceMark: View {
+    var spread: CGFloat = 0
+
+    var body: some View {
+        if spread > 0 {
+            // The piece, moved by the spread in every direction
+            ZStack {
+                glyph
+                ForEach(0..<16, id: \.self) { index in
+                    let angle = CGFloat(index) * .pi / 8
+                    glyph.offset(x: spread * cos(angle), y: spread * sin(angle))
+                }
+            }
+        } else {
+            glyph
+        }
+    }
+
+    private var glyph: some View {
+        Image(systemName: "puzzlepiece.fill")
+            .font(.system(size: 10, weight: .semibold))
     }
 }

@@ -647,7 +647,8 @@ struct MenuBarPanelView: View {
                         onMasterVolumeChange: { volume in
                             audioEngine.setDeviceMasterVolume(volume, for: device.uid)
                         },
-                        optionKeyEditsMasterVolume: audioEngine.settingsManager.appSettings.masterVolumeOptionKeyEnabled
+                        optionKeyEditsMasterVolume: audioEngine.settingsManager.appSettings.masterVolumeOptionKeyEnabled,
+                        volumePluginName: volumePluginName(for: device.id)
                     )
                     .id(PanelKeyboardNavModel.RowID.device(uid: device.uid))
                 }
@@ -774,6 +775,15 @@ struct MenuBarPanelView: View {
                 controller.choose(choice, deviceID: deviceID, deviceUID: uid)
             }
         )
+        #else
+        return nil
+        #endif
+    }
+
+    /// The plugin that sets a device's level, for the puzzle piece on its row
+    private func volumePluginName(for deviceID: AudioDeviceID) -> String? {
+        #if !APP_STORE
+        return audioEngine.volumePlugins.pluginName(for: deviceID)
         #else
         return nil
         #endif
