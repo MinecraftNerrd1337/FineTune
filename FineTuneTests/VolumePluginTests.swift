@@ -770,3 +770,63 @@ struct VolumePluginSettingsTests {
             .hasSuffix(". 3 installed, in use on DAC A, DAC B, 1 with a problem"))
     }
 }
+
+// MARK: - Device menu
+
+@Suite("Volume plugins — a device's menu")
+struct VolumePluginMenuTests {
+    private typealias Menu = DeviceDetailSheet.PluginMenu
+    private let plugins = [(id: "a", name: "Plugin A"), (id: "b", name: "Plugin B"), (id: "c", name: "Plugin C")]
+
+    private func menu(
+        compatible: [String], choice: VolumePluginChoice?, active: String? = nil, problem: String? = nil
+    ) -> Menu {
+        Menu.make(
+            plugins: plugins, compatibleIDs: compatible, choice: choice,
+            activePluginID: active, problem: problem, onSelect: { _ in })
+    }
+
+    @Test("None, then the plugins written for the device; the others wait for ⌥, paler")
+    func listsPlugins() {
+        let menu = menu(compatible: ["b"], choice: nil)
+        #expect(menu.options.map(\.id) == [Menu.noPluginID, "b"])
+        #expect(menu.options.allSatisfy(\.isCompatible))
+        #expect(menu.otherOptions.map(\.id) == ["a", "c"])
+        #expect(menu.otherOptions.allSatisfy { !$0.isCompatible })
+        #expect(menu.selectedID == Menu.noPluginID)
+        #expect(menu.caption == "A plugin can set this DAC's own volume.")
+    }
+
+    @Test("A device with no plugin written for it says ⌥ lists the others")
+    func hintsAtOptionKey() {
+        let menu = menu(compatible: [], choice: .noPlugin)
+        #expect(menu.options.map(\.id) == [Menu.noPluginID])
+        #expect(menu.caption?.contains("⌥") == true)
+        #expect(!menu.captionIsWarning)
+    }
+
+    @Test("A plugin chosen though it isn't written for the device stays in view, with a warning")
+    func keepsForcedChoice() {
+        let menu = menu(compatible: ["b"], choice: .plugin("c"), active: "c")
+        #expect(menu.options.map(\.id) == [Menu.noPluginID, "b", "c"])
+        #expect(menu.options.last?.isCompatible == false)
+        #expect(menu.otherOptions.map(\.id) == ["a"])
+        #expect(menu.selectedID == "c")
+        #expect(menu.captionIsWarning)
+    }
+
+    @Test("A chosen plugin that is gone from the folder is still shown, and its problem said")
+    func keepsMissingChoice() {
+        let menu = menu(compatible: [], choice: .plugin("gone"), problem: "The plugin is no longer in the plugins folder.")
+        #expect(menu.options.last?.id == "gone")
+        #expect(menu.options.last?.title == "gone (missing)")
+        #expect(menu.caption == "The plugin is no longer in the plugins folder.")
+        #expect(menu.captionIsWarning)
+    }
+
+    @Test("A plugin that drives the device says so, one still starting says that")
+    func describesActivePlugin() {
+        #expect(menu(compatible: ["a"], choice: .plugin("a"), active: "a").caption?.hasPrefix("Sets the DAC's own volume") == true)
+        #expect(menu(compatible: ["a"], choice: .plugin("a")).caption == "Starting the plugin…")
+    }
+}

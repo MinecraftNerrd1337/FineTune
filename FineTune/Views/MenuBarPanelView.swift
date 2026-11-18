@@ -724,7 +724,8 @@ struct MenuBarPanelView: View {
                         keepAliveStatus: audioEngine.deviceKeepAlive.status(for: device.uid),
                         onKeepAliveChange: { enabled in
                             audioEngine.deviceKeepAlive.setEnabled(enabled, for: device.uid)
-                        }
+                        },
+                        pluginMenu: volumePluginMenu(for: device)
                     )
                 }
             }
@@ -745,6 +746,37 @@ struct MenuBarPanelView: View {
             }
             return true
         }
+    }
+
+    /// The volume plugin menu of a device's details, once a plugin is installed
+    private func volumePluginMenu(for device: AudioDevice) -> DeviceDetailSheet.PluginMenu? {
+        #if !APP_STORE
+        let controller = audioEngine.volumePlugins
+        let plugins = controller.plugins.filter(\.isUsable).map { (id: $0.id, name: $0.name) }
+        let state = controller.state(for: device.id, uid: device.uid)
+        var choosesPlugin = false
+        if case .plugin(_)? = state.choice {
+            choosesPlugin = true
+        }
+        guard !plugins.isEmpty || choosesPlugin else { return nil }
+        let deviceID = device.id
+        let uid = device.uid
+        return DeviceDetailSheet.PluginMenu.make(
+            plugins: plugins,
+            compatibleIDs: state.compatiblePluginIDs,
+            choice: state.choice,
+            activePluginID: state.activePluginID,
+            problem: state.problem,
+            onSelect: { pluginID in
+                let choice: VolumePluginChoice = pluginID == DeviceDetailSheet.PluginMenu.noPluginID
+                    ? .noPlugin
+                    : .plugin(pluginID)
+                controller.choose(choice, deviceID: deviceID, deviceUID: uid)
+            }
+        )
+        #else
+        return nil
+        #endif
     }
 
     @ViewBuilder
