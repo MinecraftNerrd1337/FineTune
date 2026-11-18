@@ -275,7 +275,8 @@ final class AutoEQProfileManager {
         return copy
     }
 
-    /// Delete an imported or created profile from disk and catalog. Its history is kept.
+    /// Delete an imported, downloaded or created profile from disk and catalog. Its history,
+    /// favorite and device selections are the caller's.
     func deleteImportedProfile(id: String) {
         guard let profile = profiles[id], profile.source.isLocal else { return }
         profiles.removeValue(forKey: id)

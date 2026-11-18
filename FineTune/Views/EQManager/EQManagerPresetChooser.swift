@@ -1,4 +1,5 @@
 // FineTune/Views/EQManager/EQManagerPresetChooser.swift
+import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -29,6 +30,9 @@ struct EQManagerPresetChooser: View {
     /// A filter list picked to import: the chooser closes, and its base rate is asked for in a
     /// sheet of its own. Without it, the list is imported at the last rate chosen.
     var onImportFilterList: ((EQManagerImportRequest) -> Void)? = nil
+    /// Offers Delete in the context menu of a preset or template of the library, after a
+    /// confirmation. The caller deletes it and frees the devices that use it.
+    var onDelete: ((_ profileID: String) -> Void)? = nil
     let onCancel: () -> Void
 
     private enum Mode { case choose, create }
@@ -44,6 +48,8 @@ struct EQManagerPresetChooser: View {
     @State private var debounceTask: Task<Void, Never>?
     @State private var searchResult = AutoEQSearchResult(entries: [], totalCount: 0)
     @State private var hoveredID: String?
+    /// The library profile whose deletion waits for confirmation.
+    @State private var deleteCandidate: AutoEQCatalogEntry?
     @State private var loadingID: String?
     @State private var errorMessage: String?
     @State private var isImporterPresented = false
@@ -127,6 +133,42 @@ struct EQManagerPresetChooser: View {
         }
         .onChange(of: debouncedQuery) { _, _ in runSearch() }
         .onChange(of: scope) { _, _ in runSearch() }
+        .confirmationDialog(
+            "Delete “\(deleteCandidate?.name ?? "")”?",
+            isPresented: Binding(get: { deleteCandidate != nil }, set: { if !$0 { deleteCandidate = nil } }),
+            titleVisibility: .visible,
+            presenting: deleteCandidate
+        ) { entry in
+            Button("Delete", role: .destructive) { delete(entry) }
+            Button("Cancel", role: .cancel) {}
+        } message: { entry in
+            Text(deleteMessage(entry))
+        }
+    }
+
+    // MARK: - Delete
+
+    /// Presets and templates of the library; catalog profiles are not stored, so not deletable.
+    private func isDeletable(_ entry: AutoEQCatalogEntry) -> Bool {
+        onDelete != nil && profileManager.profile(for: entry.id)?.source.isLocal == true
+    }
+
+    private func deleteMessage(_ entry: AutoEQCatalogEntry) -> String {
+        let devices = settings.deviceUIDs(usingAutoEQProfile: entry.id).count
+        var text = "The preset and its version history are deleted. This cannot be undone."
+        if devices > 0 {
+            text += devices == 1
+                ? " 1 device uses it: it will have no AutoEQ preset."
+                : " \(devices) devices use it: they will have no AutoEQ preset."
+        }
+        return text
+    }
+
+    private func delete(_ entry: AutoEQCatalogEntry) {
+        deleteCandidate = nil
+        onDelete?(entry.id)
+        libraryRevision += 1
+        runSearch()
     }
 
     private var searchField: some View {
@@ -357,6 +399,11 @@ struct EQManagerPresetChooser: View {
         .onHover { hoveredID = $0 ? hoverID : (hoveredID == hoverID ? nil : hoveredID) }
         .onTapGesture { choose(entry) }
         .accessibilityAddTraits(isSelected ? AccessibilityTraits([.isButton, .isSelected]) : .isButton)
+        .overlay {
+            if isDeletable(entry) {
+                EQManagerDeleteMenu(title: entry.name) { deleteCandidate = entry }
+            }
+        }
     }
 
     private func rowIcon(_ name: String) -> some View {
@@ -616,5 +663,54 @@ struct EQManagerImportSheet: View {
     private var summary: String {
         let bands = request.bandCount == 1 ? "1 band" : "\(request.bandCount) bands"
         return "Filter list: \(bands), preamp \(String(format: "%+.1f", request.preampDB)) dB"
+    }
+}
+
+// MARK: - Delete Menu
+
+/// The right-click menu of a library row, drawn by AppKit: SwiftUI's contextMenu does not show
+/// a red item. Headed with the preset's name, so a misclick shows which one it is about, then
+/// Delete... in red.
+struct EQManagerDeleteMenu: NSViewRepresentable {
+    let title: String
+    let onDelete: () -> Void
+
+    func makeNSView(context: Context) -> RightClickView { RightClickView() }
+
+    func updateNSView(_ view: RightClickView, context: Context) {
+        view.title = title
+        view.onDelete = onDelete
+    }
+
+    final class RightClickView: NSView {
+        var title = ""
+        var onDelete: () -> Void = {}
+
+        /// Takes right clicks (and control-clicks) only: the row under it keeps its hover,
+        /// clicks and buttons.
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent else { return nil }
+            let isMenuClick = event.type == .rightMouseDown
+                || (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+            return isMenuClick ? super.hitTest(point) : nil
+        }
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            menu.addItem(.sectionHeader(title: title))
+
+            let label = "Delete..."
+            let item = NSMenuItem(title: label, action: #selector(deleteChosen), keyEquivalent: "")
+            item.target = self
+            item.attributedTitle = NSAttributedString(string: label, attributes: [
+                .foregroundColor: NSColor.systemRed,
+                .font: NSFont.menuFont(ofSize: 0),
+            ])
+            menu.addItem(item)
+            return menu
+        }
+
+        @objc private func deleteChosen() { onDelete() }
     }
 }

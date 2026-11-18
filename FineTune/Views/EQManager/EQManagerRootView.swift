@@ -434,6 +434,7 @@ struct EQManagerRootView: View {
     /// The preset chooser, to show a preset or to replace the bands of the one shown.
     private func presetChooser(_ purpose: ChooserPurpose) -> EQManagerPresetChooser {
         let selects = purpose == .select
+        let onDelete: ((String) -> Void)? = selects ? { deletePreset($0) } : nil
         let inUse: EQManagerPresetChooser.InUse? = selects ? inUsePreset : nil
         // The chooser opens outside edit mode only: nothing unsaved is lost
         let onDeselect: (() -> Void)? = selects ? { showNoPreset() } : nil
@@ -456,8 +457,21 @@ struct EQManagerRootView: View {
                 importAfterChooser = request
                 chooserPurpose = nil
             },
+            onDelete: onDelete,
             onCancel: { chooserPurpose = nil }
         )
+    }
+
+    /// Deletes a preset or template of the library (confirmed in the chooser): the devices that
+    /// use it are left with no AutoEQ preset, and the window shows none if it showed it.
+    private func deletePreset(_ id: String) {
+        for uid in settings.deviceUIDs(usingAutoEQProfile: id) {
+            audioEngine.setAutoEQProfile(for: uid, profileID: nil)
+        }
+        settings.unfavoriteAutoEQProfile(id: id)
+        profileManager.history.clear(profileID: id)
+        profileManager.deleteImportedProfile(id: id)
+        if editor?.original.id == id { editor = nil }
     }
 
     // MARK: - Import
