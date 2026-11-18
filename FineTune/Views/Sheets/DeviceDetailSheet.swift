@@ -273,6 +273,7 @@ struct DeviceDetailSheet: View {
         switch tier {
         case .hardware: return "Hardware"
         case .ddc: return "DDC"
+        case .plugin: return "Plugin"
         case .software: return "Software"
         }
     }

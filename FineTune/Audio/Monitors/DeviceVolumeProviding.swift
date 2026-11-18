@@ -3,6 +3,8 @@ import AudioToolbox
 enum VolumeControlTier: String, Codable, Equatable {
     case hardware
     case ddc
+    /// A volume plugin sends the device's own commands (see `VolumePluginController`)
+    case plugin
     case software
 }
 
@@ -49,6 +51,10 @@ protocol DeviceVolumeProviding: AnyObject {
     /// Called after DDC probe completes to refresh volume/mute states.
     /// Default implementation is a no-op (only relevant for DDC-capable monitors).
     func refreshAfterDDCProbe()
+
+    /// Re-reads one device's volume and mute, after the device changed them by itself
+    /// (a plugin-backed DAC's own buttons). Default implementation is a no-op.
+    func refreshOutputDeviceState(for deviceID: AudioDeviceID)
 }
 
 extension DeviceVolumeProviding {
@@ -65,4 +71,6 @@ extension DeviceVolumeProviding {
     }
 
     func refreshAfterDDCProbe() {}
+
+    func refreshOutputDeviceState(for deviceID: AudioDeviceID) {}
 }

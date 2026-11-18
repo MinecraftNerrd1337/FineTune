@@ -21,6 +21,8 @@ final class AudioEngine {
 
     #if !APP_STORE
     let ddcController: DDCController
+    /// Hardware volume for DACs macOS can't set, through plugins the user adds
+    let volumePlugins: VolumePluginController
     #endif
 
     private var taps: [pid_t: any ProcessTapControlling] = [:]
@@ -222,13 +224,20 @@ final class AudioEngine {
         #if !APP_STORE
         let ddc = DDCController(settingsManager: manager)
         self.ddcController = ddc
+        let plugins = VolumePluginController(settingsManager: manager, deviceProvider: resolvedDeviceProvider)
+        self.volumePlugins = plugins
         if let dvMonitor = deviceVolumeMonitor {
             self.deviceVolumeMonitor = dvMonitor
         } else {
             guard let realDeviceMonitor else {
                 preconditionFailure("AudioEngine: must provide deviceVolumeMonitor when deviceProvider is not AudioDeviceMonitor")
             }
-            self.deviceVolumeMonitor = DeviceVolumeMonitor(deviceMonitor: realDeviceMonitor, settingsManager: manager, ddcController: ddc)
+            self.deviceVolumeMonitor = DeviceVolumeMonitor(
+                deviceMonitor: realDeviceMonitor,
+                settingsManager: manager,
+                ddcController: ddc,
+                pluginController: plugins
+            )
         }
         #else
         if let dvMonitor = deviceVolumeMonitor {
@@ -302,6 +311,14 @@ final class AudioEngine {
             self?.deviceVolumeMonitor.refreshAfterDDCProbe()
             self?.refreshAllTapOutputStates()
         }
+        // A device that became plugin-backed drops its software gain to unity, and back
+        plugins.onBindingsChanged = { [weak self] in
+            self?.deviceVolumeMonitor.refreshOutputDeviceStates()
+            self?.refreshAllTapOutputStates()
+        }
+        plugins.onDeviceStateChanged = { [weak self] deviceID in
+            self?.deviceVolumeMonitor.refreshOutputDeviceState(for: deviceID)
+        }
         #endif
 
         if startMonitorsAutomatically {
@@ -316,6 +333,8 @@ final class AudioEngine {
 
                 #if !APP_STORE
                 ddc.start()
+                // A plugin only touches a device it was chosen for; none takes new DACs by default
+                plugins.start()
                 #endif
 
                 // Start device volume monitor AFTER deviceMonitor.start() populates devices
@@ -822,6 +841,11 @@ final class AudioEngine {
 
         // 3. Clear cached per-app audio state
         volumeState.resetAll()
+
+        #if !APP_STORE
+        // The reset forgot which plugin each device uses: let go of the devices they drove
+        volumePlugins.reload(force: true)
+        #endif
 
         // 4. Refresh output state caches so software-backed devices reset to defaults.
         deviceVolumeMonitor.refreshOutputDeviceStates()

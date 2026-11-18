@@ -125,6 +125,16 @@ nonisolated struct AppSettings: Codable, Equatable {
     }
 }
 
+// MARK: - Volume plugin choice
+
+/// The volume plugin a device uses (see `VolumePluginController`)
+nonisolated enum VolumePluginChoice: Equatable, Sendable {
+    /// No plugin, even one written for the device
+    case noPlugin
+    /// The plugin with this id
+    case plugin(String)
+}
+
 // MARK: - Settings Manager
 
 @Observable
@@ -157,6 +167,12 @@ final class SettingsManager {
         var ddcVolumes: [String: Int] = [:]       // device UID → volume (0-100)
         var ddcMuteStates: [String: Bool] = [:]   // device UID → software mute state
         var ddcSavedVolumes: [String: Int] = [:]  // device UID → volume before mute
+
+        // Volume plugins: hardware volume through a DAC's own USB commands (see VolumePluginController)
+        var volumePluginChoices: [String: String] = [:]   // device UID → id of its plugin, "" for none
+        var automaticVolumePlugins: Set<String> = []      // ids of the plugins that take new DACs
+        var pluginDeviceVolumes: [String: Float] = [:]    // device UID → slider position (0.0-1.0)
+        var pluginDeviceMuteStates: [String: Bool] = [:]  // device UID → mute state
 
         // Software-backed output volumes for devices without native volume control
         var softwareDeviceVolumes: [String: Float] = [:]      // device UID → visible volume (0.0-1.0)
@@ -223,6 +239,12 @@ final class SettingsManager {
             ddcVolumes = try c.decodeIfPresent([String: Int].self, forKey: .ddcVolumes) ?? [:]
             ddcMuteStates = try c.decodeIfPresent([String: Bool].self, forKey: .ddcMuteStates) ?? [:]
             ddcSavedVolumes = try c.decodeIfPresent([String: Int].self, forKey: .ddcSavedVolumes) ?? [:]
+            volumePluginChoices = try c.decodeIfPresent([String: String].self, forKey: .volumePluginChoices) ?? [:]
+            automaticVolumePlugins = try c.decodeIfPresent(Set<String>.self, forKey: .automaticVolumePlugins) ?? []
+            pluginDeviceVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .pluginDeviceVolumes) ?? [:])
+                .filter { $0.value.isFinite && $0.value >= 0 }
+                .mapValues { min($0, 1.0) }
+            pluginDeviceMuteStates = try c.decodeIfPresent([String: Bool].self, forKey: .pluginDeviceMuteStates) ?? [:]
             softwareDeviceVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .softwareDeviceVolumes) ?? [:])
                 .filter { $0.value.isFinite && $0.value >= 0 }
                 .mapValues { min($0, 1.0) }
@@ -453,6 +475,58 @@ final class SettingsManager {
 
     func setDDCSavedVolume(for deviceUID: String, to volume: Int) {
         settings.ddcSavedVolumes[deviceUID] = volume
+        scheduleSave()
+    }
+
+    // MARK: - Volume Plugins
+
+    /// The volume plugin of a device, or nil while neither the user nor a plugin that takes new
+    /// DACs chose for it
+    func volumePluginChoice(for deviceUID: String) -> VolumePluginChoice? {
+        guard let pluginID = settings.volumePluginChoices[deviceUID] else { return nil }
+        return pluginID.isEmpty ? .noPlugin : .plugin(pluginID)
+    }
+
+    func setVolumePluginChoice(_ choice: VolumePluginChoice?, for deviceUID: String) {
+        switch choice {
+        case nil: settings.volumePluginChoices[deviceUID] = nil
+        case .noPlugin?: settings.volumePluginChoices[deviceUID] = ""
+        case .plugin(let pluginID)?: settings.volumePluginChoices[deviceUID] = pluginID
+        }
+        scheduleSave()
+    }
+
+    /// Whether a volume plugin takes the new DACs it is written for (off until the user turns it on)
+    func isVolumePluginAutomatic(_ pluginID: String) -> Bool {
+        settings.automaticVolumePlugins.contains(pluginID)
+    }
+
+    func setVolumePluginAutomatic(_ pluginID: String, _ automatic: Bool) {
+        if automatic {
+            settings.automaticVolumePlugins.insert(pluginID)
+        } else {
+            settings.automaticVolumePlugins.remove(pluginID)
+        }
+        scheduleSave()
+    }
+
+    /// Slider position (0.0-1.0) of a device driven by a volume plugin
+    func getPluginDeviceVolume(for deviceUID: String) -> Float? {
+        settings.pluginDeviceVolumes[deviceUID]
+    }
+
+    func setPluginDeviceVolume(for deviceUID: String, to volume: Float) {
+        settings.pluginDeviceVolumes[deviceUID] = normalizedDeviceVolume(volume)
+        scheduleSave()
+    }
+
+    /// nil until a volume plugin has driven the device
+    func getPluginDeviceMuteState(for deviceUID: String) -> Bool? {
+        settings.pluginDeviceMuteStates[deviceUID]
+    }
+
+    func setPluginDeviceMuteState(for deviceUID: String, to muted: Bool) {
+        settings.pluginDeviceMuteStates[deviceUID] = muted
         scheduleSave()
     }
 
@@ -990,6 +1064,10 @@ final class SettingsManager {
         settings.ddcVolumes.removeAll()
         settings.ddcMuteStates.removeAll()
         settings.ddcSavedVolumes.removeAll()
+        settings.volumePluginChoices.removeAll()
+        settings.automaticVolumePlugins.removeAll()
+        settings.pluginDeviceVolumes.removeAll()
+        settings.pluginDeviceMuteStates.removeAll()
         settings.softwareDeviceVolumes.removeAll()
         settings.softwareDeviceMuteStates.removeAll()
         settings.softwareDeviceSavedVolumes.removeAll()

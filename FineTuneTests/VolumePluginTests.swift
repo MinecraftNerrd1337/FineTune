@@ -1,0 +1,732 @@
+// FineTuneTests/VolumePluginTests.swift
+// Volume plugins: the plugin file, loading, device matching, and the script host driven
+// through a recording stand-in for the DAC's HID interface.
+
+import Testing
+import Foundation
+import IOKit.hid
+@testable import FineTune
+
+// MARK: - Stand-ins
+
+/// Records the reports a session sends, in place of a HID interface
+private nonisolated final class RecordingTransport: VolumePluginTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent: [(reportID: UInt8, bytes: [UInt8])] = []
+    let featureReply: [UInt8]
+
+    init(featureReply: [UInt8] = []) {
+        self.featureReply = featureReply
+    }
+
+    var reports: [[UInt8]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return sent.map(\.bytes)
+    }
+
+    func setReport(_ type: IOHIDReportType, reportID: UInt8, bytes: [UInt8]) -> IOReturn {
+        lock.lock()
+        sent.append((reportID, bytes))
+        lock.unlock()
+        return kIOReturnSuccess
+    }
+
+    func getReport(_ type: IOHIDReportType, reportID: UInt8, length: Int) -> (result: IOReturn, bytes: [UInt8]) {
+        (kIOReturnSuccess, Array(featureReply.prefix(length)))
+    }
+}
+
+private nonisolated final class EventLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [VolumePluginEvent] = []
+
+    func append(_ event: VolumePluginEvent) {
+        lock.lock()
+        stored.append(event)
+        lock.unlock()
+    }
+
+    var failures: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored.compactMap { if case .failed(let message) = $0 { message } else { nil } }
+    }
+
+    var stops: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored.compactMap { if case .stopped(let message) = $0 { message } else { nil } }
+    }
+
+    var reportedVolumes: [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored.compactMap { if case .volumeReported(let volume) = $0 { volume } else { nil } }
+    }
+
+    var reportedMutes: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored.compactMap { if case .muteReported(let muted) = $0 { muted } else { nil } }
+    }
+}
+
+private typealias Match = VolumePluginManifest.Match
+
+private func makeManifest(length: Int? = 16) -> VolumePluginManifest {
+    VolumePluginManifest(
+        id: "com.example.test",
+        name: "Test DAC",
+        author: nil,
+        version: nil,
+        description: nil,
+        match: [Match(vendorID: 0x1234, productIDs: [0x5678])],
+        hid: VolumePluginManifest.HID(outputReportLength: length),
+        minimumIntervalMS: 0
+    )
+}
+
+private func makeSession(
+    _ script: String, length: Int? = 16, callTimeLimit: Double = VolumePluginSession.defaultCallTimeLimit,
+    transport: RecordingTransport, events: EventLog
+) -> VolumePluginSession {
+    VolumePluginSession(
+        manifest: makeManifest(length: length),
+        script: script,
+        scriptURL: URL(fileURLWithPath: "/tmp/Test.finetuneplugin"),
+        transport: transport,
+        info: VolumePluginSession.DeviceInfo(
+            name: "Test DAC", uid: "uid-test", vendorID: 0x1234, productID: 0x5678, productName: "Test DAC"),
+        callTimeLimit: callTimeLimit,
+        onEvent: { events.append($0) }
+    )
+}
+
+/// `reports` reach the plugin after it started, as a device's answer comes after the question
+private func start(
+    _ session: VolumePluginSession, volume: Double, muted: Bool = false, thenReports reports: [[UInt8]] = []
+) async -> VolumePluginSession.Attached? {
+    await withCheckedContinuation { continuation in
+        session.start(volume: volume, muted: muted) { attached in
+            continuation.resume(returning: attached)
+        }
+        for bytes in reports {
+            session.handleInputReport(reportID: 0, bytes: bytes)
+        }
+    }
+}
+
+private func idle(_ session: VolumePluginSession) async {
+    await withCheckedContinuation { continuation in
+        session.whenIdle { continuation.resume() }
+    }
+}
+
+/// Sends the volume as a percentage in the third byte, and the mute as `[9, 0|1]`
+private let percentScript = """
+function setVolume(device, volume) {
+  device.hid.sendOutputReport(0, [1, 0x11, Math.round(volume * 100)]);
+}
+"""
+
+private let percentAndMuteScript = percentScript + """
+function setMute(device, muted) {
+  device.hid.sendOutputReport(0, [9, muted ? 1 : 0]);
+}
+"""
+
+private func padded(_ bytes: [UInt8], to length: Int = 16) -> [UInt8] {
+    bytes + [UInt8](repeating: 0, count: length - bytes.count)
+}
+
+/// A plugin file: a license comment, the manifest comment, then the script
+private func pluginFile(manifest: String, script: String = percentScript) -> String {
+    """
+    // Test plugin. SPDX-License-Identifier: MIT
+
+    /* @manifest
+    \(manifest)
+    */
+
+    \(script)
+    """
+}
+
+private func makeTemporaryDirectory() throws -> URL {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+// MARK: - Manifest and loading
+
+@Suite("Volume plugins — manifest and loading")
+struct VolumePluginManifestTests {
+    @Test("IDs can be numbers or hexadecimal strings")
+    func decodesHexIDs() throws {
+        let json = """
+        {"id": "x", "name": "X", "match": {"vendorID": "0x262A", "productIDs": [16, "0x11"], "usagePage": "0xFF00"},
+         "hid": {"outputReportLength": 16}}
+        """
+        let manifest = try JSONDecoder().decode(VolumePluginManifest.self, from: Data(json.utf8))
+        #expect(manifest.match == [Match(vendorID: 0x262A, productIDs: [16, 17], usagePage: 0xFF00)])
+        #expect(manifest.hid.outputReportLength == 16)
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+    }
+
+    @Test("match can be a list of rules, and hid can be left out")
+    func decodesRuleList() throws {
+        let json = """
+        {"id": "x", "name": "X", "match": [
+          {"vendorID": 1},
+          {"vendorID": "0x2FC6", "productNames": ["DAC One"], "excludedProductIDs": ["0x0002"]}
+        ]}
+        """
+        let manifest = try JSONDecoder().decode(VolumePluginManifest.self, from: Data(json.utf8))
+        #expect(manifest.match == [
+            Match(vendorID: 1),
+            Match(vendorID: 0x2FC6, excludedProductIDs: [2], productNames: ["DAC One"]),
+        ])
+        #expect(manifest.hid == VolumePluginManifest.HID())
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+    }
+
+    @Test("A rule with a key it doesn't take is refused, rather than matching more than meant")
+    func refusesUnknownRuleKeys() {
+        let json = """
+        {"id": "x", "name": "X", "match": {"vendorID": "0x262A", "productName": "iBasso-DC06-Pro"}}
+        """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(VolumePluginManifest.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test("A malformed ID is refused")
+    func refusesBadID() {
+        let json = """
+        {"id": "x", "name": "X", "match": {"vendorID": "zz"}, "hid": {"outputReportLength": 16}}
+        """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(VolumePluginManifest.self, from: Data(json.utf8))
+        }
+    }
+
+    @Test("A manifest keeps its IDs, names and reports in range")
+    func validation() {
+        var manifest = makeManifest()
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+
+        // A whole vendor is allowed, an empty list of products is not
+        manifest.match[0].productIDs = nil
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+        manifest.match[0].productIDs = []
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+        manifest.match[0].productIDs = nil
+
+        manifest.match[0].excludedProductIDs = [0x10000]
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+        manifest.match[0].excludedProductIDs = nil
+        manifest.match[0].productNames = [" - "]
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+        manifest.match[0].productNames = ["iBasso-DC06-Pro"]
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+
+        manifest.hid.outputReportLength = 0
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+        manifest.hid.outputReportLength = nil
+        #expect(VolumePluginLoader.validate(manifest) == nil)
+        manifest.match[0].vendorID = 0x10000
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+        manifest.match = []
+        #expect(VolumePluginLoader.validate(manifest) != nil)
+    }
+
+    @Test("The manifest is the comment that opens with @manifest, wherever it is")
+    func findsManifestComment() {
+        let source = pluginFile(manifest: #"{"id": "x"}"#)
+        #expect(VolumePluginLoader.manifestJSON(in: source)?.trimmingCharacters(in: .whitespacesAndNewlines) == #"{"id": "x"}"#)
+        #expect(VolumePluginLoader.manifestJSON(in: "/*@manifest {} */")?.trimmingCharacters(in: .whitespaces) == "{}")
+        #expect(VolumePluginLoader.manifestJSON(in: "/* manifest {} */") == nil)
+        #expect(VolumePluginLoader.manifestJSON(in: "/* @manifestation {} */") == nil)
+        #expect(VolumePluginLoader.manifestJSON(in: "/* @manifest {} ") == nil)
+    }
+
+    @Test("Plugin files load, and broken ones say why instead of stopping the others")
+    func loadsFiles() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        func write(_ name: String, _ text: String) throws {
+            try text.write(to: directory.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        let good = """
+        {"id": "good", "name": "Good", "match": {"vendorID": 1, "productIDs": [2]}, "hid": {"outputReportLength": 8}}
+        """
+        try write("A Good.finetuneplugin", pluginFile(manifest: good))
+        try write("B Copy.finetuneplugin", pluginFile(manifest: good))
+        try write("C NoVendor.finetuneplugin", pluginFile(manifest: """
+        {"id": "nv", "name": "NV", "match": [{"productIDs": [2]}], "hid": {"outputReportLength": 8}}
+        """))
+        try write("D NoManifest.finetuneplugin", percentScript)
+        try write("E BadJSON.finetuneplugin", pluginFile(manifest: #"{"id": "bad", "name": }"#))
+        try Data([0xFF, 0xFE, 0x00, 0xC3]).write(to: directory.appendingPathComponent("F Binary.finetuneplugin"))
+        try Data(repeating: 0x20, count: VolumePluginLoader.maximumFileSize + 1)
+            .write(to: directory.appendingPathComponent("G Huge.finetuneplugin"))
+        try FileManager.default.createDirectory(
+            at: directory.appendingPathComponent("H Folder.finetuneplugin"), withIntermediateDirectories: true)
+        try write("Not a plugin.js", pluginFile(manifest: good))
+
+        let files = VolumePluginLoader.loadAll(from: directory)
+        try #require(files.count == 8)
+        #expect(files[0].id == "good")
+        #expect(files[0].isUsable)
+        #expect(files[0].script?.contains("function setVolume") == true)
+        #expect(files[1].loadError?.contains("already uses") == true)
+        #expect(files[2].loadError?.contains("vendorID") == true)
+        #expect(files[3].loadError?.contains("@manifest") == true)
+        #expect(files[4].loadError?.contains("not valid JSON") == true)
+        #expect(files[5].loadError?.contains("UTF-8") == true)
+        #expect(files[6].loadError?.contains("larger") == true)
+        #expect(files[7].loadError?.contains("folder") == true)
+        #expect(files.dropFirst().allSatisfy { !$0.isUsable })
+        // Every entry keeps an id of its own, for the plugins list
+        #expect(Set(files.map(\.id)).count == files.count)
+        #expect(files[3].name == "D NoManifest")
+    }
+
+    @Test("A missing plugins folder has no plugins")
+    func missingFolder() {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        #expect(VolumePluginLoader.loadAll(from: directory).isEmpty)
+    }
+}
+
+// MARK: - Matching
+
+@Suite("Volume plugins — device matching")
+struct VolumePluginMatchingTests {
+    private let match = Match(vendorID: 0x262A, productNames: ["iBasso-DC06-Pro"], usagePage: 0xFF00)
+
+    @Test("Names compare without case, spaces or punctuation")
+    func normalizesNames() {
+        #expect(VolumePluginMatching.normalized("iBasso-DC06-Pro") == "ibassodc06pro")
+        #expect(VolumePluginMatching.normalized("  iBasso DC06 Pro ") == "ibassodc06pro")
+    }
+
+    @Test("A HID interface matches on vendor, name and usage page")
+    func matchesHID() {
+        #expect(VolumePluginMatching.hidMatches(
+            match, vendorID: 0x262A, productID: 7, productName: "iBasso DC06 Pro", usagePairs: [(0xFF00, 1)]))
+        #expect(!VolumePluginMatching.hidMatches(
+            match, vendorID: 0x262B, productID: 7, productName: "iBasso DC06 Pro", usagePairs: [(0xFF00, 1)]))
+        #expect(!VolumePluginMatching.hidMatches(
+            match, vendorID: 0x262A, productID: 7, productName: "iBasso DC03 Pro", usagePairs: [(0xFF00, 1)]))
+        // A name is the whole name, not part of it
+        #expect(!VolumePluginMatching.hidMatches(
+            Match(vendorID: 0x262A, productNames: ["iBasso-DC06"]),
+            vendorID: 0x262A, productID: 7, productName: "iBasso-DC06-Pro", usagePairs: []))
+        // The consumer-control interface of the same DAC is left alone
+        #expect(!VolumePluginMatching.hidMatches(
+            match, vendorID: 0x262A, productID: 7, productName: "iBasso DC06 Pro", usagePairs: [(0x0C, 1)]))
+    }
+
+    @Test("A rule takes a whole vendor, only some products, or all but some")
+    func productRules() {
+        func matches(_ rule: Match, vendor: Int = 0x262A, product: Int) -> Bool {
+            VolumePluginMatching.hidMatches(rule, vendorID: vendor, productID: product, productName: nil, usagePairs: [])
+        }
+        let vendor = Match(vendorID: 0x262A)
+        #expect(matches(vendor, product: 1))
+        #expect(!matches(vendor, vendor: 0x2FC6, product: 1))
+
+        let listed = Match(vendorID: 0x262A, productIDs: [1, 2])
+        #expect(matches(listed, product: 2))
+        #expect(!matches(listed, product: 3))
+
+        let allBut = Match(vendorID: 0x262A, excludedProductIDs: [2])
+        #expect(matches(allBut, product: 1))
+        #expect(!matches(allBut, product: 2))
+
+        // A plugin's rules: any one of them is enough
+        #expect(VolumePluginMatching.hidMatches(
+            anyOf: [listed, Match(vendorID: 0x2FC6)], vendorID: 0x2FC6, productID: 9, productName: nil, usagePairs: []))
+        #expect(VolumePluginMatching.hidMatches(
+            anyOf: [allBut, listed], vendorID: 0x262A, productID: 2, productName: nil, usagePairs: []))
+        #expect(!VolumePluginMatching.hidMatches(
+            anyOf: [allBut], vendorID: 0x262A, productID: 2, productName: nil, usagePairs: []))
+    }
+
+    @Test("The HID manager looks for each listed product, or for the whole vendor")
+    func matchingDictionaries() {
+        let vendor = VolumePluginController.matchingDictionaries(for: Match(vendorID: 0x262A, usagePage: 0xFF00))
+        #expect(vendor.count == 1)
+        #expect(vendor.first?[kIOHIDVendorIDKey] as? Int == 0x262A)
+        #expect(vendor.first?[kIOHIDProductIDKey] == nil)
+        #expect(vendor.first?[kIOHIDDeviceUsagePageKey] as? Int == 0xFF00)
+
+        let listed = VolumePluginController.matchingDictionaries(for: Match(vendorID: 0x262A, productIDs: [1, 2]))
+        #expect(listed.compactMap { $0[kIOHIDProductIDKey] as? Int } == [1, 2])
+    }
+
+    @Test("An audio device belongs to a HID interface by USB IDs, else by name")
+    func matchesAudio() {
+        let usb = USBIdentity(vendorID: 0x262A, productID: 7, locationID: 0x0110_0000)
+        #expect(VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 7, hidProductName: "iBasso-DC06-Pro",
+            usb: usb, name: "USB Audio", uid: "x"))
+        #expect(!VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 8, hidProductName: "iBasso-DC06-Pro",
+            usb: usb, name: "iBasso-DC06-Pro", uid: "x"))
+        // Without USB IDs, the name or UID must carry the interface's product name
+        #expect(VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 7, hidProductName: "iBasso-DC06-Pro",
+            usb: nil, name: "USB Audio", uid: "AppleUSBAudioEngine:iBasso:iBasso-DC06-Pro:5000000001:2"))
+        #expect(!VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 7, hidProductName: "iBasso-DC06-Pro",
+            usb: nil, name: "MacBook Pro Speakers", uid: "BuiltInSpeakerDevice"))
+        #expect(!VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 7, hidProductName: nil,
+            usb: nil, name: "iBasso-DC06-Pro", uid: "x"))
+        // A device that isn't on USB (HDMI, Bluetooth) has no USB IDs, and its name isn't the interface's
+        #expect(!VolumePluginMatching.audioMatches(
+            hidVendorID: 0x262A, hidProductID: 7, hidProductName: "iBasso-DC06-Pro",
+            usb: nil, name: "LG HDR 4K", uid: "AppleGFXHDAEngineOutputDP:10001:0:{AC10-2577-01010101}"))
+    }
+
+    @Test("A new device gets the first plugin written for it that takes new DACs, and only that one")
+    func choiceForNewDevice() {
+        #expect(VolumePluginController.choiceForNewDevice(
+            compatiblePluginIDs: ["a", "b"], automaticPluginIDs: ["a", "b"]) == .plugin("a"))
+        #expect(VolumePluginController.choiceForNewDevice(
+            compatiblePluginIDs: ["a", "b"], automaticPluginIDs: ["b"]) == .plugin("b"))
+        #expect(VolumePluginController.choiceForNewDevice(
+            compatiblePluginIDs: ["a"], automaticPluginIDs: ["b"]) == nil)
+        #expect(VolumePluginController.choiceForNewDevice(
+            compatiblePluginIDs: [], automaticPluginIDs: ["a"]) == nil)
+    }
+}
+
+// MARK: - Script host
+
+@Suite("Volume plugins — script host")
+struct VolumePluginSessionTests {
+    @Test("Reports are padded to the declared length")
+    func padsReports() async {
+        let transport = RecordingTransport()
+        let session = makeSession(percentScript, transport: transport, events: EventLog())
+        let attached = await start(session, volume: 0.5)
+        #expect(attached?.volume == 0.5)
+        #expect(transport.reports == [padded([1, 0x11, 50])])
+        session.close()
+    }
+
+    @Test("Without a declared length, reports go as the plugin gives them")
+    func unpaddedReports() async {
+        let transport = RecordingTransport()
+        let session = makeSession(percentScript, length: nil, transport: transport, events: EventLog())
+        _ = await start(session, volume: 0.5)
+        #expect(transport.reports == [[1, 0x11, 50]])
+        session.close()
+    }
+
+    @Test("A report longer than declared is refused, and the plugin fails")
+    func refusesLongReports() async {
+        let transport = RecordingTransport()
+        let events = EventLog()
+        let session = makeSession(percentScript, length: 2, transport: transport, events: events)
+        let attached = await start(session, volume: 0.5)
+        #expect(attached == nil)
+        #expect(transport.reports.isEmpty)
+        #expect(events.failures.count == 1)
+    }
+
+    @Test("A huge or malformed report is refused without being copied")
+    func refusesHugeReports() async {
+        for body in ["new Array(100000).fill(1)", "{length: 3}", "\"abc\""] {
+            let transport = RecordingTransport()
+            let events = EventLog()
+            let script = "function setVolume(device, volume) { device.hid.sendOutputReport(0, \(body)); }"
+            let session = makeSession(script, length: nil, transport: transport, events: events)
+            #expect(await start(session, volume: 0.5) == nil)
+            #expect(transport.reports.isEmpty)
+            #expect(events.failures.count == 1)
+        }
+    }
+
+    @Test("A report ID other than 0 goes before the data")
+    func prefixesReportID() async {
+        let transport = RecordingTransport()
+        let script = "function setVolume(device, volume) { device.hid.sendOutputReport(5, [1]); }"
+        let session = makeSession(script, length: 4, transport: transport, events: EventLog())
+        _ = await start(session, volume: 1)
+        #expect(transport.reports == [[5, 1, 0, 0, 0]])
+        #expect(VolumePluginSession.framedReport([1, 2, 3], reportID: 0, length: 2) == nil)
+        #expect(VolumePluginSession.bytes(fromNumbers: [1, 256]) == nil)
+        #expect(VolumePluginSession.bytes(fromNumbers: [1.5]) == nil)
+        #expect(VolumePluginSession.bytes(fromNumbers: [0, 255]) == [0, 255])
+    }
+
+    @Test("Fast changes are merged and the last one wins")
+    func mergesChanges() async {
+        let transport = RecordingTransport()
+        let session = makeSession(percentScript, transport: transport, events: EventLog())
+        _ = await start(session, volume: 0.5)
+        for step in 1...20 {
+            session.request(volume: Double(step) / 100)
+        }
+        await idle(session)
+        let reports = transport.reports
+        #expect(reports.last == padded([1, 0x11, 20]))
+        #expect(reports.count <= 21)
+        session.close()
+    }
+
+    @Test("Without setMute, muting sends 0 and unmuting the level")
+    func muteFallback() async {
+        let transport = RecordingTransport()
+        let session = makeSession(percentScript, transport: transport, events: EventLog())
+        _ = await start(session, volume: 0.5)
+        session.request(muted: true)
+        await idle(session)
+        #expect(transport.reports.last == padded([1, 0x11, 0]))
+        session.request(muted: false)
+        await idle(session)
+        #expect(transport.reports.last == padded([1, 0x11, 50]))
+        session.close()
+    }
+
+    @Test("While muted, a new level waits for the unmute")
+    func levelWaitsForUnmute() async {
+        let transport = RecordingTransport()
+        let session = makeSession(percentAndMuteScript, transport: transport, events: EventLog())
+        let attached = await start(session, volume: 0.5, muted: true)
+        #expect(attached?.muted == true)
+        #expect(transport.reports == [padded([9, 1])])
+        session.request(volume: 0.8)
+        await idle(session)
+        #expect(transport.reports.count == 1)
+        session.request(muted: false)
+        await idle(session)
+        #expect(Array(transport.reports.suffix(2)) == [padded([9, 0]), padded([1, 0x11, 80])])
+        session.close()
+    }
+
+    @Test("A level the plugin reads in onAttach wins, and nothing is sent")
+    func attachReadingWins() async {
+        let transport = RecordingTransport(featureReply: [3, 25])
+        let script = percentScript + """
+        function onAttach(device) {
+          const reply = device.hid.getFeatureReport(3, 1);
+          device.reportVolume(reply[1] / 100);
+        }
+        """
+        let session = makeSession(script, transport: transport, events: EventLog())
+        let attached = await start(session, volume: 0.9)
+        #expect(attached?.volume == 0.25)
+        #expect(transport.reports.isEmpty)
+        session.close()
+    }
+
+    @Test("A level the device sends back while FineTune waits for it wins, and nothing more is sent")
+    func waitsForTheDevicesLevel() async {
+        let transport = RecordingTransport()
+        let script = percentScript + """
+        function onAttach(device) {
+          device.hid.sendOutputReport(0, [0x15, 0x12]);
+          device.waitForLevel(1000);
+        }
+        function onInputReport(device, reportID, bytes) {
+          if (bytes[0] === 0x15) device.reportVolume(bytes[1] / 100);
+        }
+        """
+        let session = makeSession(script, transport: transport, events: EventLog())
+        let attached = await start(session, volume: 0.9, thenReports: [[0x02, 99], [0x15, 30]])
+        #expect(attached?.volume == 0.3)
+        #expect(transport.reports == [padded([0x15, 0x12])])
+        session.close()
+    }
+
+    @Test("A device that doesn't answer in time gets FineTune's level")
+    func levelWaitTimesOut() async {
+        let transport = RecordingTransport()
+        let script = percentScript + """
+        function onAttach(device) { device.waitForLevel(50); }
+        function onInputReport(device, reportID, bytes) { device.reportVolume(bytes[0] / 100); }
+        """
+        let session = makeSession(script, transport: transport, events: EventLog())
+        let attached = await start(session, volume: 0.4)
+        #expect(attached?.volume == 0.4)
+        #expect(transport.reports == [padded([1, 0x11, 40])])
+        session.close()
+    }
+
+    @Test("waitForLevel only works in onAttach")
+    func levelWaitOutsideAttach() async {
+        let events = EventLog()
+        let script = percentScript + """
+        function onInputReport(device, reportID, bytes) { device.waitForLevel(100); }
+        """
+        let session = makeSession(script, transport: RecordingTransport(), events: events)
+        _ = await start(session, volume: 0.5)
+        session.handleInputReport(reportID: 0, bytes: [1])
+        await idle(session)
+        #expect(events.failures.count == 1)
+        session.close()
+    }
+
+    @Test("The DAC's own buttons reach FineTune through onInputReport")
+    func inputReports() async {
+        let events = EventLog()
+        let script = percentScript + """
+        function onAttach(device) { device.reportVolume(0.5); }
+        function onInputReport(device, reportID, bytes) { device.reportVolume(bytes[0] / 100); }
+        """
+        let session = makeSession(script, transport: RecordingTransport(), events: events)
+        _ = await start(session, volume: 0.5)
+        session.handleInputReport(reportID: 0, bytes: [40, 0, 0])
+        await idle(session)
+        #expect(events.reportedVolumes == [0.4])
+        session.close()
+    }
+
+    @Test("A level the DAC reports right after a change in FineTune counts once it can't be an echo")
+    func reportsRightAfterAChange() async throws {
+        let events = EventLog()
+        let script = percentScript + """
+        function onInputReport(device, reportID, bytes) { device.reportVolume(bytes[0] / 100); }
+        """
+        let session = makeSession(script, transport: RecordingTransport(), events: events)
+        _ = await start(session, volume: 0.5)
+        let echoWindow = Duration.milliseconds(VolumePluginSession.echoWindowMS + 150)
+
+        // The DAC echoes the level FineTune sent, then its volume button raises it
+        session.request(volume: 0.6)
+        session.handleInputReport(reportID: 0, bytes: [60, 0, 0])
+        session.handleInputReport(reportID: 0, bytes: [61, 0, 0])
+        await idle(session)
+        #expect(events.reportedVolumes.isEmpty)
+        try await Task.sleep(for: echoWindow)
+        await idle(session)
+        #expect(events.reportedVolumes == [0.61])
+
+        // An echo of FineTune's own level changes nothing
+        session.request(volume: 0.7)
+        session.handleInputReport(reportID: 0, bytes: [70, 0, 0])
+        try await Task.sleep(for: echoWindow)
+        await idle(session)
+        #expect(events.reportedVolumes == [0.61])
+
+        // A level reported before FineTune's next change is out of date
+        session.request(volume: 0.8)
+        session.handleInputReport(reportID: 0, bytes: [75, 0, 0])
+        await idle(session)
+        session.request(volume: 0.9)
+        try await Task.sleep(for: echoWindow)
+        await idle(session)
+        #expect(events.reportedVolumes == [0.61])
+        session.close()
+    }
+
+    @Test("A script without setVolume, that doesn't parse, or that throws, fails")
+    func brokenScripts() async {
+        let scripts = [
+            "function setMute(device, muted) {}",
+            "function setVolume(device, volume) {",
+            "throw new Error('broken'); function setVolume(device, volume) {}",
+            "function setVolume(device, volume) { undefinedFunction(); }",
+            "function onAttach(device) { null.x; } function setVolume(device, volume) {}",
+            "function setVolume(device, volume) { setVolume(device, volume); }",
+        ]
+        for script in scripts {
+            let events = EventLog()
+            let session = makeSession(script, transport: RecordingTransport(), events: events)
+            #expect(await start(session, volume: 0.5) == nil)
+            #expect(events.failures.count == 1)
+        }
+    }
+
+    @Test("A script that keeps the device waiting is stopped, and gets no more calls")
+    func stopsSlowScripts() async {
+        let transport = RecordingTransport()
+        let events = EventLog()
+        let script = """
+        let calls = 0;
+        function setVolume(device, volume) {
+          calls += 1;
+          device.hid.sendOutputReport(0, [calls]);
+          if (calls > 1) { for (let i = 0; i < 4; i++) sleep(100); }
+        }
+        """
+        let session = makeSession(script, length: nil, callTimeLimit: 0.3, transport: transport, events: events)
+        _ = await start(session, volume: 0.5)
+        session.request(volume: 0.6)
+        await idle(session)
+        session.request(volume: 0.7)
+        await idle(session)
+        #expect(events.stops.count == 1)
+        // The slow call's report went before it stalled, then nothing more
+        #expect(transport.reports == [[1], [2]])
+        session.close()
+    }
+
+    @Test("A script stuck in a loop is stopped", .enabled(if: VolumePluginSession.canLimitExecutionTime))
+    func stopsLoopingScripts() async {
+        let events = EventLog()
+        let script = "function setVolume(device, volume) { while (true) {} }"
+        let session = makeSession(script, callTimeLimit: 0.3, transport: RecordingTransport(), events: events)
+        #expect(await start(session, volume: 0.5) == nil)
+        #expect(events.stops.count == 1)
+        session.close()
+    }
+}
+
+// MARK: - Tier
+
+@Suite("Volume plugins — the plugin tier")
+struct VolumePluginTierTests {
+    @Test("A plugin tier is linear and attenuates in the device")
+    func linearTier() {
+        #expect(VolumeMapping.sliderFraction(forSystemGain: 0.5, tier: .plugin) == 0.5)
+        #expect(VolumeMapping.systemGain(forSliderFraction: 0.5, tier: .plugin) == 0.5)
+        #expect(VolumeFeedback.gain(tier: .plugin, sliderFraction: 0.3) == 1.0)
+        #expect(DeviceVolumeMonitor.storedVolume(0.005, tier: .plugin) == 0)
+        #expect(DeviceDetailSheet.tierDisplayName(.plugin) == "Plugin")
+        #expect(DeviceDetailSheet.canChooseSoftware(autoTier: .plugin))
+    }
+
+    @Test("A device's first plugin level is the software slider's, at most half way")
+    func firstVolume() {
+        #expect(VolumePluginController.firstVolume(softwareVolume: nil) == 0.5)
+        #expect(VolumePluginController.firstVolume(softwareVolume: 1.0) == 0.5)
+        #expect(abs(VolumePluginController.firstVolume(softwareVolume: 0.04) - 0.2) < 0.0001)
+    }
+}
+
+// MARK: - Choices
+
+@Suite("Volume plugins — choices")
+struct VolumePluginChoiceTests {
+    @Test("Each device's plugin, and the plugins that take new DACs, are kept until a settings reset")
+    func remembersChoices() throws {
+        let directory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let settings = SettingsManager(directory: directory)
+        #expect(settings.volumePluginChoice(for: "dac") == nil)
+        #expect(!settings.isVolumePluginAutomatic("plugin"))
+
+        settings.setVolumePluginChoice(.plugin("plugin"), for: "dac")
+        settings.setVolumePluginChoice(.noPlugin, for: "other")
+        settings.setVolumePluginAutomatic("plugin", true)
+        #expect(settings.volumePluginChoice(for: "dac") == .plugin("plugin"))
+        #expect(settings.volumePluginChoice(for: "other") == .noPlugin)
+        #expect(settings.isVolumePluginAutomatic("plugin"))
+
+        settings.setVolumePluginChoice(nil, for: "other")
+        #expect(settings.volumePluginChoice(for: "other") == nil)
+
+        settings.resetAllSettings()
+        #expect(settings.volumePluginChoice(for: "dac") == nil)
+        #expect(!settings.isVolumePluginAutomatic("plugin"))
+    }
+}
