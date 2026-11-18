@@ -9,6 +9,7 @@ struct AudioTab: View {
 
     /// Memoized sorted output devices for the system-sounds picker.
     @State private var sortedOutputDevices: [AudioDevice] = []
+    @State private var isVolumePluginsSheetPresented = false
 
     private var unifiedLoudnessToggleBinding: Binding<Bool> {
         Binding(
@@ -142,6 +143,10 @@ struct AudioTab: View {
                     .controlSize(.small)
                     .labelsHidden()
             }
+            #if !APP_STORE
+            SettingsRowDivider()
+            volumePluginsRow
+            #endif
             SettingsRowDivider()
             SettingsRow(
                 "System Sounds",
@@ -186,6 +191,71 @@ struct AudioTab: View {
             }
         }
     }
+
+    // MARK: - Volume Plugins
+
+    #if !APP_STORE
+    /// The plugins themselves are listed in a sheet, so the tab doesn't grow with each one
+    private var volumePluginsRow: some View {
+        let controller = audioEngine.volumePlugins
+        return SettingsRow(
+            "Volume Plugins",
+            description: Self.volumePluginsSummary(controller.plugins.map { controller.status(of: $0) })
+        ) {
+            Button("Manage…") { isVolumePluginsSheetPresented = true }
+                .controlSize(.small)
+        }
+        // Picks up plugins added since launch; restarts nothing when the folder didn't change
+        .onAppear { controller.reload() }
+        .sheet(isPresented: $isVolumePluginsSheetPresented) {
+            VolumePluginsSheet(controller: controller) { isVolumePluginsSheetPresented = false }
+                .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
+        }
+    }
+
+    /// The row's description: what plugins are for, and what the installed ones do
+    static func volumePluginsSummary(_ statuses: [VolumePluginController.Status]) -> String {
+        let purpose = "Set the hardware volume of DACs macOS can't, with the DAC's own commands"
+        guard !statuses.isEmpty else { return "\(purpose). None installed" }
+        var deviceNames: [String] = []
+        var problems = 0
+        for status in statuses {
+            switch status {
+            case .active(let names): deviceNames += names
+            case .invalid, .failed: problems += 1
+            case .unused: break
+            }
+        }
+        var parts = [statuses.count == 1 ? "1 installed" : "\(statuses.count) installed"]
+        if !deviceNames.isEmpty { parts.append("in use on \(deviceNames.sorted().joined(separator: ", "))") }
+        if problems > 0 { parts.append(problems == 1 ? "1 with a problem" : "\(problems) with a problem") }
+        return "\(purpose). \(parts.joined(separator: ", "))"
+    }
+
+    static func volumePluginDescription(_ plugin: VolumePluginFile, status: VolumePluginController.Status) -> String {
+        var lines: [String] = []
+        switch status {
+        case .invalid(let error):
+            lines.append("Can't be loaded: \(error)")
+        case .unused:
+            lines.append("Not in use")
+        case .active(let deviceNames):
+            lines.append("Sets the volume of \(deviceNames.joined(separator: ", "))")
+        case .failed(let error):
+            lines.append(error)
+        }
+        if let summary = plugin.manifest?.description, !summary.isEmpty {
+            lines.append(summary)
+        }
+        var credits: [String] = []
+        if let author = plugin.manifest?.author, !author.isEmpty { credits.append("By \(author)") }
+        if let version = plugin.manifest?.version, !version.isEmpty { credits.append("version \(version)") }
+        if !credits.isEmpty {
+            lines.append(credits.joined(separator: ", "))
+        }
+        return lines.joined(separator: "\n")
+    }
+    #endif
 
     // MARK: - AutoEQ
 
@@ -235,3 +305,87 @@ struct AudioTab: View {
         sortedOutputDevices = audioEngine.prioritySortedOutputDevices
     }
 }
+
+// MARK: - Volume Plugins Sheet
+
+#if !APP_STORE
+/// Every plugin in the plugins folder, with what it does and whether it takes new DACs
+@MainActor
+struct VolumePluginsSheet: View {
+    let controller: VolumePluginController
+    let onDone: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.md) {
+            Text("Volume Plugins")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+
+            Text("A plugin sets a DAC's hardware volume by sending it the DAC's own commands. Choose a DAC's plugin in its details, or let a plugin take the new DACs it is written for. Use only plugins you trust.")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            pluginList
+
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Button("Open Folder") { controller.revealPluginsFolder() }
+                Button("Reload") { controller.reload(force: true) }
+                Spacer()
+                Button("Done", action: onDone)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(DesignTokens.Spacing.xl)
+        .frame(width: 520, height: 440)
+        // Picks up a plugin added while Settings was open
+        .onAppear { controller.reload() }
+    }
+
+    private var pluginList: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if controller.plugins.isEmpty {
+                    Text("No plugins yet. Put .finetuneplugin files in the plugins folder, then click Reload.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
+                ForEach(controller.plugins) { plugin in
+                    if plugin.id != controller.plugins.first?.id {
+                        SettingsRowDivider()
+                    }
+                    row(for: plugin)
+                }
+            }
+        }
+        .frame(maxHeight: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private func row(for plugin: VolumePluginFile) -> some View {
+        let description = AudioTab.volumePluginDescription(plugin, status: controller.status(of: plugin))
+        let takesNewDevices = Binding(
+            get: { controller.takesNewDevices(plugin.id) },
+            set: { controller.setTakesNewDevices($0, for: plugin.id) }
+        )
+        return SettingsRow(plugin.name, description: description) {
+            if plugin.isUsable {
+                Toggle(isOn: takesNewDevices) {
+                    Text("New DACs")
+                        .font(.system(size: 11))
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Use this plugin for the DACs it is written for that FineTune hasn't seen yet. A DAC that is already set keeps its plugin, or none.")
+            }
+        }
+    }
+}
+#endif

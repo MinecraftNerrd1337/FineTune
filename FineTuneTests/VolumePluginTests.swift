@@ -730,3 +730,43 @@ struct VolumePluginChoiceTests {
         #expect(!settings.isVolumePluginAutomatic("plugin"))
     }
 }
+
+// MARK: - Settings
+
+@Suite("Volume plugins — Settings")
+struct VolumePluginSettingsTests {
+    private func makeFile(_ manifest: VolumePluginManifest) -> VolumePluginFile {
+        VolumePluginFile(
+            id: manifest.id, fileURL: URL(fileURLWithPath: "/tmp/Test.finetuneplugin"),
+            manifest: manifest, script: percentScript, loadError: nil)
+    }
+
+    @Test("A plugin's row says what it's doing, then who made it")
+    func describesPlugins() {
+        var manifest = makeManifest()
+        manifest.author = "Someone"
+        manifest.version = "1.0"
+        manifest.description = "Hardware volume for the Test DAC"
+        let plugin = makeFile(manifest)
+
+        #expect(AudioTab.volumePluginDescription(plugin, status: .unused)
+            == "Not in use\nHardware volume for the Test DAC\nBy Someone, version 1.0")
+        #expect(AudioTab.volumePluginDescription(plugin, status: .active(deviceNames: ["DAC A", "DAC B"]))
+            .hasPrefix("Sets the volume of DAC A, DAC B\n"))
+
+        let broken = VolumePluginFile(
+            id: "Broken.finetuneplugin", fileURL: URL(fileURLWithPath: "/tmp/Broken.finetuneplugin"),
+            manifest: nil, script: nil, loadError: "The file has no /* @manifest … */ comment.")
+        #expect(broken.name == "Broken")
+        #expect(AudioTab.volumePluginDescription(broken, status: .invalid("The file has no /* @manifest … */ comment."))
+            == "Can't be loaded: The file has no /* @manifest … */ comment.")
+    }
+
+    @Test("The Audio tab's row sums the plugins up, so the tab stays short")
+    func summarizesPlugins() {
+        #expect(AudioTab.volumePluginsSummary([]).hasSuffix(". None installed"))
+        #expect(AudioTab.volumePluginsSummary([.unused]).hasSuffix(". 1 installed"))
+        #expect(AudioTab.volumePluginsSummary([.active(deviceNames: ["DAC B"]), .active(deviceNames: ["DAC A"]), .invalid("x")])
+            .hasSuffix(". 3 installed, in use on DAC A, DAC B, 1 with a problem"))
+    }
+}
