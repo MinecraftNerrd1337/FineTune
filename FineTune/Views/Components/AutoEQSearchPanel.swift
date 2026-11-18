@@ -3,8 +3,8 @@ import FluidMenuBarExtra
 import SwiftUI
 
 /// Panel for picking an AutoEQ correction preset for a device.
-/// Two-zone layout: Status Zone (active preset or empty state)
-/// above Favorites Zone (starred presets + EQ Manager button).
+/// Status Zone (active preset or empty state), then the EQ Manager button, then the
+/// Favorites Zone (starred presets).
 /// Browsing every preset happens in the EQ Manager window.
 struct AutoEQSearchPanel: View {
     let profileManager: AutoEQProfileManager
@@ -60,14 +60,14 @@ struct AutoEQSearchPanel: View {
             Divider()
                 .padding(.horizontal, DesignTokens.Spacing.xs)
 
-            favoritesZone
-
-            catalogError
+            importButton
 
             Divider()
                 .padding(.horizontal, DesignTokens.Spacing.xs)
 
-            importButton
+            favoritesZone
+
+            catalogError
 
             errorMessages
         }
@@ -177,7 +177,9 @@ struct AutoEQSearchPanel: View {
                                 ? DesignTokens.Colors.textPrimary
                                 : DesignTokens.Colors.textSecondary
                         )
-                        .lineLimit(1)
+                        // Long names (headphones and their measurement) take a second line
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
 
                     if let source {
                         Text(source)
@@ -369,7 +371,7 @@ struct AutoEQSearchPanel: View {
         .accessibilityLabel("Open EQ Manager")
         .accessibilityHint("Opens the FineTune EQ Manager window")
         .padding(.horizontal, DesignTokens.Spacing.xs)
-        .padding(.bottom, DesignTokens.Spacing.xs)
+        .padding(.vertical, DesignTokens.Spacing.xs)
     }
 
     // MARK: - Error Messages
