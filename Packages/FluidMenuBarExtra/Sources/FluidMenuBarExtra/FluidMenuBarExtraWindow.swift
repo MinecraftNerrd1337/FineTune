@@ -75,6 +75,10 @@ final class FluidMenuBarExtraWindow<Content: View>: NSPanel {
         standardWindowButton(.miniaturizeButton)?.isHidden = true
         standardWindowButton(.zoomButton)?.isHidden = true
 
+        // Kept active while another app has the keyboard, as a menu is, so its controls don't
+        // go flat and gray when the panel is kept open
+        keepActiveAppearance()
+
         contentView = visualEffectView
         visualEffectView.addSubview(hostingView)
         setContentSize(hostingView.intrinsicContentSize)
@@ -95,5 +99,15 @@ final class FluidMenuBarExtraWindow<Content: View>: NSPanel {
         DispatchQueue.main.async { [weak self] in
             self?.statusItem?.setWindowFrame(size: size, animate: true)
         }
+    }
+
+    /// AppKit has no public switch for an active look in a window that isn't key in the
+    /// active app: this calls its private one, and does nothing if it is gone
+    private func keepActiveAppearance() {
+        let selector = NSSelectorFromString("_setForceMainAppearance:")
+        guard let method = class_getInstanceMethod(type(of: self), selector) else { return }
+        typealias Setter = @convention(c) (NSWindow, Selector, ObjCBool) -> Void
+        let setter = unsafeBitCast(method_getImplementation(method), to: Setter.self)
+        setter(self, selector, ObjCBool(true))
     }
 }
