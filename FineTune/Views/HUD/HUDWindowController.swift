@@ -106,6 +106,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         let appearance = settingsManager.appSettings.appearance
         styleAtLastShow = style
         let panel = ensurePanel()
+        ensureBackdrop(in: panel)
         // Refresh on every show so a preference change between invocations
         // takes effect immediately.
         panel.appearance = appearance.nsAppearance
@@ -115,6 +116,12 @@ final class HUDWindowController: MediaKeyHUDPresenting {
 
         let scheme = appearance.swiftUIColorScheme
         let displayFraction = Float(max(0, min(1, sliderFraction)))
+        let onSliderChange: (Float) -> Void = { [weak self] newFraction in
+            self?.volumeWriter?(Double(newFraction))
+        }
+        let onHoverChange: (Bool) -> Void = { [weak self] hovering in
+            self?.handleHoverChange(hovering)
+        }
         let root: AnyView
         let size: NSSize
         switch style {
@@ -124,24 +131,21 @@ final class HUDWindowController: MediaKeyHUDPresenting {
                     sliderFraction: displayFraction,
                     mute: mute,
                     deviceName: deviceName,
-                    onSliderChange: { [weak self] newFraction in
-                        self?.volumeWriter?(Double(newFraction))
-                    },
-                    onHoverChange: { [weak self] hovering in
-                        self?.handleHoverChange(hovering)
-                    }
+                    onSliderChange: onSliderChange,
+                    onHoverChange: onHoverChange
                 )
                 .preferredColorScheme(scheme)
             )
             size = NSSize(width: 300, height: 72)
+            backdrop?.cornerRadius = TahoeStyleHUD.cornerRadius
         case .classic:
             root = AnyView(
                 ClassicStyleHUD(sliderFraction: displayFraction, mute: mute)
                     .preferredColorScheme(scheme)
             )
             size = NSSize(width: 200, height: 200)
+            backdrop?.cornerRadius = ClassicStyleHUD.cornerRadius
         }
-        backdrop?.cornerRadius = style == .classic ? ClassicStyleHUD.cornerRadius : TahoeStyleHUD.cornerRadius
 
         if let existing = hostingView {
             existing.rootView = root
@@ -153,22 +157,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         }
         showDidUpdatePanel = true
 
-        panel.setContentSize(size)
-        panel.setFrameOrigin(position(for: style, size: size))
-        refreshShadow(of: panel)
-
-        if panel.isVisible {
-            panel.orderFrontRegardless()
-        } else {
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            let duration = reduceMotionEnabled() ? 0.08 : 0.12
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = duration
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().alphaValue = 1.0
-            }
-        }
+        place(panel, size: size, style: style)
+        present(panel)
 
         shownDevice = DeviceState(sliderFraction: sliderFraction, mute: mute, deviceName: deviceName)
         // Under the pointer, the HUD stays until the pointer leaves it
@@ -220,6 +210,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         let appearance = settingsManager.appSettings.appearance
         styleAtLastShow = .tahoe
         let panel = ensurePanel()
+        ensureBackdrop(in: panel)
         panel.appearance = appearance.nsAppearance
         panel.ignoresMouseEvents = true
 
@@ -241,22 +232,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         }
         showDidUpdatePanel = true
 
-        panel.setContentSize(size)
-        panel.setFrameOrigin(position(for: .tahoe, size: size))
-        refreshShadow(of: panel)
-
-        if panel.isVisible {
-            panel.orderFrontRegardless()
-        } else {
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            let duration = reduceMotionEnabled() ? 0.08 : 0.12
-            NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = duration
-                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                panel.animator().alphaValue = 1.0
-            }
-        }
+        place(panel, size: size, style: .tahoe)
+        present(panel)
 
         scheduleHide(for: .tahoe)
         postPerAppAccessibilityAnnouncement(panel: panel, title: title, content: content)
@@ -313,6 +290,34 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         })
     }
 
+    /// Sizes the window around the HUD, with room for the glass's edge, at the HUD's place
+    private func place(_ panel: NSPanel, size: NSSize, style: HUDStyle) {
+        let inset = backdrop?.inset ?? 0
+        let origin = position(for: style, size: size)
+        let frame = NSRect(
+            x: origin.x - inset, y: origin.y - inset,
+            width: size.width + inset * 2, height: size.height + inset * 2
+        )
+        panel.setFrame(frame, display: false)
+        refreshShadow(of: panel)
+    }
+
+    /// Puts the HUD on screen, fading it in, or keeps it there
+    private func present(_ panel: NSPanel) {
+        if panel.isVisible {
+            panel.orderFrontRegardless()
+        } else {
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            let duration = reduceMotionEnabled() ? 0.08 : 0.12
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = duration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().alphaValue = 1.0
+            }
+        }
+    }
+
     // MARK: - Position Math
 
     /// Tahoe: top-right. Classic: bottom-center. Under suppression-degraded,
@@ -356,7 +361,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     private func ensurePanel() -> NSPanel {
         if let existing = panel { return existing }
 
-        let p = NSPanel(
+        let p = HUDPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 72),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -375,15 +380,29 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         // Initial appearance; refreshed on every show() so preference flips
         // between invocations propagate.
         p.appearance = settingsManager.appSettings.appearance.nsAppearance
-        let backdrop = HUDBackdropView(kind: .current)
-        p.contentView = backdrop
-        // Liquid Glass draws its own edge. A blur gets the window server's shadow around the
-        // HUD's rounded shape, as macOS's own HUDs did before it.
-        p.hasShadow = !backdrop.isGlass
-        self.backdrop = backdrop
+        // The panel never takes the keyboard, so it is never active: without this its glass
+        // would be gray frost
+        p.keepActiveAppearance()
 
         panel = p
         return p
+    }
+
+    /// Puts the HUD on Liquid Glass or on a blur, as the settings say, moving the HUD's content
+    /// over when that changed
+    private func ensureBackdrop(in panel: NSPanel) {
+        let kind: HUDBackdropView.Kind = settingsManager.appSettings.hudLiquidGlass ? .glass : .blur
+        guard backdrop?.kind != kind else { return }
+        let backdrop = HUDBackdropView(kind: kind)
+        panel.contentView = backdrop
+        // Liquid Glass draws its own edge. A blur gets the window server's shadow around the
+        // HUD's rounded shape, as macOS's own HUDs did before it.
+        panel.hasShadow = !backdrop.isGlass
+        if let hostingView {
+            hostingView.removeFromSuperview()
+            backdrop.setContent(hostingView)
+        }
+        self.backdrop = backdrop
     }
 
     /// The shadow follows what the window shows, so it is worked out again once SwiftUI has
@@ -509,31 +528,42 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     }
 }
 
+// MARK: - Window
+
+/// The HUD's window. On Liquid Glass it reaches past the HUD for the glass's edge, so the corner
+/// HUD's window rises into the menu bar's height, and AppKit would move it down below the menu
+/// bar, the HUD with it.
+private final class HUDPanel: NSPanel {
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        frameRect
+    }
+}
+
 // MARK: - Backdrop
 
-/// What the HUD floats on: clear Liquid Glass on macOS 26 and later, else a blur of what lies
+/// What the HUD floats on: Liquid Glass on macOS 26 and later, else a blur of what lies
 /// behind the window, like macOS's own HUDs, cut to the HUD's rounded shape. AppKit draws it,
 /// since SwiftUI's material and glass only see the HUD's own window, which is empty and clear.
 private final class HUDBackdropView: NSView {
-    /// For trying them out, `defaults write com.finetuneapp.FineTune HUDBackdrop -string` with
-    /// `clear`, `regular` or `blur`, then relaunching FineTune. Before macOS 26, always the blur.
-    enum Kind: String {
-        /// Liquid Glass as the Dock has it, most of what lies behind showing through
-        case clearGlass = "clear"
-        /// The frostier Liquid Glass of toolbars and sidebars
-        case regularGlass = "regular"
+    enum Kind {
+        /// The see-through Liquid Glass of the Dock and Control Center, on macOS 26 and later;
+        /// the blur before
+        case glass
         /// A blur in the HUD material, which isn't the menu bar panel's
         case blur
-
-        static var current: Kind {
-            UserDefaults.standard.string(forKey: "HUDBackdrop").flatMap(Kind.init(rawValue:)) ?? .clearGlass
-        }
     }
+
+    let kind: Kind
 
     private let effectView: NSView
 
     var isGlass: Bool {
         !(effectView is NSVisualEffectView)
+    }
+
+    /// Room around the glass for its edge and shadow, which it draws past its shape
+    var inset: CGFloat {
+        isGlass ? 16 : 0
     }
 
     var cornerRadius: CGFloat = 0 {
@@ -544,9 +574,10 @@ private final class HUDBackdropView: NSView {
     }
 
     init(kind: Kind) {
+        self.kind = kind
         effectView = Self.makeEffectView(kind)
         super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 72))
-        effectView.frame = bounds
+        effectView.frame = bounds.insetBy(dx: inset, dy: inset)
         effectView.autoresizingMask = [.width, .height]
         addSubview(effectView)
     }
@@ -582,9 +613,9 @@ private final class HUDBackdropView: NSView {
 
     private static func makeEffectView(_ kind: Kind) -> NSView {
         #if compiler(>=6.2)
-        if #available(macOS 26.0, *), kind != .blur {
+        if #available(macOS 26.0, *), kind == .glass {
             let glass = NSGlassEffectView()
-            glass.style = kind == .clearGlass ? .clear : .regular
+            glass.style = .clear
             return glass
         }
         #endif

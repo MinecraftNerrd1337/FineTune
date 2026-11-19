@@ -85,6 +85,19 @@ struct ShortcutsTab: View {
                 ) {
                     HUDStyleSegmentedControl(selection: $settings.appSettings.hudStyle)
                 }
+
+                if #available(macOS 26.0, *) {
+                    SettingsRowDivider()
+                    SettingsRow(
+                        "Liquid Glass",
+                        description: "Use a Liquid Glass version of the HUD on macOS 26 and later"
+                    ) {
+                        Toggle("", isOn: $settings.appSettings.hudLiquidGlass)
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                            .labelsHidden()
+                    }
+                }
             }
         }
     }
