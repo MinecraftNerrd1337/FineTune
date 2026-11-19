@@ -294,15 +294,16 @@ final class MediaKeyMonitor {
             }
             let nextSlider = min(1.0, currentSlider + sliderDelta)
             let newVolume = VolumeMapping.systemGain(forSliderFraction: nextSlider, tier: tier)
+            // The HUD first, so it shows without waiting for the device
+            if shouldShowHUD {
+                hudController.show(sliderFraction: nextSlider, mute: false, deviceName: deviceName)
+            }
             // Volume-up from muted unmutes (system HUD parity).
             if currentMute {
                 setMute(deviceID, false)
             }
             setVolume(deviceID, newVolume)
             playFeedback(VolumeFeedback.gain(tier: tier, sliderFraction: nextSlider))
-            if shouldShowHUD {
-                hudController.show(sliderFraction: nextSlider, mute: false, deviceName: deviceName)
-            }
             iconCoordinator?.flashDevice()
 
         case .volumeDown(let isRepeat):
@@ -313,6 +314,9 @@ final class MediaKeyMonitor {
             let nextSlider = max(0, currentSlider - sliderDelta)
             let newVolume = VolumeMapping.systemGain(forSliderFraction: nextSlider, tier: tier)
             let willBeSilent = nextSlider <= 0.001
+            if shouldShowHUD {
+                hudController.show(sliderFraction: nextSlider, mute: willBeSilent, deviceName: deviceName)
+            }
             // muted+audible → unmute; unmuted+silent → auto-mute (system HUD parity).
             if currentMute && !willBeSilent {
                 setMute(deviceID, false)
@@ -321,17 +325,14 @@ final class MediaKeyMonitor {
             }
             setVolume(deviceID, newVolume)
             playFeedback(VolumeFeedback.gain(tier: tier, sliderFraction: nextSlider))
-            if shouldShowHUD {
-                hudController.show(sliderFraction: nextSlider, mute: willBeSilent, deviceName: deviceName)
-            }
             iconCoordinator?.flashDevice()
 
         case .muteToggle:
             let newMute = !currentMute
-            setMute(deviceID, newMute)
             if shouldShowHUD {
                 hudController.show(sliderFraction: currentSlider, mute: newMute, deviceName: deviceName)
             }
+            setMute(deviceID, newMute)
             iconCoordinator?.flashDevice()
         }
     }

@@ -33,6 +33,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     /// Reads the default output device's state, observed while it is followed
     private var deviceStateReader: (@MainActor () -> DeviceState?)?
     private var isHovering = false
+    /// Bumped by each show, so a fade-out still running doesn't take the HUD away after it
+    private var presentation = 0
 
     // MARK: - Suppression-degraded tracking
 
@@ -280,13 +282,18 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         shownDevice = nil
         isHovering = false
         guard let panel, panel.isVisible else { return }
+        let fadingOut = presentation
         let duration = reduceMotionEnabled() ? 0.08 : 0.11
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = duration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().alphaValue = 0.0
-        }, completionHandler: {
-            MainActor.assumeIsolated { panel.orderOut(nil) }
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                // Shown again meanwhile: it stays
+                guard self?.presentation == fadingOut else { return }
+                panel.orderOut(nil)
+            }
         })
     }
 
@@ -302,20 +309,26 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         refreshShadow(of: panel)
     }
 
-    /// Puts the HUD on screen, fading it in, or keeps it there
+    /// Puts the HUD on screen, or keeps it there, and hands it to the window server at once, so
+    /// it doesn't wait for the volume change the caller makes next. It shows whole from its first
+    /// frame, with no fade-in, so it is drawn before it is ordered in: the window still holds the
+    /// last HUD it showed.
     private func present(_ panel: NSPanel) {
-        if panel.isVisible {
-            panel.orderFrontRegardless()
-        } else {
-            panel.alphaValue = 0
-            panel.orderFrontRegardless()
-            let duration = reduceMotionEnabled() ? 0.08 : 0.12
+        presentation += 1
+        panel.contentView?.layoutSubtreeIfNeeded()
+        panel.displayIfNeeded()
+        if !panel.isVisible {
+            panel.alphaValue = 1.0
+        } else if panel.alphaValue < 1 {
+            // Takes over a fade-out still running, which setting the alpha wouldn't stop
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = duration
+                ctx.duration = 0.05
                 ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 panel.animator().alphaValue = 1.0
             }
         }
+        panel.orderFrontRegardless()
+        CATransaction.flush()
     }
 
     // MARK: - Position Math

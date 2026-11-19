@@ -96,7 +96,6 @@ struct ClassicStyleHUD: View {
                 }
                 Spacer().frame(width: Self.tileSideInset)
             }
-            .animation(DesignTokens.Animation.quick, value: filledTileCount)
         }
         .frame(height: 80)
     }
