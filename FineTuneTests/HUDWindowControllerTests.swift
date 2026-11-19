@@ -8,6 +8,7 @@
 import Testing
 import Foundation
 import AppKit
+import Observation
 @testable import FineTune
 
 @Suite("HUDWindowController — computePosition()")
@@ -201,5 +202,68 @@ struct HUDWindowControllerTimerTests {
         hud.show(sliderFraction: 0.5, mute: false, deviceName: "Test Device")
         #expect(hud.showCallCount == 1)
         #expect(hud.showDidUpdatePanel == true)
+    }
+}
+
+// MARK: - Following the device
+
+@Observable
+@MainActor
+private final class FakeDeviceState {
+    var state: HUDWindowController.DeviceState?
+}
+
+@Suite("HUDWindowController — follows the device while shown")
+@MainActor
+struct HUDWindowControllerFollowTests {
+
+    private func makeController() -> HUDWindowController {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        let settings = SettingsManager(directory: tempDir)
+        let hud = HUDWindowController(
+            settingsManager: settings, mediaKeyStatus: MediaKeyStatus(), panelVisibility: PanelVisibilityService())
+        hud.frameProvider = { NSRect(x: 0, y: 23, width: 1440, height: 877) }
+        hud.hideDelayOverride = .seconds(30)
+        return hud
+    }
+
+    /// Lets the observation's change, handed to a main-actor task, run
+    private func settle() async {
+        for _ in 0..<5 { await Task.yield() }
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    @Test("A change on the device updates the HUD on screen for it, and only that")
+    func updatesWhileShown() async throws {
+        let hud = makeController()
+        let fake = FakeDeviceState()
+        fake.state = .init(sliderFraction: 0.60, mute: false, deviceName: "DAC")
+        hud.followDeviceState { fake.state }
+
+        // Hidden: nothing shows
+        fake.state = .init(sliderFraction: 0.62, mute: false, deviceName: "DAC")
+        await settle()
+        #expect(hud.showCallCount == 0)
+
+        hud.show(sliderFraction: 0.62, mute: false, deviceName: "DAC")
+        try #require(hud.showDidUpdatePanel)
+        // The DAC's own button
+        fake.state = .init(sliderFraction: 0.63, mute: false, deviceName: "DAC")
+        await settle()
+        #expect(hud.showCallCount == 2)
+
+        // The same level, read back a hair off, changes nothing
+        fake.state = .init(sliderFraction: 0.6301, mute: false, deviceName: "DAC")
+        await settle()
+        #expect(hud.showCallCount == 2)
+
+        // Another device became the default: its level isn't the HUD's
+        fake.state = .init(sliderFraction: 0.2, mute: false, deviceName: "Speakers")
+        await settle()
+        #expect(hud.showCallCount == 2)
+
+        hud.hide()
+        hud.shutdown()
     }
 }

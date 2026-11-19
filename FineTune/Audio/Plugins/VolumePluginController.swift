@@ -58,7 +58,7 @@ final class VolumePluginController {
     /// A device started or stopped being plugin-backed
     @ObservationIgnored var onBindingsChanged: (() -> Void)?
     /// A device changed level or mute by itself (its own buttons)
-    @ObservationIgnored var onDeviceStateChanged: ((AudioDeviceID) -> Void)?
+    @ObservationIgnored var onDeviceStateChanged: ((AudioDeviceID, _ showsHUD: Bool) -> Void)?
 
     let directory: URL
     private let settingsManager: SettingsManager
@@ -658,15 +658,15 @@ final class VolumePluginController {
     private func handle(_ event: VolumePluginEvent, pluginID: String, deviceID: AudioDeviceID, generation eventGeneration: Int) {
         guard eventGeneration == generation else { return }
         switch event {
-        case .volumeReported(let volume):
+        case .volumeReported(let volume, let showsHUD):
             guard let binding = bindings[deviceID], binding.pluginID == pluginID else { return }
             cachedVolumes[deviceID] = volume
             settingsManager.setPluginDeviceVolume(for: binding.deviceUID, to: volume)
-            onDeviceStateChanged?(deviceID)
-        case .muteReported(let muted):
+            onDeviceStateChanged?(deviceID, showsHUD)
+        case .muteReported(let muted, let showsHUD):
             guard let binding = bindings[deviceID], binding.pluginID == pluginID else { return }
             settingsManager.setPluginDeviceMuteState(for: binding.deviceUID, to: muted)
-            onDeviceStateChanged?(deviceID)
+            onDeviceStateChanged?(deviceID, showsHUD)
         case .failed(let message):
             failures[deviceID] = Failure(pluginID: pluginID, message: message)
         case .recovered:

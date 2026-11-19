@@ -62,13 +62,25 @@ private nonisolated final class EventLog: @unchecked Sendable {
     var reportedVolumes: [Float] {
         lock.lock()
         defer { lock.unlock() }
-        return stored.compactMap { if case .volumeReported(let volume) = $0 { volume } else { nil } }
+        return stored.compactMap { if case .volumeReported(let volume, _) = $0 { volume } else { nil } }
     }
 
     var reportedMutes: [Bool] {
         lock.lock()
         defer { lock.unlock() }
-        return stored.compactMap { if case .muteReported(let muted) = $0 { muted } else { nil } }
+        return stored.compactMap { if case .muteReported(let muted, _) = $0 { muted } else { nil } }
+    }
+
+    /// Whether the HUD shows each report, volume and mute alike, in order
+    var reportsShowingHUD: [Bool] {
+        lock.lock()
+        defer { lock.unlock() }
+        return stored.compactMap {
+            switch $0 {
+            case .volumeReported(_, let showsHUD), .muteReported(_, let showsHUD): showsHUD
+            default: nil
+            }
+        }
     }
 }
 
@@ -587,6 +599,50 @@ struct VolumePluginSessionTests {
         session.handleInputReport(reportID: 0, bytes: [40, 0, 0])
         await idle(session)
         #expect(events.reportedVolumes == [0.4])
+        session.close()
+    }
+
+    @Test("A plugin can keep a report from showing the HUD")
+    func reportsWithoutTheHUD() async {
+        let events = EventLog()
+        let script = percentScript + """
+        function onInputReport(device, reportID, bytes) {
+            if (bytes[1] === 1) device.reportVolume(bytes[0] / 100, { hud: false });
+            else if (bytes[1] === 2) device.reportMute(true, { hud: false });
+            else device.reportVolume(bytes[0] / 100);
+        }
+        """
+        let session = makeSession(script, transport: RecordingTransport(), events: events)
+        _ = await start(session, volume: 0.5)
+        session.handleInputReport(reportID: 0, bytes: [40, 1, 0])
+        session.handleInputReport(reportID: 0, bytes: [0, 2, 0])
+        session.handleInputReport(reportID: 0, bytes: [45, 0, 0])
+        await idle(session)
+        #expect(events.reportedVolumes == [0.4, 0.45])
+        #expect(events.reportedMutes == [true])
+        #expect(events.reportsShowingHUD == [false, false, true])
+        #expect(events.failures.isEmpty)
+        session.close()
+    }
+
+    @Test("Report options other than { hud: true or false } are the script's error")
+    func badReportOptions() async {
+        let events = EventLog()
+        let script = percentScript + """
+        function onInputReport(device, reportID, bytes) {
+            if (bytes[0] === 1) device.reportVolume(0.4, { hud: "no" });
+            else device.reportMute(true, 3);
+        }
+        """
+        let session = makeSession(script, transport: RecordingTransport(), events: events)
+        _ = await start(session, volume: 0.5)
+        session.handleInputReport(reportID: 0, bytes: [1])
+        await idle(session)
+        session.handleInputReport(reportID: 0, bytes: [2])
+        await idle(session)
+        #expect(events.reportedVolumes.isEmpty)
+        #expect(events.reportedMutes.isEmpty)
+        #expect(events.failures.count >= 1)
         session.close()
     }
 

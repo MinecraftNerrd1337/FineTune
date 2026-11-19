@@ -21,6 +21,19 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     /// Slider fraction in [0, 1]. The wiring site converts to gain using the current device's tier.
     var volumeWriter: ((Double) -> Void)?
 
+    /// What a device HUD shows
+    struct DeviceState: Equatable {
+        let sliderFraction: Double
+        let mute: Bool
+        let deviceName: String
+    }
+
+    /// The device HUD on screen, nil while the HUD is hidden or shows an app
+    private var shownDevice: DeviceState?
+    /// Reads the default output device's state, observed while it is followed
+    private var deviceStateReader: (@MainActor () -> DeviceState?)?
+    private var isHovering = false
+
     // MARK: - Suppression-degraded tracking
 
     private var lastSwallowedKeyTime: DispatchTime?
@@ -78,6 +91,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     func show(sliderFraction: Double, mute: Bool, deviceName: String) {
         showCallCount += 1
         showDidUpdatePanel = false
+        shownDevice = nil
 
         guard !isForegroundAppFullscreen() else {
             logger.debug("Skipping HUD show: foreground app is fullscreen")
@@ -156,7 +170,11 @@ final class HUDWindowController: MediaKeyHUDPresenting {
             }
         }
 
-        scheduleHide(for: style)
+        shownDevice = DeviceState(sliderFraction: sliderFraction, mute: mute, deviceName: deviceName)
+        // Under the pointer, the HUD stays until the pointer leaves it
+        if !isHovering {
+            scheduleHide(for: style)
+        }
         postAccessibilityAnnouncement(panel: panel, sliderFraction: sliderFraction, mute: mute, deviceName: deviceName)
     }
 
@@ -191,6 +209,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     private func presentPerApp(icon: NSImage?, title: String, content: PerAppHUDContent) {
         showCallCount += 1
         showDidUpdatePanel = false
+        shownDevice = nil
+        isHovering = false
 
         guard !panelVisibility.isVisible else {
             logger.debug("Skipping per-app HUD: menu bar panel is visible")
@@ -242,6 +262,36 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         postPerAppAccessibilityAnnouncement(panel: panel, title: title, content: content)
     }
 
+    /// Keeps a device HUD on screen up to date with its device, whatever changes it: the
+    /// device's own buttons, another app, macOS. `read` gives the default output device's state
+    /// and is observed; a change shows in the HUD only while it is on screen for that device.
+    func followDeviceState(_ read: @escaping @MainActor () -> DeviceState?) {
+        deviceStateReader = read
+        observeDeviceState()
+    }
+
+    private func observeDeviceState() {
+        guard let read = deviceStateReader else { return }
+        withObservationTracking {
+            _ = read()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.refreshShownDevice()
+                self.observeDeviceState()
+            }
+        }
+    }
+
+    private func refreshShownDevice() {
+        guard let shown = shownDevice, let panel, panel.isVisible,
+              let state = deviceStateReader?(), state.deviceName == shown.deviceName else { return }
+        // The level FineTune itself just set comes back through the gain, a hair off
+        guard state.mute != shown.mute || abs(state.sliderFraction - shown.sliderFraction) >= 0.001 else { return }
+        // Shown again with the new state, which also keeps it up a moment longer
+        show(sliderFraction: state.sliderFraction, mute: state.mute, deviceName: state.deviceName)
+    }
+
     /// Called when the monitor swallows a keypress; used to detect if the native HUD still fired.
     func swallowObserved() {
         lastSwallowedKeyTime = DispatchTime.now()
@@ -250,6 +300,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     func hide() {
         hideTask?.cancel()
         hideTask = nil
+        shownDevice = nil
+        isHovering = false
         guard let panel, panel.isVisible else { return }
         let duration = reduceMotionEnabled() ? 0.08 : 0.11
         NSAnimationContext.runAnimationGroup({ ctx in
@@ -354,6 +406,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     }
 
     private func handleHoverChange(_ hovering: Bool) {
+        isHovering = hovering
         if hovering {
             hideTask?.cancel()
             hideTask = nil

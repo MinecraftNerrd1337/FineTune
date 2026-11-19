@@ -160,6 +160,30 @@ struct FineTuneApp: App {
             )
         }
 
+        let readDeviceState: @MainActor () -> HUDWindowController.DeviceState? = { [weak engine] in
+            guard let engine else { return nil }
+            let volumeMonitor = engine.deviceVolumeMonitor
+            let deviceID = volumeMonitor.defaultDeviceID
+            guard deviceID.isValid, let gain = volumeMonitor.volumes[deviceID] else { return nil }
+            let tier = volumeMonitor.outputVolumeBackend(for: deviceID)
+            return HUDWindowController.DeviceState(
+                sliderFraction: VolumeMapping.sliderFraction(forSystemGain: gain, tier: tier),
+                mute: volumeMonitor.muteStates[deviceID] ?? false,
+                deviceName: engine.deviceMonitor.outputDevices.first { $0.id == deviceID }?.name ?? ""
+            )
+        }
+        // A level changed on the device itself (a DAC's own buttons) shows in the HUD on screen
+        hud.followDeviceState(readDeviceState)
+        // and brings the HUD up, as the media keys do, when the default output device's own
+        // buttons change it (a DAC a volume plugin drives)
+        engine.onLevelChangedOnDevice = { [weak engine, weak hud] deviceID in
+            // Only when FineTune's HUD is on, which comes with its media key control
+            guard settings.appSettings.mediaKeyControlEnabled,
+                  let engine, let hud, deviceID == engine.deviceVolumeMonitor.defaultDeviceID,
+                  let state = readDeviceState() else { return }
+            hud.show(sliderFraction: state.sliderFraction, mute: state.mute, deviceName: state.deviceName)
+        }
+
         let monitor = MediaKeyMonitor(
             decoder: IOKitMediaKeyDecoder(),
             audioEngine: engine,

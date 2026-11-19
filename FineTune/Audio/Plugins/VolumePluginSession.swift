@@ -11,9 +11,10 @@ import os
 
 /// What a session tells its controller
 nonisolated enum VolumePluginEvent: Sendable {
-    /// The device changed level by itself (its own buttons), as the plugin read it: 0…1
-    case volumeReported(Float)
-    case muteReported(Bool)
+    /// The device changed level by itself (its own buttons), as the plugin read it: 0…1. The
+    /// HUD shows it unless the plugin said otherwise.
+    case volumeReported(Float, showsHUD: Bool)
+    case muteReported(Bool, showsHUD: Bool)
     /// The script threw, or the device refused a report
     case failed(String)
     /// The plugin works again after a failure
@@ -110,6 +111,8 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
     /// once that time is over, unless FineTune changes the device again first
     private var heldVolume: Double?
     private var heldMute: Bool?
+    /// Whether the HUD shows the reports held, as the plugin's last one said
+    private var heldShowsHUD = true
     private var isHeldCheckScheduled = false
     private var didFail = false
     private var lastFailure: String?
@@ -469,11 +472,11 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         hidObject.setObject(unsafeBitCast(getFeature, to: AnyObject.self), forKeyedSubscript: "getFeatureReport" as NSString)
         device.setObject(hidObject, forKeyedSubscript: "hid" as NSString)
 
-        let reportVolume: @convention(block) (JSValue) -> Void = { [weak self] value in
-            self?.reportVolume(value)
+        let reportVolume: @convention(block) (JSValue, JSValue) -> Void = { [weak self] value, options in
+            self?.reportVolume(value, options: options)
         }
-        let reportMute: @convention(block) (JSValue) -> Void = { [weak self] value in
-            self?.reportMute(value)
+        let reportMute: @convention(block) (JSValue, JSValue) -> Void = { [weak self] value, options in
+            self?.reportMute(value, options: options)
         }
         device.setObject(unsafeBitCast(reportVolume, to: AnyObject.self), forKeyedSubscript: "reportVolume" as NSString)
         device.setObject(unsafeBitCast(reportMute, to: AnyObject.self), forKeyedSubscript: "reportMute" as NSString)
@@ -543,12 +546,13 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         return JSValue(object: read.bytes.map { NSNumber(value: $0) }, in: context)
     }
 
-    private func reportVolume(_ value: JSValue) {
+    private func reportVolume(_ value: JSValue, options: JSValue) {
         let level = value.isNumber ? value.toDouble() : .nan
         guard level.isFinite else {
             throwError("reportVolume expects a number from 0 to 1")
             return
         }
+        guard let showsHUD = showsHUD(options, in: "reportVolume") else { return }
         let clamped = min(max(level, 0), 1)
         if isAttaching {
             attachReportedVolume = clamped
@@ -560,11 +564,12 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         }
         if isEcho {
             heldVolume = clamped
+            heldShowsHUD = showsHUD
             scheduleHeldCheck()
             return
         }
         lastVolume = clamped
-        onEvent(.volumeReported(Float(clamped)))
+        onEvent(.volumeReported(Float(clamped), showsHUD: showsHUD))
     }
 
     /// In onAttach, after asking the device for its level: FineTune waits up to `milliseconds`
@@ -582,11 +587,12 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         levelWaitMS = Int(min(value, Double(Self.maximumLevelWaitMS)).rounded(.up))
     }
 
-    private func reportMute(_ value: JSValue) {
+    private func reportMute(_ value: JSValue, options: JSValue) {
         guard value.isBoolean else {
             throwError("reportMute expects true or false")
             return
         }
+        guard let showsHUD = showsHUD(options, in: "reportMute") else { return }
         let muted = value.toBool()
         if isAttaching {
             attachReportedMute = muted
@@ -594,11 +600,29 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         }
         if isEcho {
             heldMute = muted
+            heldShowsHUD = showsHUD
             scheduleHeldCheck()
             return
         }
         lastMuted = muted
-        onEvent(.muteReported(muted))
+        onEvent(.muteReported(muted, showsHUD: showsHUD))
+    }
+
+    /// Whether the HUD shows a report: unless its options, `{ hud: false }`, say otherwise. Nil,
+    /// with an error thrown to the script, for options that aren't an object or a `hud` that
+    /// isn't true or false.
+    private func showsHUD(_ options: JSValue, in function: String) -> Bool? {
+        if options.isUndefined || options.isNull { return true }
+        guard options.isObject, !options.isArray else {
+            throwError("\(function) expects options such as { hud: false }")
+            return nil
+        }
+        guard let hud = options.forProperty("hud"), !hud.isUndefined else { return true }
+        guard hud.isBoolean else {
+            throwError("\(function) expects hud to be true or false")
+            return nil
+        }
+        return hud.toBool()
     }
 
     private var isEcho: Bool {
@@ -610,6 +634,7 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
     private func forgetHeldReports() {
         heldVolume = nil
         heldMute = nil
+        heldShowsHUD = true
     }
 
     private func scheduleHeldCheck() {
@@ -637,14 +662,15 @@ nonisolated final class VolumePluginSession: @unchecked Sendable {
         lock.unlock()
         let muted = requested.muted == nil ? heldMute : nil
         let volume = requested.volume == nil ? heldVolume : nil
+        let showsHUD = heldShowsHUD
         forgetHeldReports()
         if let muted, muted != lastMuted {
             lastMuted = muted
-            onEvent(.muteReported(muted))
+            onEvent(.muteReported(muted, showsHUD: showsHUD))
         }
         if let volume, volume != lastVolume {
             lastVolume = volume
-            onEvent(.volumeReported(Float(volume)))
+            onEvent(.volumeReported(Float(volume), showsHUD: showsHUD))
         }
     }
 

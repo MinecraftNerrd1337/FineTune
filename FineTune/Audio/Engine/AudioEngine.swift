@@ -25,6 +25,10 @@ final class AudioEngine {
     let volumePlugins: VolumePluginController
     #endif
 
+    /// A device's level or mute changed on the device itself, such as with a DAC's own buttons
+    /// that a volume plugin reports
+    @ObservationIgnored var onLevelChangedOnDevice: ((AudioDeviceID) -> Void)?
+
     private var taps: [pid_t: any ProcessTapControlling] = [:]
 
     /// The per-DAC mixers of the per-DAC routing mode (`AppSettings.perDeviceMixingEnabled`).
@@ -316,8 +320,11 @@ final class AudioEngine {
             self?.deviceVolumeMonitor.refreshOutputDeviceStates()
             self?.refreshAllTapOutputStates()
         }
-        plugins.onDeviceStateChanged = { [weak self] deviceID in
+        plugins.onDeviceStateChanged = { [weak self] deviceID, showsHUD in
             self?.deviceVolumeMonitor.refreshOutputDeviceState(for: deviceID)
+            if showsHUD {
+                self?.onLevelChangedOnDevice?(deviceID)
+            }
         }
         #endif
 

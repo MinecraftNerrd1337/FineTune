@@ -149,7 +149,7 @@ The script can use:
 | `device.hid.sendOutputReport(reportID, bytes)` | Sends an output report. `bytes` is an array of integers from 0 to 255, at most 1024 of them. Use report ID 0 for a DAC without report IDs. Returns `false` if the DAC refused it |
 | `device.hid.sendFeatureReport(reportID, bytes)` | The same, for a feature report |
 | `device.hid.getFeatureReport(reportID, length)` | Reads a feature report, or returns `null` |
-| `device.reportVolume(volume)`, `device.reportMute(muted)` | Tells FineTune the DAC changed by itself. A report that arrives within 400 ms of a command FineTune sent may be the DAC echoing it: FineTune waits for that time to pass, then takes the last report, unless it sent the DAC something else in between |
+| `device.reportVolume(volume)`, `device.reportMute(muted)` | Tells FineTune the DAC changed by itself. A report that arrives within 400 ms of a command FineTune sent may be the DAC echoing it: FineTune waits for that time to pass, then takes the last report, unless it sent the DAC something else in between. The volume HUD shows the change, when the user has it on; pass `{ hud: false }` as a second argument to keep it from showing, for a change the user didn't make on the DAC |
 | `device.waitForLevel(ms)` | In `onAttach` only: has FineTune wait up to `ms` milliseconds, at most 1000, for the level the DAC sends back, which `onInputReport` gets and reports with `device.reportVolume`. Input reports reach the plugin meanwhile |
 | `device.name`, `device.uid` | The audio device being driven |
 | `device.vendorID`, `device.productID`, `device.productName` | Its HID interface, as `hidutil list` shows it |
