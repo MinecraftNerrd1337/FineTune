@@ -1,14 +1,15 @@
 // FineTune/Views/HUD/ClassicStyleHUD.swift
 import SwiftUI
 
-/// 200×200 pre-Tahoe-style volume HUD: 80 pt glyph + 16-tile segment row. Stateless.
+/// 200×200 pre-Tahoe-style volume HUD: 80 pt glyph, 16-tile segment row and the percentage.
+/// Stateless.
 struct ClassicStyleHUD: View {
     let sliderFraction: Float
     let mute: Bool
 
     // MARK: - Constants
 
-    static let hasPercentageLabel: Bool = false
+    static let hasPercentageLabel: Bool = true
 
     private static let tileCount: Int = 16
     private static let frameSize: CGFloat = 200
@@ -18,6 +19,13 @@ struct ClassicStyleHUD: View {
     private static let tileSize: CGFloat = 7.5
     private static let tileSpacing: CGFloat = 2
     private static let tileSideInset: CGFloat = 20
+
+    @Environment(\.hudOnGlass) private var onGlass
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: HUDPalette {
+        HUDPalette(onGlass: onGlass, colorScheme: colorScheme)
+    }
 
     // MARK: - Derived state
 
@@ -75,7 +83,7 @@ struct ClassicStyleHUD: View {
             // Hard-swap — symbolEffect(.replace.*) cross-fades the whole wave glyph on every bin change.
             Image(systemName: mute ? "speaker.slash.fill" : waveIconName)
                 .font(.system(size: Self.iconSize, weight: .medium))
-                .foregroundStyle(DesignTokens.Colors.hudTileActive)
+                .foregroundStyle(palette.text)
                 .offset(y: iconYOffset)
             Spacer()
         }
@@ -84,18 +92,21 @@ struct ClassicStyleHUD: View {
 
     private var tileSection: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 40)
+            Spacer().frame(height: 26)
             HStack(spacing: Self.tileSpacing) {
                 Spacer().frame(width: Self.tileSideInset)
                 ForEach(0..<Self.tileCount, id: \.self) { index in
                     Rectangle()
-                        .fill(index < filledTileCount
-                              ? DesignTokens.Colors.hudTileActive
-                              : DesignTokens.Colors.hudTileInactive)
+                        .fill(index < filledTileCount ? palette.litTile : palette.unlitTile)
                         .frame(width: Self.tileSize, height: Self.tileSize)
                 }
                 Spacer().frame(width: Self.tileSideInset)
             }
+            Text(mute ? "Muted" : "\(displayedPercent)%")
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundStyle(palette.text)
+                .padding(.top, 10)
+            Spacer(minLength: 0)
         }
         .frame(height: 80)
     }

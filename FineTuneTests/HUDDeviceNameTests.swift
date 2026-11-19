@@ -19,12 +19,12 @@ struct TahoeStyleHUDNameFontTests {
     }
 }
 
-@Suite("ClassicStyleHUD — no percentage label (AC #18)")
+@Suite("ClassicStyleHUD — percentage label")
 struct ClassicStyleHUDStructureTests {
 
-    @Test("hasPercentageLabel is false (volumeHUD parity)")
-    func classicHasNoPercentageLabel() {
-        #expect(ClassicStyleHUD.hasPercentageLabel == false)
+    @Test("The square HUD shows the percentage, which its look alone doesn't give")
+    func classicHasPercentageLabel() {
+        #expect(ClassicStyleHUD.hasPercentageLabel == true)
     }
 }
 

@@ -126,6 +126,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         }
         let root: AnyView
         let size: NSSize
+        let onGlass = backdrop?.isGlass == true
+        let whiteInk = backdrop?.hasWhiteInk == true
         switch style {
         case .tahoe:
             root = AnyView(
@@ -136,24 +138,26 @@ final class HUDWindowController: MediaKeyHUDPresenting {
                     onSliderChange: onSliderChange,
                     onHoverChange: onHoverChange
                 )
-                .preferredColorScheme(scheme)
+                .hudContent(onGlass: onGlass, whiteInk: whiteInk, scheme: scheme)
             )
             size = NSSize(width: 300, height: 72)
             backdrop?.cornerRadius = TahoeStyleHUD.cornerRadius
         case .classic:
             root = AnyView(
                 ClassicStyleHUD(sliderFraction: displayFraction, mute: mute)
-                    .preferredColorScheme(scheme)
+                    .hudContent(onGlass: onGlass, whiteInk: whiteInk, scheme: scheme)
             )
             size = NSSize(width: 200, height: 200)
             backdrop?.cornerRadius = ClassicStyleHUD.cornerRadius
         }
 
+        hostingView?.appearance = Self.appearance(whiteInk: whiteInk)
         if let existing = hostingView {
             existing.rootView = root
         } else {
             let hv = NSHostingView(rootView: root)
             hv.frame = NSRect(origin: .zero, size: size)
+            hv.appearance = Self.appearance(whiteInk: whiteInk)
             backdrop?.setContent(hv)
             hostingView = hv
         }
@@ -217,18 +221,22 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         panel.ignoresMouseEvents = true
 
         let scheme = appearance.swiftUIColorScheme
+        let onGlass = backdrop?.isGlass == true
+        let whiteInk = backdrop?.hasWhiteInk == true
         let root = AnyView(
             PerAppHUD(icon: icon, title: title, content: content)
-                .preferredColorScheme(scheme)
+                .hudContent(onGlass: onGlass, whiteInk: whiteInk, scheme: scheme)
         )
         let size = NSSize(width: 300, height: 72)
         backdrop?.cornerRadius = PerAppHUD.cornerRadius
 
+        hostingView?.appearance = Self.appearance(whiteInk: whiteInk)
         if let existing = hostingView {
             existing.rootView = root
         } else {
             let hv = NSHostingView(rootView: root)
             hv.frame = NSRect(origin: .zero, size: size)
+            hv.appearance = Self.appearance(whiteInk: whiteInk)
             backdrop?.setContent(hv)
             hostingView = hv
         }
@@ -329,6 +337,11 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         }
         panel.orderFrontRegardless()
         CATransaction.flush()
+    }
+
+    /// For the hosting view, so FineTune's dynamic colors resolve as the SwiftUI content does
+    private static func appearance(whiteInk: Bool) -> NSAppearance? {
+        whiteInk ? NSAppearance(named: .darkAqua) : nil
     }
 
     // MARK: - Position Math
@@ -552,6 +565,22 @@ private final class HUDPanel: NSPanel {
     }
 }
 
+// MARK: - Content
+
+private extension View {
+    /// FineTune's appearance, or white glyphs, on the glass of macOS's own HUD
+    @ViewBuilder
+    func hudContent(onGlass: Bool, whiteInk: Bool, scheme: ColorScheme?) -> some View {
+        if whiteInk {
+            environment(\.colorScheme, .dark)
+                .environment(\.hudOnGlass, onGlass)
+        } else {
+            preferredColorScheme(scheme)
+                .environment(\.hudOnGlass, onGlass)
+        }
+    }
+}
+
 // MARK: - Backdrop
 
 /// What the HUD floats on: Liquid Glass on macOS 26 and later, else a blur of what lies
@@ -559,8 +588,7 @@ private final class HUDPanel: NSPanel {
 /// since SwiftUI's material and glass only see the HUD's own window, which is empty and clear.
 private final class HUDBackdropView: NSView {
     enum Kind {
-        /// The see-through Liquid Glass of the Dock and Control Center, on macOS 26 and later;
-        /// the blur before
+        /// Liquid Glass, on macOS 26 and later; the blur before
         case glass
         /// A blur in the HUD material, which isn't the menu bar panel's
         case blur
@@ -569,6 +597,10 @@ private final class HUDBackdropView: NSView {
     let kind: Kind
 
     private let effectView: NSView
+
+    /// Whether the HUD's glyphs are white on it, whatever FineTune's appearance: on the glass
+    /// of macOS's own HUD, which this one has when macOS lets FineTune pick it
+    private(set) var hasWhiteInk = false
 
     var isGlass: Bool {
         !(effectView is NSVisualEffectView)
@@ -589,6 +621,7 @@ private final class HUDBackdropView: NSView {
     init(kind: Kind) {
         self.kind = kind
         effectView = Self.makeEffectView(kind)
+        hasWhiteInk = Self.hasTextVariant(effectView)
         super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 72))
         effectView.frame = bounds.insetBy(dx: inset, dy: inset)
         effectView.autoresizingMask = [.width, .height]
@@ -628,11 +661,37 @@ private final class HUDBackdropView: NSView {
         #if compiler(>=6.2)
         if #available(macOS 26.0, *), kind == .glass {
             let glass = NSGlassEffectView()
-            glass.style = .clear
+            // Regular glass, which Apple's guidelines give to anything with text on it: it blurs
+            // what lies behind it and evens out its brightness. Clear glass is for floating over
+            // photos and video, and needs a dimming layer to be read over a white window.
+            glass.style = .regular
+            setTextVariant(of: glass)
             return glass
         }
         #endif
         return makeBlurView()
+    }
+
+    /// The "text" variant of macOS's glass (5 among the private variants of DesignLibrary's
+    /// GlassMaterialProvider, as listed by the LiquidGlassEffects project), the closest to macOS's
+    /// own HUD: darker and more even than regular glass, so white glyphs read on it over a
+    /// white window as over a black one. Without the private setter, the glass stays regular.
+    private static func hasTextVariant(_ view: NSView) -> Bool {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *), let glass = view as? NSGlassEffectView {
+            return glass.responds(to: NSSelectorFromString("set_variant:"))
+        }
+        #endif
+        return false
+    }
+
+    @available(macOS 26.0, *)
+    private static func setTextVariant(of glass: NSGlassEffectView) {
+        let selector = NSSelectorFromString("set_variant:")
+        guard let method = class_getInstanceMethod(type(of: glass), selector) else { return }
+        typealias Setter = @convention(c) (NSGlassEffectView, Selector, Int) -> Void
+        let setter = unsafeBitCast(method_getImplementation(method), to: Setter.self)
+        setter(glass, selector, 5)
     }
 
     private static func makeBlurView() -> NSVisualEffectView {
@@ -677,6 +736,13 @@ private struct PerAppHUD: View {
     private static let percentageWidth: CGFloat = 36
     private static let iconSize: CGFloat = 28
     private static let barHeight: CGFloat = 4
+
+    @Environment(\.hudOnGlass) private var onGlass
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: HUDPalette {
+        HUDPalette(onGlass: onGlass, colorScheme: colorScheme)
+    }
 
     private var subtitleText: String? {
         if case .notControlled = content { return "Not controlled by FineTune" }
@@ -733,7 +799,7 @@ private struct PerAppHUD: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
                     .font(TahoeStyleHUD.nameFont)
-                    .foregroundStyle(DesignTokens.Colors.textPrimary)
+                    .foregroundStyle(palette.text)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -759,7 +825,7 @@ private struct PerAppHUD: View {
         } else {
             Image(systemName: "app.dashed")
                 .font(.system(size: 20, weight: .regular))
-                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .foregroundStyle(palette.detail)
                 .frame(width: Self.iconSize, height: Self.iconSize)
         }
     }
@@ -773,7 +839,7 @@ private struct PerAppHUD: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isMutedDisplay
                                      ? DesignTokens.Colors.mutedIndicator
-                                     : DesignTokens.Colors.hudTileActive)
+                                     : palette.glyph)
                     .frame(width: 18, height: 18, alignment: .center)
 
                 progressBar
@@ -781,7 +847,7 @@ private struct PerAppHUD: View {
 
                 Text(percentageText)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .foregroundStyle(palette.detail)
                     .frame(width: Self.percentageWidth, alignment: .trailing)
             }
         case .mute(let isMuted):
@@ -790,18 +856,18 @@ private struct PerAppHUD: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(isMuted
                                      ? DesignTokens.Colors.mutedIndicator
-                                     : DesignTokens.Colors.hudTileActive)
+                                     : palette.glyph)
                     .frame(width: 18, height: 18, alignment: .center)
                 Text(isMuted ? "Muted" : "Unmuted")
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .foregroundStyle(palette.detail)
                 Spacer(minLength: 0)
             }
         case .notControlled:
             if let subtitleText {
                 Text(subtitleText)
                     .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .foregroundStyle(palette.detail)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -813,10 +879,10 @@ private struct PerAppHUD: View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(DesignTokens.Colors.textSecondary.opacity(0.25))
+                    .fill(palette.detail.opacity(0.25))
                     .frame(height: Self.barHeight)
                 Capsule()
-                    .fill(DesignTokens.Colors.hudTileActive)
+                    .fill(palette.glyph)
                     .frame(width: geo.size.width * CGFloat(displayLevel), height: Self.barHeight)
             }
             .frame(maxHeight: .infinity)

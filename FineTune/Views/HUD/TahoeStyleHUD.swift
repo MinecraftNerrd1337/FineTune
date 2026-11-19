@@ -23,6 +23,13 @@ struct TahoeStyleHUD: View {
 
     @State private var dragValue: Double? = nil
 
+    @Environment(\.hudOnGlass) private var onGlass
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: HUDPalette {
+        HUDPalette(onGlass: onGlass, colorScheme: colorScheme)
+    }
+
     // MARK: - Derived state
 
     private var displayFloat: Float {
@@ -86,7 +93,7 @@ struct TahoeStyleHUD: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(deviceName.isEmpty ? " " : deviceName)
                 .font(Self.nameFont)
-                .foregroundStyle(DesignTokens.Colors.textPrimary)
+                .foregroundStyle(palette.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -97,7 +104,7 @@ struct TahoeStyleHUD: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(displayMute
                                      ? DesignTokens.Colors.mutedIndicator
-                                     : DesignTokens.Colors.hudTileActive)
+                                     : palette.glyph)
                     .frame(width: 18, height: 18, alignment: .center)
 
                 LiquidGlassSlider(
@@ -110,7 +117,7 @@ struct TahoeStyleHUD: View {
 
                 Text(percentageText)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .foregroundStyle(palette.detail)
                     .frame(width: Self.percentageWidth, alignment: .trailing)
             }
         }
