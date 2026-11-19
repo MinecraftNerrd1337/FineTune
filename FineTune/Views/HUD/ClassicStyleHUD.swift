@@ -12,7 +12,8 @@ struct ClassicStyleHUD: View {
 
     private static let tileCount: Int = 16
     private static let frameSize: CGFloat = 200
-    private static let cornerRadius: CGFloat = 16
+    /// Also the corner of the blur AppKit draws behind it
+    static let cornerRadius: CGFloat = 16
     private static let iconSize: CGFloat = 80
     private static let tileSize: CGFloat = 7.5
     private static let tileSpacing: CGFloat = 2
@@ -63,14 +64,7 @@ struct ClassicStyleHUD: View {
             tileSection
         }
         .frame(width: Self.frameSize, height: Self.frameSize)
-        .background {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .fill(.regularMaterial)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .strokeBorder(DesignTokens.Colors.hudBorder, lineWidth: 1)
-        }
+        .hudOutline(cornerRadius: Self.cornerRadius)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
     }

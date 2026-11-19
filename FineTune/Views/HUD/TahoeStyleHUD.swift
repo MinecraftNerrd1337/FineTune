@@ -15,7 +15,8 @@ struct TahoeStyleHUD: View {
 
     private static let frameWidth: CGFloat = 300
     private static let frameHeight: CGFloat = 72
-    private static let cornerRadius: CGFloat = 22
+    /// Also the corner of the blur AppKit draws behind it
+    static let cornerRadius: CGFloat = 22
     private static let percentageWidth: CGFloat = 36
 
     // MARK: - State
@@ -117,15 +118,8 @@ struct TahoeStyleHUD: View {
         .padding(.top, 14)
         .padding(.bottom, 12)
         .frame(width: Self.frameWidth, height: Self.frameHeight)
-        .background {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .fill(.regularMaterial)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .strokeBorder(DesignTokens.Colors.hudBorder, lineWidth: 1)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius))
+        .hudOutline(cornerRadius: Self.cornerRadius)
+        .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .onHover { hovering in
             onHoverChange?(hovering)
         }

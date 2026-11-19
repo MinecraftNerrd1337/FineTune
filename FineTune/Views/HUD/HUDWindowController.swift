@@ -13,6 +13,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
 
     // Read from the nonisolated deinit, which hands them to the main thread.
     private nonisolated(unsafe) var panel: NSPanel?
+    private var backdrop: HUDBackdropView?
     private var hostingView: NSHostingView<AnyView>?
     private var hideTask: Task<Void, Never>?
     private var styleAtLastShow: HUDStyle = .tahoe
@@ -126,19 +127,21 @@ final class HUDWindowController: MediaKeyHUDPresenting {
             )
             size = NSSize(width: 200, height: 200)
         }
+        backdrop?.cornerRadius = style == .classic ? ClassicStyleHUD.cornerRadius : TahoeStyleHUD.cornerRadius
 
         if let existing = hostingView {
             existing.rootView = root
         } else {
             let hv = NSHostingView(rootView: root)
             hv.frame = NSRect(origin: .zero, size: size)
-            panel.contentView = hv
+            backdrop?.setContent(hv)
             hostingView = hv
         }
         showDidUpdatePanel = true
 
         panel.setContentSize(size)
         panel.setFrameOrigin(position(for: style, size: size))
+        refreshShadow(of: panel)
 
         if panel.isVisible {
             panel.orderFrontRegardless()
@@ -206,19 +209,21 @@ final class HUDWindowController: MediaKeyHUDPresenting {
                 .preferredColorScheme(scheme)
         )
         let size = NSSize(width: 300, height: 72)
+        backdrop?.cornerRadius = PerAppHUD.cornerRadius
 
         if let existing = hostingView {
             existing.rootView = root
         } else {
             let hv = NSHostingView(rootView: root)
             hv.frame = NSRect(origin: .zero, size: size)
-            panel.contentView = hv
+            backdrop?.setContent(hv)
             hostingView = hv
         }
         showDidUpdatePanel = true
 
         panel.setContentSize(size)
         panel.setFrameOrigin(position(for: .tahoe, size: size))
+        refreshShadow(of: panel)
 
         if panel.isVisible {
             panel.orderFrontRegardless()
@@ -307,7 +312,6 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         )
         p.level = .floating
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle, .transient]
-        p.hasShadow = false
         p.isOpaque = false
         p.backgroundColor = .clear
         p.ignoresMouseEvents = true
@@ -319,9 +323,24 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         // Initial appearance; refreshed on every show() so preference flips
         // between invocations propagate.
         p.appearance = settingsManager.appSettings.appearance.nsAppearance
+        let backdrop = HUDBackdropView(kind: .current)
+        p.contentView = backdrop
+        // Liquid Glass draws its own edge. A blur gets the window server's shadow around the
+        // HUD's rounded shape, as macOS's own HUDs did before it.
+        p.hasShadow = !backdrop.isGlass
+        self.backdrop = backdrop
 
         panel = p
         return p
+    }
+
+    /// The shadow follows what the window shows, so it is worked out again once SwiftUI has
+    /// drawn the HUD in its new size or style
+    private func refreshShadow(of panel: NSPanel) {
+        panel.invalidateShadow()
+        Task { @MainActor in
+            panel.invalidateShadow()
+        }
     }
 
     private func scheduleHide(for style: HUDStyle) {
@@ -437,6 +456,111 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     }
 }
 
+// MARK: - Backdrop
+
+/// What the HUD floats on: clear Liquid Glass on macOS 26 and later, else a blur of what lies
+/// behind the window, like macOS's own HUDs, cut to the HUD's rounded shape. AppKit draws it,
+/// since SwiftUI's material and glass only see the HUD's own window, which is empty and clear.
+private final class HUDBackdropView: NSView {
+    /// For trying them out, `defaults write com.finetuneapp.FineTune HUDBackdrop -string` with
+    /// `clear`, `regular` or `blur`, then relaunching FineTune. Before macOS 26, always the blur.
+    enum Kind: String {
+        /// Liquid Glass as the Dock has it, most of what lies behind showing through
+        case clearGlass = "clear"
+        /// The frostier Liquid Glass of toolbars and sidebars
+        case regularGlass = "regular"
+        /// A blur in the HUD material, which isn't the menu bar panel's
+        case blur
+
+        static var current: Kind {
+            UserDefaults.standard.string(forKey: "HUDBackdrop").flatMap(Kind.init(rawValue:)) ?? .clearGlass
+        }
+    }
+
+    private let effectView: NSView
+
+    var isGlass: Bool {
+        !(effectView is NSVisualEffectView)
+    }
+
+    var cornerRadius: CGFloat = 0 {
+        didSet {
+            guard cornerRadius != oldValue else { return }
+            applyCornerRadius()
+        }
+    }
+
+    init(kind: Kind) {
+        effectView = Self.makeEffectView(kind)
+        super.init(frame: NSRect(x: 0, y: 0, width: 300, height: 72))
+        effectView.frame = bounds
+        effectView.autoresizingMask = [.width, .height]
+        addSubview(effectView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    /// The SwiftUI HUD, drawn over the glass or the blur
+    func setContent(_ view: NSView) {
+        // Sized with the window from here on
+        view.frame = effectView.bounds
+        view.autoresizingMask = [.width, .height]
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *), let glass = effectView as? NSGlassEffectView {
+            glass.contentView = view
+            return
+        }
+        #endif
+        effectView.addSubview(view)
+    }
+
+    private func applyCornerRadius() {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *), let glass = effectView as? NSGlassEffectView {
+            glass.cornerRadius = cornerRadius
+            return
+        }
+        #endif
+        (effectView as? NSVisualEffectView)?.maskImage = Self.roundedMask(radius: cornerRadius)
+    }
+
+    private static func makeEffectView(_ kind: Kind) -> NSView {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *), kind != .blur {
+            let glass = NSGlassEffectView()
+            glass.style = kind == .clearGlass ? .clear : .regular
+            return glass
+        }
+        #endif
+        return makeBlurView()
+    }
+
+    private static func makeBlurView() -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        // The HUD's window never becomes key: without this the blur looks inactive, flat
+        view.state = .active
+        return view
+    }
+
+    /// A stretchable rounded rectangle, the shape the blur is cut to
+    private static func roundedMask(radius: CGFloat) -> NSImage {
+        let edge = radius * 2 + 1
+        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
+            NSColor.black.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            return true
+        }
+        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
+        image.resizingMode = .stretch
+        return image
+    }
+}
+
 // MARK: - Per-app HUD content
 
 private enum PerAppHUDContent {
@@ -452,7 +576,7 @@ private struct PerAppHUD: View {
 
     private static let frameWidth: CGFloat = 300
     private static let frameHeight: CGFloat = 72
-    private static let cornerRadius: CGFloat = 22
+    static let cornerRadius: CGFloat = 22
     private static let percentageWidth: CGFloat = 36
     private static let iconSize: CGFloat = 28
     private static let barHeight: CGFloat = 4
@@ -523,14 +647,7 @@ private struct PerAppHUD: View {
         .padding(.top, 14)
         .padding(.bottom, 12)
         .frame(width: Self.frameWidth, height: Self.frameHeight)
-        .background {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .fill(.regularMaterial)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .strokeBorder(DesignTokens.Colors.hudBorder, lineWidth: 1)
-        }
+        .hudOutline(cornerRadius: Self.cornerRadius)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
     }

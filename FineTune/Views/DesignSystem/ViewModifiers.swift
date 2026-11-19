@@ -50,6 +50,34 @@ struct GlassContainerModifier: ViewModifier {
     }
 }
 
+// MARK: - HUD Outline Modifier
+
+/// The hairline around a volume HUD before macOS 26. The HUD's blur, or its Liquid Glass on
+/// macOS 26 and later, is drawn by AppKit behind it (see `HUDWindowController`): SwiftUI's
+/// material and glass only see the HUD's own window, which is empty, and read as flat gray.
+struct HUDOutlineModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        #if compiler(>=6.2)
+        if #available(macOS 26.0, *) {
+            content
+        } else {
+            outlined(content)
+        }
+        #else
+        outlined(content)
+        #endif
+    }
+
+    private func outlined(_ content: Content) -> some View {
+        content.overlay(
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(DesignTokens.Colors.hudBorder, lineWidth: 0.5)
+        )
+    }
+}
+
 // MARK: - Section Header Style Modifier
 
 struct SectionHeaderStyleModifier: ViewModifier {
@@ -191,6 +219,11 @@ extension View {
     /// material fill with a hairline border. Used to visually separate a group of controls.
     func glassContainer(cornerRadius: CGFloat = DesignTokens.Dimensions.rowRadius) -> some View {
         modifier(GlassContainerModifier(cornerRadius: cornerRadius))
+    }
+
+    /// The hairline around a volume HUD, before macOS 26
+    func hudOutline(cornerRadius: CGFloat) -> some View {
+        modifier(HUDOutlineModifier(cornerRadius: cornerRadius))
     }
 
     /// Applies glass button styling
