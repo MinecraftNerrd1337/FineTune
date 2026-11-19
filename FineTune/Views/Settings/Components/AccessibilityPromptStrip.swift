@@ -41,7 +41,7 @@ struct AccessibilityPromptStrip: View {
             } else {
                 Button(action: { accessibility.requestAccess() }) {
                     HStack(spacing: 3) {
-                        Text("Grant")
+                        Text(accessibility.hasPromptedForTrust ? "Open Settings" : "Grant")
                         Image(systemName: "arrow.up.right.square")
                             .font(.system(size: 9, weight: .medium))
                     }
@@ -49,7 +49,9 @@ struct AccessibilityPromptStrip: View {
                     .foregroundStyle(DesignTokens.Colors.accentPrimary)
                 }
                 .buttonStyle(.plain)
-                .accessibilityHint("Registers FineTune in the Accessibility list and opens System Settings.")
+                .accessibilityHint(accessibility.hasPromptedForTrust
+                                   ? "Opens the Accessibility list in System Settings."
+                                   : "Asks macOS for Accessibility access.")
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.md)
