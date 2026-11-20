@@ -2,7 +2,8 @@
 import SwiftUI
 
 /// Frequency response graph of a preset: log frequency axis (20 Hz to 20 kHz), dB axis,
-/// the summed curve, the preamp level and one point per band, numbered by frequency.
+/// the summed curve, the preamp level, the perceived level and one point per band, numbered by
+/// frequency.
 /// A graphic preset shows its curve and, when there are few enough, its points.
 ///
 /// Layout ideas (decade/minor grid tiers, knob on a stem from 0 dB, drag by offset from
@@ -19,6 +20,9 @@ struct EQResponseGraph: View {
     var onDragBegan: () -> Void = {}
     var onDrag: (_ band: Int, _ frequency: Double, _ gainDB: Float) -> Void = { _, _, _ in }
     var onDragEnded: () -> Void = {}
+    /// How much the curve changes the perceived level (`AutoEQResponse.perceivedLevelChangeDB`),
+    /// drawn as a thin line under the curve.
+    var perceivedLevelDB: Double? = nil
 
     /// How the preamp is drawn. `.peakLimit` (default) mirrors it above 0 dB: the curve should
     /// stay under that line. `.gainLevel` draws it at its own (negative) level.
@@ -127,11 +131,13 @@ struct EQResponseGraph: View {
                     return
                 }
                 drawPreamp(into: &layer, plot: plot)
+                drawPerceivedLevel(into: &layer, plot: plot)
                 drawCurve(into: &layer, plot: plot)
                 drawCurvePoints(into: &layer, plot: plot)
                 return
             }
             drawPreamp(into: &layer, plot: plot)
+            drawPerceivedLevel(into: &layer, plot: plot)
             if let band = selectedBand ?? hoveredBand, profile.filters.indices.contains(band) {
                 drawSingleBand(profile.filters[band], into: &layer, plot: plot)
             }
@@ -232,6 +238,27 @@ struct EQResponseGraph: View {
                 .foregroundStyle(Color.primary.opacity(0.75)),
             at: CGPoint(x: plot.maxX - 6, y: level >= 0 ? py - 3 : py + 3),
             anchor: level >= 0 ? .bottomTrailing : .topTrailing
+        )
+    }
+
+    /// A thin line at the perceived level, under the curve, so the curve reads against it.
+    private func drawPerceivedLevel(into context: inout GraphicsContext, plot: CGRect) {
+        guard let level = perceivedLevelDB, abs(level) <= scaleDB else { return }
+        let py = y(for: level, in: plot)
+        let color = Color.accentColor.opacity(0.35)
+        context.stroke(
+            line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.maxX, y: py)),
+            with: .color(color),
+            lineWidth: 1
+        )
+        // Its caption under the line, or above it at the bottom of the graph
+        let below = py + 14 <= plot.maxY
+        context.draw(
+            Text(String(format: "Perceived level %+.1f dB", level))
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color.accentColor.opacity(0.6)),
+            at: CGPoint(x: plot.minX + 6, y: below ? py + 2 : py - 2),
+            anchor: below ? .topLeading : .bottomLeading
         )
     }
 

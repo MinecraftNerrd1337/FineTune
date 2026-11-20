@@ -18,11 +18,14 @@ struct EQManagerPresetDetail: View {
     private var isEditing: Bool { editor.isEditing }
 
     var body: some View {
+        // Shown in the Preamp section and drawn on the graph
+        let perceived = AutoEQResponse.perceivedLevelChangeDB(preset)
+
         HStack(alignment: .top, spacing: DesignTokens.Spacing.lg) {
             ScrollView {
                 VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
                     presetSection
-                    preampSection
+                    preampSection(perceived: perceived)
                 }
                 .padding(.bottom, DesignTokens.Spacing.sm)
             }
@@ -44,7 +47,8 @@ struct EQManagerPresetDetail: View {
                             profile.filters[band].gainDB = gain
                         }
                     },
-                    onDragEnded: { editor.endGesture() }
+                    onDragEnded: { editor.endGesture() },
+                    perceivedLevelDB: perceived
                 )
                 // 220 pt at the window's minimum size; grows with the band table as it is enlarged
                 .frame(minHeight: 220, maxHeight: .infinity)
@@ -254,11 +258,10 @@ struct EQManagerPresetDetail: View {
 
     // MARK: - Preamp Section
 
-    private var preampSection: some View {
+    private func preampSection(perceived: Double?) -> some View {
         let recommended = AutoEQResponse.recommendedPreampDB(preset)
         let peak = AutoEQResponse.peakDB(preset)
         let clipRisk = peak.map { AutoEQResponse.clipRiskDB(preampDB: Double(preset.preampDB), peakDB: $0) } ?? 0
-        let perceived = AutoEQResponse.perceivedLevelChangeDB(preset)
 
         return VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
             SettingsSection("Preamp") {
@@ -289,10 +292,12 @@ struct EQManagerPresetDetail: View {
                         }
                     }
                 }
+                .help("The peak boost as a cut, so the corrected sound never exceeds the original level.")
                 Divider()
                 row("Peak boost") { valueText(peak.map { String(format: "%+.1f dB", $0) } ?? "—") }
                 Divider()
                 row("Perceived level") { valueText(perceived.map { String(format: "%+.1f dB", $0) } ?? "—") }
+                    .help("How much quieter or louder the curve sounds (the RMS of music through it), drawn as a thin line on the graph. With a device's correction off and its preamp on, FineTune adds this level to the preamp, so the loudness stays the same.")
             }
 
             if clipRisk > 0 {
@@ -301,11 +306,6 @@ struct EQManagerPresetDetail: View {
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 4)
             }
-            Text("Recommended: the peak boost as a cut, so the corrected sound never exceeds the original level. Perceived level: how much quieter or louder the curve sounds (the RMS of music through it). With a device's correction off and its preamp on, FineTune adds that level to the preamp, so the loudness stays the same.")
-                .font(.system(size: 10))
-                .foregroundStyle(DesignTokens.Colors.textTertiary)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 4)
         }
     }
 
