@@ -50,9 +50,9 @@ struct ShortcutsTab: View {
     // MARK: - Media Keys
 
     private var mediaKeysSection: some View {
-        SettingsSection("Media Keys") {
+        SettingsSection("Volume HUD") {
             SettingsRow(
-                "Media Keys Control",
+                "Use FineTune HUD",
                 description: "Use F11/F12 (or volume keys) to control FineTune"
             ) {
                 Toggle("", isOn: $settings.appSettings.mediaKeyControlEnabled)
