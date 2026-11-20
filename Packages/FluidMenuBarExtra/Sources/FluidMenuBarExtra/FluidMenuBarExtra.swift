@@ -33,11 +33,11 @@ import SwiftUI
 ///
 /// See also the bundled demo application for a more detailed example.
 public struct FluidMenuBarExtra<Content: View>: Scene {
-    private class State<Content: View>: ObservableObject {
+    private class State: ObservableObject {
         var statusItem: FluidMenuBarExtraStatusItem? = nil
     }
 
-    @StateObject private var state = State<Content>()
+    @StateObject private var state = State()
     @Binding private var isInserted: Bool
 
     private let title: String
@@ -255,7 +255,7 @@ public struct FluidMenuBarExtra<Content: View>: Scene {
         // FineTune: an empty, never-inserted MenuBarExtra as the placeholder scene. Upstream used
         // `Settings {}`, which added a second "Settings…" item next to the host app's own.
         return MenuBarExtra(title, isInserted: .constant(false)) { EmptyView() }
-            .onChange(of: isInserted) { state.statusItem?.isVisible = $0 }
+            .onChange(of: isInserted) { _, inserted in state.statusItem?.isVisible = inserted }
     }
 }
 
