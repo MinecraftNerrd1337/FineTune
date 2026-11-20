@@ -34,6 +34,10 @@ protocol DeviceVolumeProviding: AnyObject {
 
     func outputVolumeBackend(for deviceID: AudioDeviceID) -> VolumeControlTier
 
+    /// Whether the device, which has no volume of its own, may yet get a volume plugin: one set
+    /// meanwhile would be its software level, undone once the plugin drives it
+    func isAwaitingPlugin(_ deviceID: AudioDeviceID) -> Bool
+
     /// Returns the tier that auto-detection would pick, ignoring any saved override.
     /// Used by the device detail sheet to display the "Auto: <tier>" badge.
     func autoDetectedOutputVolumeBackend(for deviceID: AudioDeviceID) -> VolumeControlTier
@@ -58,6 +62,10 @@ protocol DeviceVolumeProviding: AnyObject {
 }
 
 extension DeviceVolumeProviding {
+    func isAwaitingPlugin(_ deviceID: AudioDeviceID) -> Bool {
+        false
+    }
+
     func outputProcessingGain(for deviceID: AudioDeviceID) -> Float {
         1.0
     }

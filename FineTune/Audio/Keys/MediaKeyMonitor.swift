@@ -247,6 +247,11 @@ final class MediaKeyMonitor {
             logger.debug("Ignoring media key: no valid default output device")
             return
         }
+        // Until its plugin drives it, the device would be set in software, and the HUD show that
+        guard !volumeMonitor.isAwaitingPlugin(deviceID) else {
+            logger.debug("Ignoring media key: the default output device's plugin is starting")
+            return
+        }
         let tier = volumeMonitor.outputVolumeBackend(for: deviceID)
         let deviceName = audioEngine.deviceMonitor.outputDevices.first { $0.id == deviceID }?.name ?? ""
         handleCore(

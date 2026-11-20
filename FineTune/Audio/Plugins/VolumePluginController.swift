@@ -72,6 +72,11 @@ final class VolumePluginController {
     @ObservationIgnored private var generation = 0
     /// HID interfaces whose session is starting (registry entry ID → device and plugin)
     @ObservationIgnored private var starting: [UInt64: Starting] = [:]
+    /// The output devices whose plugin, or lack of one, the last look at the HID interfaces
+    /// settled. Each one present then has its plugin starting, driving it, failed, or none.
+    @ObservationIgnored private var settledDevices = Set<AudioDeviceID>()
+    /// Until the plugins folder was read once, no device's plugin is known
+    @ObservationIgnored private var hasReadPlugins = false
     /// Devices whose plugin failed to start, or was stopped: not tried again until the plugins are
     /// reloaded, another plugin is chosen, or the device comes back
     @ObservationIgnored private var givenUp: [AudioDeviceID: String] = [:]
@@ -170,6 +175,7 @@ final class VolumePluginController {
     }
 
     private func apply(_ found: [VolumePluginFile], force: Bool) {
+        hasReadPlugins = true
         guard force || found != plugins else { return }
         plugins = found
         for plugin in plugins {
@@ -213,6 +219,18 @@ final class VolumePluginController {
 
     func isPluginBacked(_ deviceID: AudioDeviceID) -> Bool {
         bindings[deviceID] != nil
+    }
+
+    /// Whether the device may get a plugin it doesn't have yet: the plugins folder isn't read,
+    /// FineTune hasn't looked for the device's HID interfaces since it appeared, or a plugin is
+    /// starting for it. Whatever level it is set to meanwhile, the plugin would undo.
+    func isAwaitingPlugin(_ deviceID: AudioDeviceID) -> Bool {
+        guard bindings[deviceID] == nil else { return false }
+        guard hasReadPlugins else { return isObservingDevices }
+        // No plugin to use
+        guard hidManager != nil else { return false }
+        if starting.values.contains(where: { $0.deviceID == deviceID }) { return true }
+        return !settledDevices.contains(deviceID)
     }
 
     func pluginName(for deviceID: AudioDeviceID) -> String? {
@@ -359,6 +377,7 @@ final class VolumePluginController {
         bindings = [:]
         cachedVolumes = [:]
         starting = [:]
+        settledDevices = []
         guard let manager = hidManager else { return }
         // Unscheduled first, so no callback can run once the context is released
         IOHIDManagerUnscheduleFromRunLoop(manager, CFRunLoopGetMain(), CFRunLoopMode.commonModes.rawValue)
@@ -508,6 +527,7 @@ final class VolumePluginController {
                   let audio = audioDevices.first(where: { $0.id == deviceID }) else { continue }
             startSession(target.plugin, interface: target.interface, audio: audio)
         }
+        settledDevices = present
 
         if changed {
             onBindingsChanged?()

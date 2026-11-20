@@ -172,6 +172,24 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
         return autoDetectBackend(for: deviceID)
     }
 
+    func isAwaitingPlugin(_ deviceID: AudioDeviceID) -> Bool {
+        #if !APP_STORE
+        guard deviceID.isValid, let pluginController else { return false }
+        // A tier the user set isn't the plugin's
+        if let uid = deviceMonitor.device(for: deviceID)?.uid,
+           settingsManager.getDeviceVolumeTierOverride(for: uid) != nil {
+            return false
+        }
+        // The device's own volume is used until a plugin drives it, and is no software level
+        if !pluginController.isPluginBacked(deviceID), deviceID.hasOutputVolumeControl() {
+            return false
+        }
+        return pluginController.isAwaitingPlugin(deviceID)
+        #else
+        return false
+        #endif
+    }
+
     /// Returns the tier that auto-detection would pick, ignoring any saved override.
     /// Used by the detail sheet to display the "Auto: <tier>" badge.
     func autoDetectedOutputVolumeBackend(for deviceID: AudioDeviceID) -> VolumeControlTier {
