@@ -4,18 +4,9 @@ import SwiftUI
 /// Icon-only button that opens a popover for selecting AutoEQ headphone correction profiles.
 /// Follows the same pattern as the EQ toggle button in `AppRowControls`.
 struct AutoEQPicker: View {
-    let profileManager: AutoEQProfileManager
-    let profileName: String?
-    let selection: AutoEQSelection?
-    let favoriteIDs: Set<String>
-    let onSelect: (AutoEQProfile?) -> Void
-    let onImport: () -> Void
-    let importError: String?
-    var isCorrectionEnabled: Bool = false
-    var onCorrectionToggle: ((Bool) -> Void)?
-    var preampEnabled: Bool = true
-    var onPreampToggle: (() -> Void)?
-    var deviceUID: String?
+    let menu: AutoEQDeviceMenu
+    /// Offers "Open EQ Manager..." in the popover (not from the EQ Manager itself).
+    var showsManagerButton = true
 
     @State private var isExpanded = false
     @State private var isButtonHovered = false
@@ -31,9 +22,9 @@ struct AutoEQPicker: View {
     private var iconColor: Color {
         if isExpanded {
             return DesignTokens.Colors.accentPrimary
-        } else if selection != nil || profileName != nil {
+        } else if menu.selection != nil || menu.profileName != nil {
             // Dim when profile assigned but correction disabled
-            return isCorrectionEnabled
+            return menu.isCorrectionEnabled
                 ? DesignTokens.Colors.accentPrimary
                 : DesignTokens.Colors.interactiveDefault
         } else if isButtonHovered {
@@ -86,11 +77,10 @@ struct AutoEQPicker: View {
     private var popoverContent: some View {
         VStack(spacing: 0) {
             AutoEQSearchPanel(
-                profileManager: profileManager,
-                favoriteIDs: favoriteIDs,
-                selectedProfileID: selection?.profileID,
+                menu: menu,
+                showsManagerButton: showsManagerButton,
                 onSelect: { profile in
-                    onSelect(profile)
+                    menu.onSelect(profile)
                     withAnimation(.easeOut(duration: 0.15)) {
                         isExpanded = false
                     }
@@ -99,17 +89,7 @@ struct AutoEQPicker: View {
                     withAnimation(.easeOut(duration: 0.15)) {
                         isExpanded = false
                     }
-                },
-                onImport: {
-                    isExpanded = false
-                    onImport()
-                },
-                importErrorMessage: importError,
-                isCorrectionEnabled: isCorrectionEnabled,
-                onCorrectionToggle: onCorrectionToggle,
-                preampEnabled: preampEnabled,
-                onPreampToggle: onPreampToggle,
-                deviceUID: deviceUID
+                }
             )
         }
         .frame(width: popoverWidth)

@@ -50,11 +50,6 @@ struct MenuBarPanelView: View {
     /// Track panel visibility to pause VU meter polling when hidden
     @State private var isPanelVisible = true
 
-    /// Error message shown when AutoEQ profile import fails
-    @State private var autoEQImportError: String?
-    /// Task that auto-clears the import error after 3 seconds
-    @State private var importErrorClearTask: Task<Void, Never>?
-
     /// Memoized paired Bluetooth devices
     @State private var pairedDevices: [PairedBluetoothDevice] = []
 
@@ -599,13 +594,6 @@ struct MenuBarPanelView: View {
                 }
             } else {
                 ForEach(sortedDevices) { device in
-                    let selection = audioEngine.getAutoEQSelection(for: device.uid)
-                    let profileName: String? = {
-                        guard let sel = selection else { return nil }
-                        return audioEngine.autoEQProfileManager.profile(for: sel.profileID)?.name
-                            ?? audioEngine.autoEQProfileManager.catalogEntry(for: sel.profileID)?.name
-                    }()
-
                     DeviceRow(
                         device: device,
                         isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
@@ -622,25 +610,7 @@ struct MenuBarPanelView: View {
                             let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
                             deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
                         },
-                        autoEQProfileName: profileName,
-                        autoEQEnabled: selection?.isEnabled ?? false,
-                        onAutoEQToggle: { enabled in
-                            audioEngine.setAutoEQEnabled(for: device.uid, enabled: enabled)
-                        },
-                        autoEQProfileManager: audioEngine.autoEQProfileManager,
-                        autoEQSelection: selection,
-                        autoEQFavoriteIDs: audioEngine.settingsManager.favoriteAutoEQProfileIDs,
-                        onAutoEQSelect: { profile in
-                            audioEngine.setAutoEQProfile(for: device.uid, profileID: profile?.id)
-                        },
-                        onAutoEQImport: {
-                            importAutoEQFile(for: device.uid)
-                        },
-                        autoEQImportError: autoEQImportError,
-                        autoEQPreampEnabled: audioEngine.autoEQPreampEnabled,
-                        onAutoEQPreampToggle: {
-                            audioEngine.setAutoEQPreampEnabled(!audioEngine.autoEQPreampEnabled)
-                        },
+                        autoEQ: AutoEQDeviceMenu(deviceUID: device.uid, audioEngine: audioEngine),
                         isFocused: hasKeyboardEngaged && selectedRow == .device(uid: device.uid),
                         iconOverrideSymbol: audioEngine.settingsManager.getDeviceIconOverride(for: device.uid),
                         masterVolume: audioEngine.deviceMasterVolume(for: device.uid),
@@ -1241,10 +1211,7 @@ struct MenuBarPanelView: View {
     /// and we don't want the main view to show zero rows in that window.
     private func updateSortedDevices() {
         let all = audioEngine.prioritySortedOutputDevices
-        let defaultUID = deviceVolumeMonitor.defaultDeviceUID
-        let filtered = all.filter { device in
-            device.uid == defaultUID || !audioEngine.settingsManager.isOutputDeviceHidden(device.uid)
-        }
+        let filtered = all.filter { !audioEngine.isOutputDeviceHiddenFromPanel($0) }
         sortedDevices = filtered.isEmpty ? all : filtered
     }
 
@@ -1258,55 +1225,6 @@ struct MenuBarPanelView: View {
             device.uid == defaultUID || !audioEngine.settingsManager.isInputDeviceHidden(device.uid)
         }
         sortedInputDevices = filtered.isEmpty ? all : filtered
-    }
-
-    /// Opens a file panel to import a ParametricEQ.txt or GraphicEQ.txt for a device
-    private func importAutoEQFile(for deviceUID: String) {
-        // Dismiss the main panel so the file picker isn't obscured
-        NSApp.keyWindow?.resignKey()
-
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType.plainText]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Select a ParametricEQ.txt or GraphicEQ.txt file (AutoEQ, Wavelet, Equalizer APO)"
-        // Sample rate the file's filters were designed for (a graphic curve ignores it)
-        let rateChoices = AutoEQBaseRate.choices
-        let ratePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        ratePopup.addItems(withTitles: rateChoices.map(AutoEQBaseRate.label))
-        ratePopup.selectItem(at: rateChoices.firstIndex(of: AutoEQBaseRate.lastImportRate) ?? 0)
-        let rateRow = NSStackView(views: [NSTextField(labelWithString: "Filters designed for:"), ratePopup])
-        rateRow.orientation = .horizontal
-        rateRow.spacing = 8
-        rateRow.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
-        rateRow.frame = NSRect(origin: .zero, size: rateRow.fittingSize)
-        panel.accessoryView = rateRow
-        panel.isAccessoryViewDisclosed = true
-        // FineTune is an agent app (LSUIElement): without activation the panel opens behind other apps.
-        NSApp.activate(ignoringOtherApps: true)
-        panel.level = .modalPanel
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            let name = url.deletingPathExtension().lastPathComponent
-            let baseRate = rateChoices.indices.contains(ratePopup.indexOfSelectedItem)
-                ? rateChoices[ratePopup.indexOfSelectedItem] : AutoEQBaseRate.autoEQDefault
-            AutoEQBaseRate.lastImportRate = baseRate
-            Task { @MainActor in
-                if let profile = audioEngine.autoEQProfileManager.importProfile(from: url, name: name, baseRate: baseRate) {
-                    audioEngine.setAutoEQProfile(for: deviceUID, profileID: profile.id)
-                    autoEQImportError = nil
-                } else {
-                    autoEQImportError = "Could not read profile — check file format"
-                    importErrorClearTask?.cancel()
-                    importErrorClearTask = Task {
-                        try? await Task.sleep(for: .seconds(3))
-                        guard !Task.isCancelled else { return }
-                        withAnimation { autoEQImportError = nil }
-                    }
-                }
-            }
-        }
-        panel.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Keyboard Navigation

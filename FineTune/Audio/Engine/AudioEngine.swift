@@ -130,6 +130,12 @@ final class AudioEngine {
         return sorted
     }
 
+    /// Whether the menu bar panel leaves an output device out: hidden in its device list, unless
+    /// it is the default output.
+    func isOutputDeviceHiddenFromPanel(_ device: AudioDevice) -> Bool {
+        device.uid != deviceVolumeMonitor.defaultDeviceUID && settingsManager.isOutputDeviceHidden(device.uid)
+    }
+
     /// Input devices sorted by user-defined priority order.
     var prioritySortedInputDevices: [AudioDevice] {
         let devices = inputDevices

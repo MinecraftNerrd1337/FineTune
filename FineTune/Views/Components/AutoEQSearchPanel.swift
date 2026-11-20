@@ -3,23 +3,22 @@ import FluidMenuBarExtra
 import SwiftUI
 
 /// Panel for picking an AutoEQ correction preset for a device.
-/// Status Zone (active preset or empty state), then the EQ Manager button, then the
-/// Favorites Zone (starred presets).
+/// Status Zone (active preset or empty state), then the EQ Manager button (outside the EQ
+/// Manager), then the Favorites Zone (starred presets).
 /// Browsing every preset happens in the EQ Manager window.
 struct AutoEQSearchPanel: View {
-    let profileManager: AutoEQProfileManager
-    let favoriteIDs: Set<String>
-    let selectedProfileID: String?
+    /// The device's AutoEQ, which this panel shows and sets.
+    let menu: AutoEQDeviceMenu
+    /// Offers "Open EQ Manager..." (not from the EQ Manager itself).
+    var showsManagerButton = true
     let onSelect: (AutoEQProfile?) -> Void
     let onDismiss: () -> Void
-    let onImport: () -> Void
-    let importErrorMessage: String?
-    var isCorrectionEnabled: Bool = false
-    var onCorrectionToggle: ((Bool) -> Void)?
-    var preampEnabled: Bool = true
-    var onPreampToggle: (() -> Void)?
-    /// The device whose AutoEQ this panel sets: the EQ Manager opens listening on it.
-    var deviceUID: String?
+
+    private var profileManager: AutoEQProfileManager { menu.profileManager }
+    private var favoriteIDs: Set<String> { menu.favoriteIDs }
+    private var selectedProfileID: String? { menu.selection?.profileID }
+    private var isCorrectionEnabled: Bool { menu.isCorrectionEnabled }
+    private var preampEnabled: Bool { menu.preampEnabled }
 
     @State private var hoveredID: String?
     @State private var highlightedIndex: Int?
@@ -60,10 +59,12 @@ struct AutoEQSearchPanel: View {
             Divider()
                 .padding(.horizontal, DesignTokens.Spacing.xs)
 
-            importButton
+            if showsManagerButton {
+                importButton
 
-            Divider()
-                .padding(.horizontal, DesignTokens.Spacing.xs)
+                Divider()
+                    .padding(.horizontal, DesignTokens.Spacing.xs)
+            }
 
             favoritesZone
 
@@ -72,7 +73,6 @@ struct AutoEQSearchPanel: View {
             errorMessages
         }
         .animation(.easeInOut(duration: 0.2), value: fetchError)
-        .animation(.easeInOut(duration: 0.2), value: importErrorMessage)
         .background {
             RoundedRectangle(cornerRadius: 10)
                 .fill(DesignTokens.Colors.recessedBackground)
@@ -225,12 +225,12 @@ struct AutoEQSearchPanel: View {
                 miniToggle(
                     label: "Correction",
                     isOn: isCorrectionEnabled
-                ) { onCorrectionToggle?(!isCorrectionEnabled) }
+                ) { menu.onCorrectionToggle(!isCorrectionEnabled) }
 
                 miniToggle(
                     label: "Preamp",
                     isOn: preampEnabled
-                ) { onPreampToggle?() }
+                ) { menu.onPreampToggle() }
 
                 Spacer()
             }
@@ -348,7 +348,7 @@ struct AutoEQSearchPanel: View {
             // With it, both stay open.
             let stepAside = FluidMenuBarExtraBehavior.dismissesOnFocusLoss
             if stepAside { onDismiss() }
-            EQManagerWindowController.shared.show(listeningOn: deviceUID)
+            EQManagerWindowController.shared.show()
             if stepAside { FluidMenuBarExtraBehavior.dismiss() }
         } label: {
             HStack {
@@ -378,7 +378,7 @@ struct AutoEQSearchPanel: View {
 
     @ViewBuilder
     private var errorMessages: some View {
-        if let errorMessage = fetchError ?? importErrorMessage {
+        if let errorMessage = fetchError {
             Text(errorMessage)
                 .font(.system(size: 10))
                 .foregroundStyle(.red.opacity(0.9))
