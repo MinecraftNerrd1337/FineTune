@@ -1,8 +1,7 @@
 // FineTuneTests/AudioEngineAutoEQPreviewTests.swift
 //
-// While the EQ Manager listens on a device, that device plays the preset shown there instead
-// of its stored AutoEQ (AudioEngine.previewAutoEQ), and nothing is stored. EQManagerListening
-// sends the preset to the device, at most every 50 ms while it changes.
+// While a preview is on, a device plays the profile it was given instead of its stored AutoEQ
+// (AudioEngine.previewAutoEQ), and nothing is stored.
 // Reuses RecordingProcessTapController + StubProcessMonitor from AudioEngineTapInitialStateTests.
 
 import Testing
@@ -87,7 +86,7 @@ private func lastAutoEQEvent(_ tap: RecordingProcessTapController) -> RecordingP
     tap.events.last { if case .updateAutoEQProfile = $0 { return true } else { return false } }
 }
 
-@Suite("AutoEQ preview — the EQ Manager plays its preset on the device it listens on")
+@Suite("AutoEQ preview — a device plays a profile it was given, without storing it")
 @MainActor
 struct AudioEngineAutoEQPreviewTests {
 
@@ -131,56 +130,5 @@ struct AudioEngineAutoEQPreviewTests {
             return
         }
         #expect(initial.autoEQProfileID == "draft")
-    }
-
-    @Test("Listening sends at once, then coalesces quick changes into the latest one")
-    func listeningThrottles() async throws {
-        let app = makePreviewApp(pid: 2103)
-        let fix = makePreviewFixture(apps: [app])
-        fix.engine.setDevice(for: app, deviceUID: fix.dacA.uid)
-        let tap = try #require(fix.log.last(forPID: 2103))
-
-        let listening = EQManagerListening()
-        listening.open(on: fix.dacA.uid)
-        listening.update(.profile(previewProfile("one")), engine: fix.engine)
-        #expect(lastAutoEQEvent(tap) == .updateAutoEQProfile(profileID: "one"))
-
-        listening.update(.profile(previewProfile("two")), engine: fix.engine)
-        listening.update(.profile(previewProfile("three")), engine: fix.engine)
-        #expect(lastAutoEQEvent(tap) == .updateAutoEQProfile(profileID: "one"))
-
-        // Up to 2 s: the tests running alongside share the main actor and can delay the send
-        for _ in 0..<100 where lastAutoEQEvent(tap) != .updateAutoEQProfile(profileID: "three") {
-            try await Task.sleep(for: .milliseconds(20))
-        }
-        #expect(lastAutoEQEvent(tap) == .updateAutoEQProfile(profileID: "three"))
-        #expect(!tap.events.contains(.updateAutoEQProfile(profileID: "two")))
-        // The pending send holds `listening` weakly: keep it until here, as the window does
-        withExtendedLifetime(listening) {}
-    }
-
-    @Test("Moving to another device or stopping gives the device its own AutoEQ back")
-    func listeningMovesAndStops() async throws {
-        let appA = makePreviewApp(pid: 2104)
-        let appB = makePreviewApp(pid: 2105)
-        let fix = makePreviewFixture(apps: [appA, appB])
-        fix.engine.setDevice(for: appA, deviceUID: fix.dacA.uid)
-        fix.engine.setDevice(for: appB, deviceUID: fix.dacB.uid)
-        let tapA = try #require(fix.log.last(forPID: 2104))
-        let tapB = try #require(fix.log.last(forPID: 2105))
-
-        let listening = EQManagerListening()
-        listening.open(on: fix.dacA.uid)
-        listening.update(.profile(previewProfile("draft")), engine: fix.engine)
-        #expect(lastAutoEQEvent(tapA) == .updateAutoEQProfile(profileID: "draft"))
-
-        try await Task.sleep(for: .milliseconds(100))
-        listening.open(on: fix.dacB.uid)
-        listening.update(.profile(previewProfile("draft")), engine: fix.engine)
-        #expect(lastAutoEQEvent(tapA) == .updateAutoEQProfile(profileID: nil))
-        #expect(lastAutoEQEvent(tapB) == .updateAutoEQProfile(profileID: "draft"))
-
-        listening.stop(engine: fix.engine)
-        #expect(lastAutoEQEvent(tapB) == .updateAutoEQProfile(profileID: nil))
     }
 }

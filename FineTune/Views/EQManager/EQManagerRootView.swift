@@ -8,9 +8,8 @@ import UniformTypeIdentifiers
 /// Saving follows the library's rules (`AutoEQProfileManager.saveKind`): a preset is saved in
 /// place, after a confirmation (a setting) and with its replaced version kept in its history; a
 /// template keeps its bands, so changing them saves a new preset. The Convert menu makes a new
-/// preset from the one shown, in another form (`EQManagerConvertSheet`). The Use On menu makes
-/// output devices play their AutoEQ with the preset shown. The Listen menu picks a device that
-/// plays the preset shown as it is edited, unsaved, to compare by ear (`EQManagerListening`).
+/// preset from the one shown, in another form (`EQManagerConvertSheet`). The Apply to DAC menu
+/// makes an output device use the preset shown (`EQManagerApplyButton`).
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
@@ -20,7 +19,6 @@ struct EQManagerRootView: View {
 
     @Bindable var settings: SettingsManager
     let audioEngine: AudioEngine
-    @Bindable var listening: EQManagerListening
 
     /// What the preset chooser sheet is open for.
     private enum ChooserPurpose: String, Identifiable {
@@ -90,34 +88,12 @@ struct EQManagerRootView: View {
         }
         .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         .background(WindowAppearanceBridge(appearance: settings.appSettings.appearance.nsAppearance))
-        // The listened device follows every change of the preset shown, saved or not
-        .onChange(of: listenTarget, initial: true) { _, target in
-            listening.update(target, engine: audioEngine)
-        }
-        .onChange(of: listening.deviceUID) { _, _ in
-            listening.update(listenTarget, engine: audioEngine)
-        }
-        // Saved goes once the changes are saved or discarded: the edits it was compared with
-        // are now the preset shown, and it must not come back chosen with the next change
-        .onChange(of: editor?.hasChanges == true) { _, hasChanges in
-            if !hasChanges && listening.source == .saved { listening.source = .shown }
-        }
-        .onChange(of: listening.openRequest, initial: true) { _, request in
-            if request > 0, let uid = listening.deviceUID {
-                showPreset(inUseOn: uid, orNone: listening.openedFromDeviceMenu)
-            }
-        }
-        .onChange(of: audioEngine.outputDevices.map(\.uid)) { _, uids in
-            if let uid = listening.deviceUID, !uids.contains(uid) { listening.stop(engine: audioEngine) }
-        }
     }
 
     // MARK: - Top Bar
 
     private var topBar: some View {
         HStack(spacing: DesignTokens.Spacing.sm) {
-            listenMenu
-
             EQManagerPresetSelectorButton(preset: editor?.draft) {
                 chooserPurpose = .select
             }
@@ -134,6 +110,11 @@ struct EQManagerRootView: View {
             Spacer()
 
             if let editor {
+                EQManagerApplyButton(
+                    audioEngine: audioEngine,
+                    preset: editor.original,
+                    hasChanges: editor.hasChanges
+                )
                 historyMenu(editor)
                 convertMenu(editor)
                 if editor.isEditing {
@@ -247,195 +228,10 @@ struct EQManagerRootView: View {
         }
     }
 
-    // MARK: - Listening
-
-    /// Whether the device's AutoEQ plays this preset now.
-    private func plays(_ deviceUID: String, _ presetID: String) -> Bool {
-        guard let selection = settings.getAutoEQSelection(for: deviceUID) else { return false }
-        return selection.profileID == presetID && selection.isEnabled
-    }
-
-    /// The output device that plays the preset shown, as it is edited.
-    private var listenMenu: some View {
-        let devices = audioEngine.outputDevices.filter(\.supportsAutoEQ)
-        return Menu {
-            if devices.isEmpty {
-                Text("No connected output supports AutoEQ")
-            } else {
-                Section("Hear the Preset Shown On") {
-                    ForEach(devices) { device in
-                        Toggle(device.name, isOn: Binding(
-                            get: { listening.deviceUID == device.uid },
-                            set: { on in
-                                if on { listening.open(on: device.uid) } else { listening.stop(engine: audioEngine) }
-                            }
-                        ))
-                    }
-                }
-            }
-        } label: {
-            Label(listening.deviceUID.map { deviceName($0) } ?? "Listen", systemImage: "ear")
-        }
-        .fixedSize()
-        .help("Choose an output device that plays the preset shown, unsaved changes included, so you hear them as you make them")
-    }
-
-    /// Shown while listening, in groups set apart by dividers: the device listened on, what it
-    /// plays to compare by ear, its own Correction and Preamp switches, and the actions.
-    @ViewBuilder
-    private var listenBar: some View {
-        if let uid = listening.deviceUID {
-            let name = deviceName(uid)
-            HStack(spacing: DesignTokens.Spacing.md) {
-                // The device stands out; "Listening on" reads as its caption
-                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Spacing.xs) {
-                    Image(systemName: "ear")
-                        .foregroundStyle(DesignTokens.Colors.accentPrimary)
-                    Text("Listening on")
-                        .font(.system(size: 12))
-                        .foregroundStyle(DesignTokens.Colors.textSecondary)
-                    Text(name)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(DesignTokens.Colors.textPrimary)
-                }
-                .lineLimit(1)
-                if editor != nil {
-                    // Always the same choices, so the one chosen never changes by itself
-                    listenBarDivider
-                    Picker("Hear", selection: Binding(
-                        get: { effectiveListenSource },
-                        set: { listening.source = $0 }
-                    )) {
-                        ForEach(listenSources) { source in
-                            Text(listenLabel(source)).tag(source)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .help(listenHelp(uid, name: name))
-                } else {
-                    listenBarDivider
-                    Text(settings.getAutoEQSelection(for: uid) == nil
-                         ? "Choose a preset to hear it here"
-                         : "No preset shown: it plays its own AutoEQ")
-                        .font(.system(size: 11))
-                        .foregroundStyle(DesignTokens.Colors.textTertiary)
-                }
-                listenBarDivider
-                deviceSwitches(uid, name: name)
-                Spacer(minLength: DesignTokens.Spacing.md)
-                if let editor, !plays(uid, editor.original.id) {
-                    Button("Use on \(name)") {
-                        audioEngine.setAutoEQProfile(for: uid, profileID: editor.original.id)
-                    }
-                    .disabled(editor.hasChanges)
-                    .help(editor.hasChanges
-                          ? "Save your changes first: the device keeps the saved preset"
-                          : "Make \(name) play this preset, also once the EQ Manager is closed")
-                }
-                Button("Stop Listening") { listening.stop(engine: audioEngine) }
-                    .help("\(name) plays its own AutoEQ again")
-            }
-            .padding(.horizontal, DesignTokens.Spacing.lg)
-            .padding(.vertical, DesignTokens.Spacing.sm)
-        }
-    }
-
-    private var listenBarDivider: some View {
-        Divider().frame(height: 16)
-    }
-
-    /// The device's own Correction and Preamp switches, as in its AutoEQ menu (they also apply
-    /// once the EQ Manager is closed), boxed together as one group.
-    private func deviceSwitches(_ uid: String, name: String) -> some View {
-        let hasPreset = settings.getAutoEQSelection(for: uid) != nil
-        return HStack(spacing: DesignTokens.Spacing.md) {
-            Toggle("Correction", isOn: Binding(
-                get: { correctionEnabled(on: uid) },
-                set: { audioEngine.setAutoEQEnabled(for: uid, enabled: $0) }
-            ))
-            .disabled(!hasPreset)
-            .help(hasPreset
-                  ? "\(name)'s Correction switch. Off: the preset's preamp only, at the same level"
-                  : "\(name) has no AutoEQ preset yet, so no Correction switch: use a preset on it first")
-            Toggle("Preamp", isOn: Binding(
-                get: { settings.autoEQPreampEnabled },
-                set: { audioEngine.setAutoEQPreampEnabled($0) }
-            ))
-            .help("The Preamp switch of every device's AutoEQ")
-        }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .font(.system(size: 11))
-        .padding(.horizontal, DesignTokens.Spacing.sm)
-        .padding(.vertical, DesignTokens.Spacing.xs)
-        .background(
-            RoundedRectangle(cornerRadius: DesignTokens.Dimensions.buttonRadius)
-                .fill(DesignTokens.Colors.pickerBackground)
-        )
-    }
-
-    /// The comparisons that differ from one another for the preset shown.
-    private var listenSources: [EQManagerListening.Source] {
-        guard let editor, listening.deviceUID != nil else { return [] }
-        // Saved is the preset shown without its changes: only while there are some
-        return editor.hasChanges ? [.assigned, .saved, .shown] : [.assigned, .shown]
-    }
-
-    /// The chosen comparison, or the preset shown once the chosen one no longer applies.
-    private var effectiveListenSource: EQManagerListening.Source {
-        listenSources.contains(listening.source) ? listening.source : .shown
-    }
-
-    /// What the listened device plays now: a preset follows the device's Correction switch,
-    /// as the device's own AutoEQ does.
-    private var listenTarget: EQManagerListening.Target {
-        guard let uid = listening.deviceUID, let editor else { return .stored }
-        let correctionOn = correctionEnabled(on: uid)
-        func heard(_ profile: AutoEQProfile) -> EQManagerListening.Target {
-            .profile(correctionOn ? profile : audioEngine.activeAutoEQProfile(profile, correctionEnabled: false))
-        }
-        switch effectiveListenSource {
-        case .shown: return heard(editor.draft)
-        case .saved: return heard(editor.original)
-        case .assigned: return .stored
-        }
-    }
-
-    /// The device's Correction switch; on for a device with no AutoEQ preset, which has none.
-    private func correctionEnabled(on uid: String) -> Bool {
-        settings.getAutoEQSelection(for: uid)?.isEnabled ?? true
-    }
-
-    private func listenLabel(_ source: EQManagerListening.Source) -> String {
-        switch source {
-        case .assigned: return "Assigned"
-        case .saved: return "Saved"
-        case .shown: return "Shown Below"
-        }
-    }
-
-    private func listenHelp(_ uid: String, name: String) -> String {
-        let assigned: String
-        if let selection = settings.getAutoEQSelection(for: uid) {
-            let preset = profileManager.profile(for: selection.profileID)?.name ?? "another preset"
-            assigned = "\(preset)\(selection.isEnabled ? "" : ", correction off")"
-        } else {
-            assigned = "no correction"
-        }
-        return [
-            "Assigned: what \(name) plays without the EQ Manager (\(assigned)).",
-            "Saved: the preset shown below, as stored.",
-            "Shown Below: the preset shown below, with your unsaved changes.",
-        ].joined(separator: "\n")
-    }
-
     /// The preset chooser, to show a preset or to replace the bands of the one shown.
     private func presetChooser(_ purpose: ChooserPurpose) -> EQManagerPresetChooser {
         let selects = purpose == .select
         let onDelete: ((String) -> Void)? = selects ? { deletePreset($0) } : nil
-        let inUse: EQManagerPresetChooser.InUse? = selects ? inUsePreset : nil
         // The chooser opens outside edit mode only: nothing unsaved is lost
         let onDeselect: (() -> Void)? = selects ? { showNoPreset() } : nil
         return EQManagerPresetChooser(
@@ -444,7 +240,6 @@ struct EQManagerRootView: View {
             selectedPresetID: selects ? editor?.draft.id : nil,
             title: selects ? "Choose a Preset" : "Replace Bands With a Preset",
             allowsCreation: selects,
-            inUse: inUse,
             onChoose: { profile in
                 chooserPurpose = nil
                 switch purpose {
@@ -480,10 +275,6 @@ struct EQManagerRootView: View {
         VStack(spacing: 0) {
             topBar
             Divider()
-            if listening.deviceUID != nil {
-                listenBar
-                Divider()
-            }
             content
         }
         .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
@@ -534,35 +325,6 @@ struct EQManagerRootView: View {
     private func showNoPreset() {
         chooserPurpose = nil
         editor = nil
-    }
-
-    /// The device listened on and the preset it uses, if it has one.
-    private var inUsePreset: EQManagerPresetChooser.InUse? {
-        guard let uid = listening.deviceUID,
-              let selection = settings.getAutoEQSelection(for: uid) else { return nil }
-        return EQManagerPresetChooser.InUse(deviceName: deviceName(uid), presetID: selection.profileID)
-    }
-
-    private func deviceName(_ uid: String) -> String {
-        audioEngine.outputDevices.first { $0.uid == uid }?.name ?? "this device"
-    }
-
-    /// Shows the preset a device uses, unless unsaved changes are on screen: they stay, and are
-    /// what the device plays. For a device with no AutoEQ preset, the preset shown stays (to hear
-    /// it there), or, with `orNone` (opened from the device's AutoEQ menu), none is shown.
-    private func showPreset(inUseOn uid: String, orNone: Bool) {
-        if editor?.hasChanges == true { return }
-        guard let selection = settings.getAutoEQSelection(for: uid) else {
-            if orNone { editor = nil }
-            return
-        }
-        guard selection.profileID != editor?.original.id else { return }
-        let id = selection.profileID
-        Task { @MainActor in
-            guard let profile = await profileManager.resolveProfile(for: id),
-                  listening.deviceUID == uid, editor?.hasChanges != true else { return }
-            editor = EQManagerEditor(profile: profile)
-        }
     }
 
     // MARK: - Convert

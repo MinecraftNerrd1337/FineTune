@@ -41,7 +41,7 @@ final class AudioEngine {
     /// Set by `startGuardIfNeeded`, cleared by `stopStartGuard`: nothing else starts the guard.
     private var startGuardActive = false
     private var routingRebuildTask: Task<Void, Never>?
-    /// deviceUID → what the device plays while the EQ Manager listens on it (nil: no correction).
+    /// deviceUID → what the device plays during a preview (nil: no correction).
     private var autoEQPreviews: [String: AutoEQProfile?] = [:]
 
     /// Factory for creating tap controllers. Overridable for testing.
@@ -1128,11 +1128,10 @@ final class AudioEngine {
         }
     }
 
-    // MARK: - AutoEQ Preview (EQ Manager)
+    // MARK: - AutoEQ Preview
 
     /// Makes a device play `profile` (nil: no correction) instead of its stored AutoEQ, until
-    /// `endAutoEQPreview(on:)`. Nothing is stored: the EQ Manager plays the preset it shows,
-    /// saved or not, on the device it listens on.
+    /// `endAutoEQPreview(on:)`. Nothing is stored, so a profile can be heard saved or not.
     func previewAutoEQ(_ profile: AutoEQProfile?, on deviceUID: String) {
         if let current = autoEQPreviews[deviceUID], current == profile { return }
         autoEQPreviews.updateValue(profile, forKey: deviceUID)
@@ -1273,7 +1272,7 @@ final class AudioEngine {
             return
         }
 
-        // The EQ Manager is listening on this device: it plays the preset shown there
+        // A preview on this device: it plays the profile it was given
         if let preview = autoEQPreviews[deviceUID] {
             apply(preview)
             return

@@ -18,7 +18,6 @@ final class EQManagerWindowController {
     private var audioEngine: AudioEngine?
     private var window: NSWindow?
     private var frameObservers: [NSObjectProtocol] = []
-    private let listening = EQManagerListening()
 
     private init() {}
 
@@ -28,20 +27,18 @@ final class EQManagerWindowController {
         self.audioEngine = audioEngine
     }
 
-    /// Shows the window. With a device (opened from its AutoEQ menu), the window listens on it
-    /// and shows the preset it uses, or none.
-    func show(listeningOn deviceUID: String? = nil) {
+    /// Shows the window, with the preset it showed last.
+    func show() {
         guard let settings, let audioEngine else { return }
         if window == nil {
             window = makeWindow(settings: settings, audioEngine: audioEngine)
         }
-        if let deviceUID { listening.open(on: deviceUID, fromDeviceMenu: true) }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
 
     private func makeWindow(settings: SettingsManager, audioEngine: AudioEngine) -> NSWindow {
-        let root = EQManagerRootView(settings: settings, audioEngine: audioEngine, listening: listening)
+        let root = EQManagerRootView(settings: settings, audioEngine: audioEngine)
         let hosting = NSHostingController(rootView: root)
         // The window takes its minimum size from the content and leaves the rest to the user
         hosting.sizingOptions = [.minSize]
@@ -73,13 +70,6 @@ final class EQManagerWindowController {
                 Task { @MainActor in self?.saveFrame() }
             })
         }
-        // Closing the window stops listening: the device plays its own AutoEQ again
-        frameObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let audioEngine = self.audioEngine else { return }
-                self.listening.stop(engine: audioEngine)
-            }
-        })
         return window
     }
 

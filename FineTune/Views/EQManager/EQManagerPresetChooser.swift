@@ -15,14 +15,6 @@ struct EQManagerPresetChooser: View {
     var title = "Choose a Preset"
     /// Shows the New Preset and Import buttons.
     var allowsCreation = true
-    /// A device and the preset it uses.
-    struct InUse {
-        let deviceName: String
-        let presetID: String
-    }
-
-    /// The device listened on and the preset it uses, listed first to go back to it.
-    var inUse: InUse? = nil
     let onChoose: (AutoEQProfile) -> Void
     /// Lists the preset shown first, with a cross on hover that shows none without choosing
     /// another preset.
@@ -208,16 +200,12 @@ struct EQManagerPresetChooser: View {
                         .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
                     let presets = profileManager.localPresets.map { libraryEntry($0) }
                     let templates = profileManager.localTemplates.map { libraryEntry($0) }
-                    let shortcuts = shortcutEntries
-                    let hasShortcuts = shortcuts.shown != nil || shortcuts.inUse != nil
+                    let shown = shownEntry
+                    let hasShortcuts = shown != nil
 
-                    // Shortcuts first, without a title: the preset shown, then the one the device
-                    // listened on uses (a single row when they are the same)
-                    if let shown = shortcuts.shown {
-                        row(shown, icon: shown.id == inUse?.presetID ? "ear" : nil, hoverKey: "shown", onDeselect: onDeselect)
-                    }
-                    if let inUseEntry = shortcuts.inUse {
-                        row(inUseEntry, icon: "ear", hoverKey: "inUse")
+                    // The preset shown first, without a title
+                    if let shown {
+                        row(shown, hoverKey: "shown", onDeselect: onDeselect)
                     }
                     // A favorite is listed twice (in Favorites and in its own section): each row
                     // gets an identity of its own, or the lazy stack leaves a blank row
@@ -254,22 +242,10 @@ struct EQManagerPresetChooser: View {
         .frame(maxHeight: .infinity)
     }
 
-    /// The rows listed before Favorites: the preset shown (captioned as in use when it is),
-    /// and the preset the device listened on uses, when it is another one.
-    private var shortcutEntries: (shown: AutoEQCatalogEntry?, inUse: AutoEQCatalogEntry?) {
-        let inUseEntry = inUseEntry
-        guard onDeselect != nil, let id = selectedPresetID, let shown = libraryOrCatalogEntry(id) else {
-            return (nil, inUseEntry)
-        }
-        if let inUseEntry, inUseEntry.id == shown.id { return (inUseEntry, nil) }
-        return (shown, inUseEntry)
-    }
-
-    /// The preset the device listened on uses, captioned with that device.
-    private var inUseEntry: AutoEQCatalogEntry? {
-        guard let inUse, let entry = libraryOrCatalogEntry(inUse.presetID) else { return nil }
-        return AutoEQCatalogEntry(id: entry.id, name: entry.name,
-                                  measuredBy: "In use on \(inUse.deviceName)", relativePath: entry.relativePath)
+    /// The preset shown, listed before Favorites.
+    private var shownEntry: AutoEQCatalogEntry? {
+        guard onDeselect != nil, let id = selectedPresetID else { return nil }
+        return libraryOrCatalogEntry(id)
     }
 
     private func libraryOrCatalogEntry(_ id: String) -> AutoEQCatalogEntry? {
@@ -327,7 +303,6 @@ struct EQManagerPresetChooser: View {
     /// `onDeselect` adds a cross on hover to the preset shown.
     private func row(
         _ entry: AutoEQCatalogEntry,
-        icon: String? = nil,
         hoverKey: String? = nil,
         onDeselect: (() -> Void)? = nil
     ) -> some View {
@@ -340,7 +315,6 @@ struct EQManagerPresetChooser: View {
             && profileManager.catalogEntry(for: entry.id) != nil
 
         return HStack(spacing: DesignTokens.Spacing.sm) {
-            if let icon { rowIcon(icon) }
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.name)
                     .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
@@ -404,13 +378,6 @@ struct EQManagerPresetChooser: View {
                 EQManagerDeleteMenu(title: entry.name) { deleteCandidate = entry }
             }
         }
-    }
-
-    private func rowIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(.system(size: 11))
-            .foregroundStyle(DesignTokens.Colors.textSecondary)
-            .frame(width: 16)
     }
 
     /// The preset shown keeps a tint, so it stands out without hovering.
