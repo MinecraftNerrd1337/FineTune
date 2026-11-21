@@ -110,7 +110,12 @@ struct TahoeStyleHUD: View {
                 LiquidGlassSlider(
                     value: sliderBinding,
                     in: 0...1,
-                    showUnityMarker: false
+                    showUnityMarker: false,
+                    fillColor: palette.barFill,
+                    trackColor: palette.barTrack,
+                    trackHeight: palette.barHeight,
+                    // An empty bar is its track alone, as in macOS's own HUD
+                    showsDotAtZero: !onGlass
                 )
                 .opacity(displayMute ? 0.5 : 1.0)
                 .scrollWheelStep(sliderBinding, in: 0.0...1.0)

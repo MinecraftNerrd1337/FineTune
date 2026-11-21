@@ -1,4 +1,5 @@
 // FineTune/Views/HUD/HUDPalette.swift
+import AppKit
 import SwiftUI
 
 extension EnvironmentValues {
@@ -40,5 +41,24 @@ struct HUDPalette {
 
     var unlitTile: Color {
         onGlass ? ink.opacity(0.25) : .primary.opacity(0.25)
+    }
+
+    /// The corner HUD's bar, up to the level and past it. On Liquid Glass, as thick as macOS's
+    /// own HUD, on a track of the ink: the faint track of the blur hardly showed on the glass,
+    /// and an empty bar not at all. The fill keeps the accent color, which sets FineTune's HUD
+    /// apart from macOS's, lightened on the dark glass so it stands out.
+    var barFill: Color {
+        guard onGlass, colorScheme == .dark else { return DesignTokens.Colors.accentPrimary }
+        let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? NSColor.controlAccentColor
+        return Color(nsColor: accent.blended(withFraction: 0.35, of: .white) ?? accent)
+    }
+
+    var barTrack: Color {
+        onGlass ? ink.opacity(0.3) : DesignTokens.Colors.sliderTrack
+    }
+
+    /// Thicker on Liquid Glass, as macOS's own
+    var barHeight: CGFloat {
+        onGlass ? 6 : 4
     }
 }

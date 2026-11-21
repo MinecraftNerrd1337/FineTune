@@ -8,6 +8,10 @@ struct LiquidGlassSlider: View {
     let range: ClosedRange<Double>
     let showUnityMarker: Bool
     let fillColor: Color
+    let trackColor: Color
+    let trackHeight: CGFloat
+    /// A level of 0 still shows a dot of fill; without it, only the track shows.
+    let showsDotAtZero: Bool
     let onEditingChanged: ((Bool) -> Void)?
 
     @State private var isEditing = false
@@ -23,16 +27,20 @@ struct LiquidGlassSlider: View {
         in range: ClosedRange<Double> = 0...1,
         showUnityMarker: Bool = false,
         fillColor: Color = DesignTokens.Colors.accentPrimary,
+        trackColor: Color = DesignTokens.Colors.sliderTrack,
+        trackHeight: CGFloat = 4,
+        showsDotAtZero: Bool = true,
         onEditingChanged: ((Bool) -> Void)? = nil
     ) {
         self._value = value
         self.range = range
         self.showUnityMarker = showUnityMarker
         self.fillColor = fillColor
+        self.trackColor = trackColor
+        self.trackHeight = trackHeight
+        self.showsDotAtZero = showsDotAtZero
         self.onEditingChanged = onEditingChanged
     }
-
-    private let trackHeight: CGFloat = 4
 
     private var normalizedValue: Double {
         (value - range.lowerBound) / (range.upperBound - range.lowerBound)
@@ -45,13 +53,15 @@ struct LiquidGlassSlider: View {
                 ZStack(alignment: .leading) {
                     // Track background
                     Capsule()
-                        .fill(DesignTokens.Colors.sliderTrack)
+                        .fill(trackColor)
                         .frame(height: trackHeight)
 
                     // Filled track
-                    Capsule()
-                        .fill(fillColor)
-                        .frame(width: max(trackHeight, geo.size.width * normalizedValue), height: trackHeight)
+                    if showsDotAtZero || normalizedValue > 0 {
+                        Capsule()
+                            .fill(fillColor)
+                            .frame(width: max(trackHeight, geo.size.width * normalizedValue), height: trackHeight)
+                    }
                 }
                 .frame(maxHeight: .infinity)
                 .allowsHitTesting(false)
