@@ -93,7 +93,7 @@ Turning a device's correction off keeps its preamp. With **Settings → Audio �
 
 Changing the bands of a template saves a new preset, which remembers its template (**Replace → With Its Template** brings its bands back). The new preset can take over from the template on the devices that used it.
 
-Saving a preset asks for confirmation first (turn it off in **Settings → Audio → EQ Manager Presets**, or with the checkbox of the dialog), and the version it replaces is kept in the preset's **History** menu, where any earlier version can be restored. The number of versions kept is a setting (10 by default, 0 turns the history off). **Reset All Settings** keeps your presets and templates.
+Saving a preset asks for confirmation first (turn it off in **Settings → Audio → EQ Manager Presets**, or with the checkbox of the dialog), and the version it replaces is kept in the preset's **History** menu, in the edit bar, where any earlier version can be restored into your edits. The number of versions kept is a setting (10 by default, 0 turns the history off). **Reset All Settings** keeps your presets and templates.
 
 Presets edited in place by earlier versions of FineTune are kept: an imported file that was edited becomes a template again, and its edited version becomes a preset used by the same devices.
 

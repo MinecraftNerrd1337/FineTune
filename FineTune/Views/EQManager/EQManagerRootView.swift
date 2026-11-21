@@ -115,20 +115,16 @@ struct EQManagerRootView: View {
                     preset: editor.original,
                     hasChanges: editor.hasChanges
                 )
-                historyMenu(editor)
                 convertMenu(editor)
-                if editor.isEditing {
-                    editControls(editor)
-                } else {
-                    Button {
-                        editor.beginEditing()
-                    } label: {
-                        Label("Edit", systemImage: "pencil")
-                    }
-                    .help(editor.draft.isTemplate
-                          ? "Templates keep their bands: changing them saves a new preset"
-                          : "Make this preset editable")
+                // Stays in place in edit mode, so the menus beside it don't move: the edit
+                // controls have a bar of their own (`editBar`)
+                Button {
+                    editor.beginEditing()
+                } label: {
+                    Label("Edit", systemImage: "pencil")
                 }
+                .disabled(editor.isEditing)
+                .help(editHelp(editor))
             }
         }
         .padding(.horizontal, DesignTokens.Spacing.lg)
@@ -151,6 +147,27 @@ struct EQManagerRootView: View {
         ))
     }
 
+    private func editHelp(_ editor: EQManagerEditor) -> String {
+        if editor.isEditing { return "Editing: save, discard or leave edit mode in the bar below" }
+        return editor.draft.isTemplate
+            ? "Templates keep their bands: changing them saves a new preset"
+            : "Make this preset editable"
+    }
+
+    /// The edit controls, in a bar under the top bar while the preset shown is edited.
+    @ViewBuilder
+    private var editBar: some View {
+        if let editor, editor.isEditing {
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                editControls(editor)
+            }
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.sm)
+            Divider()
+        }
+    }
+
+    /// Undo, redo, Replace and History on the left; leaving edit mode and saving on the right.
     @ViewBuilder
     private func editControls(_ editor: EQManagerEditor) -> some View {
         let saveKind = AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft)
@@ -186,6 +203,10 @@ struct EQManagerRootView: View {
         }
         .fixedSize()
         .help("Replace the bands and preamp of this preset (name and settings are kept)")
+
+        historyMenu(editor)
+
+        Spacer()
 
         Button(editor.hasChanges ? "Discard" : "Done") {
             editor.discard()
@@ -275,6 +296,7 @@ struct EQManagerRootView: View {
         VStack(spacing: 0) {
             topBar
             Divider()
+            editBar
             content
         }
         .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
@@ -329,27 +351,29 @@ struct EQManagerRootView: View {
 
     // MARK: - Convert
 
-    /// New presets made from this one in another form. Outside edit mode only: a conversion
+    /// New presets made from this one in another form. Disabled in edit mode: a conversion
     /// starts from the stored preset.
-    @ViewBuilder
     private func convertMenu(_ editor: EQManagerEditor) -> some View {
-        if !editor.isEditing {
-            let preset = editor.draft
-            Menu {
-                ForEach(EQManagerConversionKind.available(for: preset.kind)) { kind in
-                    Button(kind.menuTitle) {
-                        conversionRequest = EQManagerConversionRequest(kind: kind, source: preset)
-                    }
+        let preset = editor.original
+        return Menu {
+            ForEach(EQManagerConversionKind.available(for: preset.kind)) { kind in
+                Button(kind.menuTitle) {
+                    conversionRequest = EQManagerConversionRequest(kind: kind, source: preset)
                 }
-            } label: {
-                Label("Convert", systemImage: "arrow.triangle.2.circlepath")
             }
-            .fixedSize()
-            .disabled(!preset.hasCorrection)
-            .help(preset.hasCorrection
-                  ? "Make a new preset from this one in another form. This preset is not changed."
-                  : "This preset has no bands or curve to convert")
+        } label: {
+            Label("Convert", systemImage: "arrow.triangle.2.circlepath")
         }
+        .fixedSize()
+        .disabled(editor.isEditing || !preset.hasCorrection)
+        .help(convertHelp(editor))
+    }
+
+    private func convertHelp(_ editor: EQManagerEditor) -> String {
+        if editor.isEditing { return "Leave edit mode to convert this preset: a conversion starts from the saved preset" }
+        return editor.original.hasCorrection
+            ? "Make a new preset from this one in another form. This preset is not changed."
+            : "This preset has no bands or curve to convert"
     }
 
     // MARK: - History
@@ -370,10 +394,7 @@ struct EQManagerRootView: View {
                 Label("History", systemImage: "clock.arrow.circlepath")
             }
             .fixedSize()
-            .disabled(editor.hasChanges)
-            .help(editor.hasChanges
-                  ? "Save or discard your changes to restore an earlier version"
-                  : "Earlier versions of this preset. Restoring one opens it for editing: it replaces the current version only when saved.")
+            .help("Earlier versions of this preset. Restoring one replaces the bands, preamp and settings in your edits (it can be undone): the saved version changes only when you save.")
         }
     }
 
