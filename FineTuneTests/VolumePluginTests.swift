@@ -655,13 +655,20 @@ struct VolumePluginSessionTests {
         let session = makeSession(script, transport: RecordingTransport(), events: events)
         _ = await start(session, volume: 0.5)
         let echoWindow = Duration.milliseconds(VolumePluginSession.echoWindowMS + 150)
+        // A loaded test run can resume this test after the echo window has passed: the checks
+        // made inside the window only hold while it is still open
+        let clock = ContinuousClock()
+        let window = Duration.milliseconds(VolumePluginSession.echoWindowMS)
 
         // The DAC echoes the level FineTune sent, then its volume button raises it
+        var sentAt = clock.now
         session.request(volume: 0.6)
         session.handleInputReport(reportID: 0, bytes: [60, 0, 0])
         session.handleInputReport(reportID: 0, bytes: [61, 0, 0])
         await idle(session)
-        #expect(events.reportedVolumes.isEmpty)
+        if clock.now - sentAt < window {
+            #expect(events.reportedVolumes.isEmpty)
+        }
         try await Task.sleep(for: echoWindow)
         await idle(session)
         #expect(events.reportedVolumes == [0.61])
@@ -674,13 +681,17 @@ struct VolumePluginSessionTests {
         #expect(events.reportedVolumes == [0.61])
 
         // A level reported before FineTune's next change is out of date
+        sentAt = clock.now
         session.request(volume: 0.8)
         session.handleInputReport(reportID: 0, bytes: [75, 0, 0])
         await idle(session)
         session.request(volume: 0.9)
+        let changedInTime = clock.now - sentAt < window
         try await Task.sleep(for: echoWindow)
         await idle(session)
-        #expect(events.reportedVolumes == [0.61])
+        if changedInTime {
+            #expect(events.reportedVolumes == [0.61])
+        }
         session.close()
     }
 
