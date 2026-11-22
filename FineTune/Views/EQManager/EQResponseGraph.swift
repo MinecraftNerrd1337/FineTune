@@ -27,6 +27,22 @@ struct EQResponseGraph: View {
     /// How much the curve changes the perceived level (`AutoEQResponse.perceivedLevelChangeDB`),
     /// drawn as a thin line under the curve.
     var perceivedLevelDB: Double? = nil
+    /// Another preset, drawn under the curve to compare them.
+    var compared: ComparedCurve? = nil
+    /// Color of the curve, its bands and its perceived level.
+    var curveColor: Color = Self.baseCurveColor
+
+    /// A preset drawn under the curve, moved by `offsetDB`.
+    struct ComparedCurve {
+        let profile: AutoEQProfile
+        let offsetDB: Double
+        let color: Color
+    }
+
+    /// Color of the preset shown in the EQ Manager's top bar.
+    static let baseCurveColor = Color.accentColor
+    /// Color of the preset compared with it, also shown beside its name in the EQ Manager.
+    static let comparedCurveColor = Color.orange
 
     /// How the preamp is drawn. `.peakLimit` (default) mirrors it above 0 dB: the curve should
     /// stay under that line. `.gainLevel` draws it at its own (negative) level.
@@ -196,12 +212,14 @@ struct EQResponseGraph: View {
                 }
                 drawPreamp(into: &layer, plot: plot)
                 drawPerceivedLevel(into: &layer, plot: plot)
+                drawComparedCurve(into: &layer, plot: plot)
                 drawCurve(into: &layer, plot: plot)
                 drawCurvePoints(into: &layer, plot: plot)
                 return
             }
             drawPreamp(into: &layer, plot: plot)
             drawPerceivedLevel(into: &layer, plot: plot)
+            drawComparedCurve(into: &layer, plot: plot)
             if let band = selectedBand ?? hoveredBand, profile.filters.indices.contains(band) {
                 drawSingleBand(profile.filters[band], into: &layer, plot: plot)
             }
@@ -277,8 +295,20 @@ struct EQResponseGraph: View {
         let gains = AutoEQResponse.curve(of: profile, frequencies: frequencies)
         context.stroke(
             polyline(frequencies: frequencies, gains: gains, plot: plot),
-            with: .color(.accentColor),
+            with: .color(curveColor),
             style: StrokeStyle(lineWidth: 2, lineJoin: .round)
+        )
+    }
+
+    /// The compared preset's curve, thinner and under this one.
+    private func drawComparedCurve(into context: inout GraphicsContext, plot: CGRect) {
+        guard let compared, compared.profile.hasCorrection else { return }
+        let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount)
+        let gains = AutoEQResponse.curve(of: compared.profile, frequencies: frequencies).map { $0 + compared.offsetDB }
+        context.stroke(
+            polyline(frequencies: frequencies, gains: gains, plot: plot),
+            with: .color(compared.color.opacity(0.8)),
+            style: StrokeStyle(lineWidth: 1.5, lineJoin: .round)
         )
     }
 
@@ -288,7 +318,7 @@ struct EQResponseGraph: View {
             of: filter, engine: profile.effectiveEngine, frequencies: frequencies, baseRate: profile.designBaseRate)
         context.stroke(
             polyline(frequencies: frequencies, gains: gains, plot: plot),
-            with: .color(.accentColor.opacity(0.6)),
+            with: .color(curveColor.opacity(0.6)),
             style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])
         )
     }
@@ -320,7 +350,7 @@ struct EQResponseGraph: View {
     private func drawPerceivedLevel(into context: inout GraphicsContext, plot: CGRect) {
         guard let level = perceivedLevelDB, shows(level) else { return }
         let py = y(for: level, in: plot)
-        let color = Color.accentColor.opacity(0.35)
+        let color = curveColor.opacity(0.35)
         context.stroke(
             line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.maxX, y: py)),
             with: .color(color),
@@ -331,7 +361,7 @@ struct EQResponseGraph: View {
         context.draw(
             Text(String(format: "Perceived level %+.1f dB", level))
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(Color.accentColor.opacity(0.6)),
+                .foregroundStyle(curveColor.opacity(0.6)),
             at: CGPoint(x: plot.minX + 6, y: below ? py + 2 : py - 2),
             anchor: below ? .topLeading : .bottomLeading
         )
@@ -349,11 +379,11 @@ struct EQResponseGraph: View {
             let radius: CGFloat = isActive ? 7 : 5.5
 
             context.stroke(line(from: CGPoint(x: point.x, y: zeroY), to: point),
-                           with: .color(.accentColor.opacity(isActive ? 0.7 : 0.35)), lineWidth: 1.5)
+                           with: .color(curveColor.opacity(isActive ? 0.7 : 0.35)), lineWidth: 1.5)
 
             let knob = Path(ellipseIn: CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2))
-            context.fill(knob, with: .color(isActive ? .accentColor : knobFill))
-            context.stroke(knob, with: .color(.accentColor), lineWidth: isActive ? 2 : 1.5)
+            context.fill(knob, with: .color(isActive ? curveColor : knobFill))
+            context.stroke(knob, with: .color(curveColor), lineWidth: isActive ? 2 : 1.5)
 
             if showsAllNumbers || isActive {
                 // Number on the side away from the stem.
@@ -397,7 +427,7 @@ struct EQResponseGraph: View {
             let center = CGPoint(x: x(for: point.frequency, in: plot), y: y(for: Double(point.gainDB), in: plot))
             let dot = Path(ellipseIn: CGRect(x: center.x - 2.5, y: center.y - 2.5, width: 5, height: 5))
             context.fill(dot, with: .color(fill))
-            context.stroke(dot, with: .color(.accentColor), lineWidth: 1.2)
+            context.stroke(dot, with: .color(curveColor), lineWidth: 1.2)
         }
     }
 

@@ -123,9 +123,11 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         let wasIdle = !isEnabled || replacingStaleFilter || attempt >= Self.maxRetries
 
         let validated = profile?.validated()
-        // The level match is part of the preamp: the Preamp switch bypasses both
-        let preampLinear = validated.map {
-            _preampEnabled ? powf(10.0, ($0.preampDB + $0.levelMatchDB) / 20.0) : 1.0
+        // The level match is part of the preamp: the Preamp switch bypasses both. The gain of a
+        // compared preset is not: it matches what is heard, preamp on or off
+        let preampLinear: Float = validated.map { profile -> Float in
+            let preampDB: Float = _preampEnabled ? profile.preampDB + profile.levelMatchDB : 0
+            return powf(10.0, (preampDB + profile.comparisonGainDB) / 20.0)
         } ?? 1.0
         let preampStatus = self._preampEnabled ? "active" : "bypassed"
 
@@ -150,7 +152,7 @@ final class AutoEQProcessor: BiquadProcessor, @unchecked Sendable {
         if !wasIdle, let played = playedProfile, Self.sameCurve(played, validated) {
             _preampGain = preampLinear
             playedProfile = validated
-            logger.info("AutoEQ preamp: \"\(validated.name)\" — \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus)), level match \(validated.levelMatchDB, format: .fixed(precision: 1)) dB")
+            logger.info("AutoEQ preamp: \"\(validated.name)\" — \(validated.preampDB, format: .fixed(precision: 1)) dB (\(preampStatus)), level match \(validated.levelMatchDB, format: .fixed(precision: 1)) dB, comparison gain \(validated.comparisonGainDB, format: .fixed(precision: 1)) dB")
             return
         }
 

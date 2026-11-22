@@ -191,6 +191,9 @@ nonisolated struct AutoEQProfile: Codable, Equatable, Identifiable {
     /// set by `AudioEngine` when the correction is off, so the preset keeps the level it has when on
     /// (see `AutoEQResponse.perceivedLevelChangeDB`). Never stored: not in `CodingKeys`.
     var levelMatchDB: Float = 0
+    /// Gain added at runtime, in dB, that the Preamp switch does not bypass: the EQ Manager's
+    /// level match of a compared preset (`EQManagerComparison`). Never stored: not in `CodingKeys`.
+    var comparisonGainDB: Float = 0
 
     static let maxFilters = 128
     static let maxCurvePoints = 1024
@@ -341,6 +344,7 @@ extension AutoEQProfile {
             linearPhaseToleranceDB: AutoEQLinearPhasePrecision.stored(linearPhaseToleranceDB)
         )
         result.levelMatchDB = levelMatchDB.isFinite ? max(-30, min(30, levelMatchDB)) : 0
+        result.comparisonGainDB = comparisonGainDB.isFinite ? max(-30, min(30, comparisonGainDB)) : 0
         return result
     }
 }

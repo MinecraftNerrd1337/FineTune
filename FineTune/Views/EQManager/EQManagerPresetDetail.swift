@@ -8,6 +8,32 @@ struct EQManagerPresetDetail: View {
     let editor: EQManagerEditor
     /// Name of the template the preset was made from, if any.
     var templateName: String? = nil
+    /// While two presets are compared: the other one, drawn on the graph, and the level of the
+    /// compared one, set in the Preamp section.
+    var comparison: Comparison? = nil
+    /// Color of this preset's curve and controls: which of the compared presets it is.
+    var color: Color = EQResponseGraph.baseCurveColor
+
+    /// Two presets compared, seen from the one shown here.
+    struct Comparison {
+        /// The other preset, drawn under this one.
+        let other: AutoEQProfile
+        /// Added to its curve on the graph: what it plays at above this preset (preamps and
+        /// extra gain).
+        let otherOffsetDB: Double
+        let otherColor: Color
+        /// Preamp of the compared preset (this one or the other).
+        let comparedPreampDB: Float
+        /// Extra gain of the compared preset, added to its preamp when the Preamp switch is on,
+        /// so both play at the same level. Applied whether the preamp is on or off.
+        let trimDB: Double
+        /// The extra gain follows the level match (it was not set by hand).
+        let isMatched: Bool
+        /// The Preamp switch is on: its preamp plays too.
+        let preampOn: Bool
+        let setTrim: (Double) -> Void
+        let match: () -> Void
+    }
 
     @State private var selectedBand: Int?
     /// The dB window of the graph, set by every control of the graph.
@@ -49,7 +75,11 @@ struct EQManagerPresetDetail: View {
                         }
                     },
                     onDragEnded: { editor.endGesture() },
-                    perceivedLevelDB: perceived
+                    perceivedLevelDB: perceived,
+                    compared: comparison.map {
+                        EQResponseGraph.ComparedCurve(profile: $0.other, offsetDB: $0.otherOffsetDB, color: $0.otherColor)
+                    },
+                    curveColor: color
                 )
                 // 220 pt at the window's minimum size; grows with the band table as it is enlarged
                 .frame(minHeight: 220, maxHeight: .infinity)
@@ -58,6 +88,8 @@ struct EQManagerPresetDetail: View {
             }
         }
         .padding(DesignTokens.Spacing.lg)
+        // Toggles, sliders and buttons take the color of the preset, so the compared one reads apart
+        .tint(color)
         .onChange(of: preset.id, initial: true) { _, _ in
             selectedBand = nil
             scale = EQGraphScale(span: Self.needsWideScale(preset) ? 24 : 12)
@@ -299,6 +331,10 @@ struct EQManagerPresetDetail: View {
                 Divider()
                 row("Perceived level") { valueText(perceived.map { String(format: "%+.1f dB", $0) } ?? "—") }
                     .help("How much quieter or louder the curve sounds (the RMS of music through it), drawn as a thin line on the graph. With a device's correction off and its preamp on, FineTune adds this level to the preamp, so the loudness stays the same.")
+                if let comparison {
+                    Divider()
+                    levelMatchRows(comparison)
+                }
             }
 
             if clipRisk > 0 {
@@ -308,6 +344,48 @@ struct EQManagerPresetDetail: View {
                     .padding(.horizontal, 4)
             }
         }
+    }
+
+    /// The extra gain of the compared preset, added to its preamp: the level match, or set by
+    /// hand with the field or the slider.
+    @ViewBuilder
+    private func levelMatchRows(_ comparison: Comparison) -> some View {
+        let total = (comparison.preampOn ? Double(comparison.comparedPreampDB) : 0) + comparison.trimDB
+        Group {
+            VStack(spacing: 0) {
+                row("Level match") {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        DecimalField(value: comparison.trimDB, fractionDigits: 1, suffix: "dB") { comparison.setTrim($0) }
+                        Button("Auto") { comparison.match() }
+                            .controlSize(.small)
+                            .disabled(comparison.isMatched)
+                    }
+                }
+                Slider(
+                    value: Binding(get: { min(max(comparison.trimDB, -12), 12) }, set: { comparison.setTrim($0) }),
+                    in: -12...12,
+                    step: 0.5
+                )
+                .controlSize(.small)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.bottom, DesignTokens.Spacing.sm)
+            }
+            Divider()
+            row(comparison.preampOn ? "Compared preamp" : "Compared gain") {
+                valueText(String(format: "%+.1f dB", total))
+            }
+        }
+        .help(levelMatchHelp(comparison))
+    }
+
+    private func levelMatchHelp(_ comparison: Comparison) -> String {
+        let added = comparison.preampOn
+            ? "Added to the preamp of the compared preset (\(String(format: "%+.1f dB", comparison.comparedPreampDB))), shown as Compared preamp."
+            : "The preamp is off: only this gain is added to the compared preset, shown as Compared gain."
+        let state = comparison.isMatched
+            ? "Auto: it makes the compared preset sound as loud as this one, as each device plays them (its Correction switch, the Preamp switch, both preamps and curves), and follows every change."
+            : "Set by hand: Auto matches the levels again."
+        return "\(added) \(state)"
     }
 
     // MARK: - Graph Header
@@ -524,7 +602,7 @@ struct EQManagerPresetDetail: View {
         }
         .background(
             isSelected
-                ? Color.accentColor.opacity(0.18)
+                ? color.opacity(0.18)
                 : (number % 2 == 1 ? Color.clear : DesignTokens.Colors.pickerBackground.opacity(0.5))
         )
         .contentShape(Rectangle())

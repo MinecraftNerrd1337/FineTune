@@ -95,6 +95,26 @@ struct AutoEQLevelMatchTests {
         #expect(abs(try await flatGainDB(of: processor)) < 0.05)
     }
 
+    @Test("The gain of a compared preset plays with the Preamp switch on or off")
+    func comparisonGain() async throws {
+        var profile = graphicPreset([(20, -10), (20_000, -10)], preampDB: -2)
+        profile.comparisonGainDB = 4
+        let processor = AutoEQProcessor(sampleRate: 48_000)
+        processor.updateProfile(profile)
+        #expect(abs(try await flatGainDB(of: processor) - (-10 - 2 + 4)) < 0.05)
+        processor.setPreampEnabled(false)
+        #expect(abs(try await flatGainDB(of: processor) - (-10 + 4)) < 0.05)
+    }
+
+    @Test("Never stored: the gain of a compared preset is not encoded")
+    func comparisonGainNotStored() throws {
+        var profile = graphicPreset([(20, -10), (20_000, -10)])
+        profile.comparisonGainDB = 4
+        let decoded = try JSONDecoder().decode(AutoEQProfile.self, from: JSONEncoder().encode(profile))
+        #expect(decoded.comparisonGainDB == 0)
+        #expect(profile.validated().comparisonGainDB == 4)
+    }
+
     @Test("Never stored: the level match is not encoded, and the setting is on by default")
     func notStored() throws {
         var profile = graphicPreset([(20, -10), (20_000, -10)])

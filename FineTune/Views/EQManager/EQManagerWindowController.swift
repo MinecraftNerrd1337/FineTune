@@ -18,6 +18,7 @@ final class EQManagerWindowController {
     private var audioEngine: AudioEngine?
     private var window: NSWindow?
     private var frameObservers: [NSObjectProtocol] = []
+    private let comparison = EQManagerComparison()
 
     private init() {}
 
@@ -33,12 +34,13 @@ final class EQManagerWindowController {
         if window == nil {
             window = makeWindow(settings: settings, audioEngine: audioEngine)
         }
+        comparison.resume(engine: audioEngine)
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
     }
 
     private func makeWindow(settings: SettingsManager, audioEngine: AudioEngine) -> NSWindow {
-        let root = EQManagerRootView(settings: settings, audioEngine: audioEngine)
+        let root = EQManagerRootView(settings: settings, audioEngine: audioEngine, comparison: comparison)
         let hosting = NSHostingController(rootView: root)
         // The window takes its minimum size from the content and leaves the rest to the user
         hosting.sizingOptions = [.minSize]
@@ -70,6 +72,13 @@ final class EQManagerWindowController {
                 Task { @MainActor in self?.saveFrame() }
             })
         }
+        // Closing the window ends the comparison: the devices play their own AutoEQ again
+        frameObservers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let audioEngine = self.audioEngine else { return }
+                self.comparison.suspend(engine: audioEngine)
+            }
+        })
         return window
     }
 

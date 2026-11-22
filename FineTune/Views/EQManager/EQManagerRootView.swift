@@ -9,20 +9,25 @@ import UniformTypeIdentifiers
 /// place, after a confirmation (a setting) and with its replaced version kept in its history; a
 /// template keeps its bands, so changing them saves a new preset. The Convert menu makes a new
 /// preset from the one shown, in another form (`EQManagerConvertSheet`). The Apply to DAC menu
-/// makes an output device use the preset shown (`EQManagerApplyButton`).
+/// makes an output device use the preset shown (`EQManagerApplyButton`). The devices that use
+/// the preset shown can play it as saved, with its edits, or another preset it is compared
+/// with, at the same perceived level (`EQManagerComparison`).
 @MainActor
 struct EQManagerRootView: View {
     static let title = "FineTune EQ Manager"
+    /// Width of a preset's name in the compare bar.
+    private static let chipNameWidth: CGFloat = 130
     /// Opening and minimum size: same height as the Settings window, 1.4x its width (720).
     /// The window can grow from there; the graph and the band table share the extra height.
     static let size = CGSize(width: 1008, height: 560)
 
     @Bindable var settings: SettingsManager
     let audioEngine: AudioEngine
+    @Bindable var comparison: EQManagerComparison
 
     /// What the preset chooser sheet is open for.
     private enum ChooserPurpose: String, Identifiable {
-        case select, replace
+        case select, replace, compare
         var id: String { rawValue }
     }
 
@@ -80,7 +85,7 @@ struct EQManagerRootView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Versions", role: .destructive) {
-                if let id = editor?.draft.id { profileManager.history.clear(profileID: id) }
+                if let id = activeEditor?.draft.id { profileManager.history.clear(profileID: id) }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -88,6 +93,339 @@ struct EQManagerRootView: View {
         }
         .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         .background(WindowAppearanceBridge(appearance: settings.appSettings.appearance.nsAppearance))
+        // The devices that use the preset follow every edit, or the saved preset
+        .onChange(of: comparisonProfiles, initial: true) { _, profiles in
+            comparison.update(profiles, engine: audioEngine)
+        }
+        // Another preset shown: the level is matched again
+        .onChange(of: editor?.original.id) { _, _ in
+            comparison.manualTrimDB = nil
+        }
+    }
+
+    // MARK: - Comparison
+
+    /// The connected devices whose AutoEQ preset is the one shown.
+    private var devicesUsingPreset: [AudioDevice] {
+        guard let id = editor?.original.id else { return [] }
+        return audioEngine.outputDevices.filter { settings.getAutoEQSelection(for: $0.uid)?.profileID == id }
+    }
+
+    /// The preset compared with the one shown, as saved: as the library holds it now. Nil when
+    /// it is the preset shown.
+    private var comparedSavedPreset: AutoEQProfile? {
+        guard let other = comparison.comparedEditor, other.original.id != editor?.original.id else { return nil }
+        return profileManager.profile(for: other.original.id) ?? other.original
+    }
+
+    /// The compared preset as worked on: with its edits while it is edited.
+    private var comparedPreset: AutoEQProfile? {
+        guard let saved = comparedSavedPreset, let other = comparison.comparedEditor else { return nil }
+        return other.isEditing ? other.draft : saved
+    }
+
+    private var hearableVersions: [EQManagerComparison.Version] {
+        EQManagerComparison.versions(
+            isEditing: editor?.isEditing == true,
+            isComparing: comparedSavedPreset != nil,
+            comparedIsEditing: comparison.comparedIsEditing
+        )
+    }
+
+    /// The version of the compared preset whose level is shown and drawn: the one heard, or
+    /// the one worked on while the preset shown is heard.
+    private var comparedFocus: AutoEQProfile? {
+        switch comparison.current(in: hearableVersions) {
+        case .compared: comparedSavedPreset
+        default: comparedPreset
+        }
+    }
+
+    /// Whether a device's correction is on (on when it has no AutoEQ selection).
+    private func isCorrectionOn(_ deviceUID: String) -> Bool {
+        settings.getAutoEQSelection(for: deviceUID)?.isEnabled ?? true
+    }
+
+    /// The extra gain of a version of the compared preset, on a device whose correction is on or
+    /// off: set by hand, or matching its level to the preset shown (with its edits) as that
+    /// device plays them, with the Preamp switch as it is now.
+    private func comparedTrimDB(_ compared: AutoEQProfile, correctionOn: Bool) -> Double {
+        if let manual = comparison.manualTrimDB { return manual }
+        guard let editor else { return 0 }
+        return EQManagerComparison.matchingTrimDB(
+            reference: audioEngine.activeAutoEQProfile(editor.draft, correctionEnabled: correctionOn),
+            compared: audioEngine.activeAutoEQProfile(compared, correctionEnabled: correctionOn),
+            preampOn: audioEngine.autoEQPreampEnabled
+        )
+    }
+
+    /// What those devices play instead of their own AutoEQ, each following its Correction switch:
+    /// the edits, or a version of the compared preset with its extra gain. Nothing for the
+    /// saved preset.
+    private var comparisonProfiles: [String: AutoEQProfile] {
+        guard let editor else { return [:] }
+        let version = comparison.current(in: hearableVersions)
+        let compared: AutoEQProfile?
+        switch version {
+        case .saved: return [:]
+        case .edited: compared = nil
+        case .compared: compared = comparedSavedPreset
+        case .comparedEdited: compared = comparison.comparedEditor?.draft
+        }
+        var profiles: [String: AutoEQProfile] = [:]
+        for device in devicesUsingPreset {
+            let correctionOn = isCorrectionOn(device.uid)
+            if let compared {
+                var profile = audioEngine.activeAutoEQProfile(compared, correctionEnabled: correctionOn)
+                profile.comparisonGainDB = Float(comparedTrimDB(compared, correctionOn: correctionOn))
+                profiles[device.uid] = profile
+            } else if version == .edited {
+                profiles[device.uid] = audioEngine.activeAutoEQProfile(editor.draft, correctionEnabled: correctionOn)
+            }
+        }
+        return profiles
+    }
+
+    private func versionTitle(_ version: EQManagerComparison.Version, isEditing: Bool) -> String {
+        switch version {
+        case .saved: isEditing ? "Saved" : "This Preset"
+        case .edited: "Edited"
+        case .compared: comparison.comparedIsEditing ? "Compared · Saved" : "Compared"
+        case .comparedEdited: "Compared · Edited"
+        }
+    }
+
+    /// The versions to hear on the devices that use the preset, and ⌘B to go back to the one
+    /// heard before.
+    @ViewBuilder
+    private var hearControl: some View {
+        let devices = devicesUsingPreset
+        let versions = hearableVersions
+        let isEditing = editor?.isEditing == true
+        if devices.isEmpty {
+            Text("Apply this preset to a device to hear it")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .fixedSize()
+        } else if versions.count > 1 {
+            let names = devices.map(\.name).joined(separator: ", ")
+            HStack(spacing: DesignTokens.Spacing.xs) {
+                Text("Hear")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .fixedSize()
+                // Drawn here rather than with a segmented Picker, whose segments keep stale widths
+                // when their number or titles change
+                EQManagerHearSegments(
+                    versions: versions,
+                    selection: comparison.current(in: versions),
+                    title: { versionTitle($0, isEditing: isEditing) },
+                    onSelect: { comparison.select($0, in: versions) }
+                )
+                Button {
+                    comparison.toggle(in: versions)
+                } label: {
+                    Image(systemName: "arrow.left.arrow.right")
+                        .frame(width: 18)
+                }
+                .keyboardShortcut("b", modifiers: .command)
+                .help("Go back to the version heard before (⌘B)")
+            }
+            // Never shrunk: the preset names give way instead
+            .fixedSize()
+            .layoutPriority(1)
+            .help("What \(names) play\(devices.count == 1 ? "s" : ""). Nothing is stored until you save.")
+        }
+    }
+
+    /// While comparing, a bar under the top bar: which preset the window shows and edits, and
+    /// what the devices play. The level of the compared preset is set in the Preamp section.
+    @ViewBuilder
+    private var compareBar: some View {
+        if let editor, let compared = comparedPreset {
+            let hasChanges = comparison.comparedHasChanges
+            HStack(spacing: DesignTokens.Spacing.sm) {
+                Text("Show")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignTokens.Colors.textSecondary)
+                    .fixedSize()
+                presetChip(editor.draft, side: .base, editor: editor)
+                presetChip(compared, side: .compared, editor: comparison.comparedEditor)
+                // Hear starts at the same place whatever its segments: it only grows to the right
+                Divider()
+                    .frame(height: 16)
+                    .padding(.horizontal, DesignTokens.Spacing.xs)
+                hearControl
+                Spacer(minLength: DesignTokens.Spacing.sm)
+                Button {
+                    comparison.stopComparing()
+                } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 14)
+                }
+                .disabled(hasChanges)
+                .help(hasChanges
+                      ? "“\(compared.name)” has unsaved changes: save or discard them to stop comparing"
+                      : "Stop comparing")
+            }
+            .padding(.horizontal, DesignTokens.Spacing.lg)
+            .padding(.vertical, DesignTokens.Spacing.sm)
+            Divider()
+        }
+    }
+
+    /// One of the compared presets, in the color of its curve: choosing it shows it in the window,
+    /// to see or edit it. Its pencil edits it; filled, it marks the preset being edited in the
+    /// window, outlined, a preset in edit mode that is not shown.
+    private func presetChip(_ preset: AutoEQProfile, side: EQManagerComparison.Side, editor: EQManagerEditor?) -> some View {
+        let isShown = comparison.displayed == side
+        let isEditing = editor?.isEditing == true
+        let color = side == .base ? EQResponseGraph.baseCurveColor : EQResponseGraph.comparedCurveColor
+        let state = editor.flatMap { editState($0) }
+        return HStack(spacing: 4) {
+            Button {
+                showSide(side)
+            } label: {
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(color)
+                        .frame(width: 7, height: 7)
+                    // The same width whatever the name, its weight or the Edited mark, so the
+                    // bar never moves
+                    HStack(spacing: 4) {
+                        Text(preset.name)
+                            .font(.system(size: 11, weight: isShown ? .semibold : .regular))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if let state {
+                            Text(state)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(color)
+                                .fixedSize()
+                        }
+                    }
+                    .frame(width: Self.chipNameWidth, alignment: .leading)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(side == .base
+                  ? "Show the preset of the top bar, to see or edit it"
+                  : "Show the compared preset, to see or edit it")
+
+            Button {
+                edit(side)
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(isEditing && isShown ? Color.white : isEditing ? color : DesignTokens.Colors.textTertiary)
+                    .frame(width: 17, height: 17)
+                    .background(Circle().fill(isEditing && isShown ? color : Color.clear))
+                    .overlay(Circle().strokeBorder(isEditing && !isShown ? color : Color.clear, lineWidth: 1))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .help(pencilHelp(preset, isEditing: isEditing, isShown: isShown))
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 3)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(color.opacity(isShown ? 0.2 : 0.06)))
+        .overlay(Capsule().strokeBorder(color.opacity(isShown ? 0.7 : 0.25), lineWidth: 1))
+    }
+
+    private func pencilHelp(_ preset: AutoEQProfile, isEditing: Bool, isShown: Bool) -> String {
+        if isEditing && isShown { return "Editing “\(preset.name)”" }
+        if isEditing { return "“\(preset.name)” is in edit mode: show it to edit it" }
+        return "Edit “\(preset.name)” and show it. The other preset is left as it is."
+    }
+
+    /// Edits one of the compared presets alone, and shows it.
+    private func edit(_ side: EQManagerComparison.Side) {
+        switch side {
+        case .base:
+            guard let editor else { return }
+            if !editor.isEditing {
+                editor.beginEditing()
+                comparison.beginEditing(.base)
+            }
+            comparison.displayed = .base
+        case .compared:
+            editCompared()
+        }
+    }
+
+    /// Unsaved changes; edit mode itself shows on the pencil.
+    private func editState(_ editor: EQManagerEditor) -> String? {
+        editor.hasChanges ? "Edited" : nil
+    }
+
+    /// Shows one of the compared presets. The compared one, when not edited, is shown as the
+    /// library holds it now.
+    private func showSide(_ side: EQManagerComparison.Side) {
+        if side == .compared { refreshComparedEditor() }
+        comparison.displayed = side
+    }
+
+    /// Edits the compared preset, and shows it. The preset of the top bar is left as it is.
+    private func editCompared() {
+        refreshComparedEditor()
+        guard let other = comparison.comparedEditor else { return }
+        if !other.isEditing {
+            other.beginEditing()
+            comparison.beginEditing(.compared)
+        }
+        comparison.displayed = .compared
+    }
+
+    /// The compared preset, not edited, holds the library's version, which may be newer than the
+    /// one chosen.
+    private func refreshComparedEditor() {
+        guard let other = comparison.comparedEditor, !other.isEditing,
+              let current = profileManager.profile(for: other.original.id), current != other.original else { return }
+        comparison.replaceCompared(with: EQManagerEditor(profile: current))
+    }
+
+    /// The editor of the preset the window shows: the compared one when chosen in the compare
+    /// bar, otherwise the preset of the top bar. The edit bar and the content act on it.
+    private var activeEditor: EQManagerEditor? {
+        if comparison.displayed == .compared, comparedSavedPreset != nil, let other = comparison.comparedEditor {
+            return other
+        }
+        return editor
+    }
+
+    private var isShowingCompared: Bool {
+        guard let active = activeEditor, let editor else { return false }
+        return active !== editor
+    }
+
+    /// The comparison as the Preset Detail shows it, from the preset it shows: the other preset's
+    /// curve on the graph, at the level it plays at against this one (preamps and the extra
+    /// gain), and the extra gain of the compared preset in the Preamp section, as the first
+    /// device that uses the preset plays it.
+    private var detailComparison: EQManagerPresetDetail.Comparison? {
+        guard let editor, let compared = comparedFocus else { return nil }
+        let correctionOn = devicesUsingPreset.first.map { isCorrectionOn($0.uid) } ?? true
+        let trim = comparedTrimDB(compared, correctionOn: correctionOn)
+        let preampOn = audioEngine.autoEQPreampEnabled
+        let range = EQManagerComparison.trimRange
+        // How much higher the compared preset plays than the preset of the top bar
+        let comparedOffset = (preampOn ? Double(compared.preampDB) - Double(editor.draft.preampDB) : 0) + trim
+        let showsCompared = isShowingCompared
+        return EQManagerPresetDetail.Comparison(
+            other: showsCompared ? editor.draft : compared,
+            otherOffsetDB: showsCompared ? -comparedOffset : comparedOffset,
+            otherColor: showsCompared ? EQResponseGraph.baseCurveColor : EQResponseGraph.comparedCurveColor,
+            comparedPreampDB: compared.preampDB,
+            trimDB: trim,
+            isMatched: comparison.manualTrimDB == nil,
+            preampOn: preampOn,
+            setTrim: { [comparison] value in
+                comparison.manualTrimDB = min(max((value * 10).rounded() / 10, range.lowerBound), range.upperBound)
+            },
+            match: { [comparison] in comparison.manualTrimDB = nil }
+        )
     }
 
     // MARK: - Top Bar
@@ -110,6 +448,14 @@ struct EQManagerRootView: View {
             Spacer()
 
             if let editor {
+                Button {
+                    chooserPurpose = .compare
+                } label: {
+                    // While comparing, it changes the compared preset
+                    Label(comparedPreset == nil ? "Compare" : "Change", systemImage: "square.split.2x1")
+                }
+                .disabled(comparison.comparedHasChanges)
+                .help(compareHelp)
                 EQManagerApplyButton(
                     audioEngine: audioEngine,
                     preset: editor.original,
@@ -120,6 +466,8 @@ struct EQManagerRootView: View {
                 // controls have a bar of their own (`editBar`)
                 Button {
                     editor.beginEditing()
+                    comparison.beginEditing(.base)
+                    comparison.displayed = .base
                 } label: {
                     Label("Edit", systemImage: "pencil")
                 }
@@ -131,12 +479,12 @@ struct EQManagerRootView: View {
         .padding(.vertical, DesignTokens.Spacing.md)
         // Only this dialog offers "Do not ask again" (the toggle applies to dialogs shown from here)
         .confirmationDialog(
-            "Save changes to “\(editor?.original.name ?? "")”?",
+            "Save changes to “\(activeEditor?.original.name ?? "")”?",
             isPresented: $isSaveConfirmationPresented,
             titleVisibility: .visible
         ) {
-            Button("Save") { if let editor { saveInPlace(editor) } }
-            Button("Save as New Preset...") { if let editor { requestNewPreset(from: editor) } }
+            Button("Save") { if let editor = activeEditor { saveInPlace(editor) } }
+            Button("Save as New Preset...") { if let editor = activeEditor { requestNewPreset(from: editor) } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(saveConfirmationMessage)
@@ -145,6 +493,15 @@ struct EQManagerRootView: View {
             get: { !settings.appSettings.confirmPresetSaves },
             set: { settings.appSettings.confirmPresetSaves = !$0 }
         ))
+    }
+
+    private var compareHelp: String {
+        if comparison.comparedHasChanges {
+            return "The compared preset has unsaved changes: show it with the arrows to save or discard them"
+        }
+        return comparedPreset == nil
+            ? "Compare this preset with another one, by ear and on the graph. Your edits are kept."
+            : "Compare with another preset instead of the compared one"
     }
 
     private func editHelp(_ editor: EQManagerEditor) -> String {
@@ -157,8 +514,12 @@ struct EQManagerRootView: View {
     /// The edit controls, in a bar under the top bar while the preset shown is edited.
     @ViewBuilder
     private var editBar: some View {
-        if let editor, editor.isEditing {
+        if let editor = activeEditor, editor.isEditing {
             HStack(spacing: DesignTokens.Spacing.sm) {
+                // While comparing, which of the two presets is edited
+                if comparedPreset != nil {
+                    editedPresetLabel(editor)
+                }
                 editControls(editor)
             }
             .padding(.horizontal, DesignTokens.Spacing.lg)
@@ -167,7 +528,23 @@ struct EQManagerRootView: View {
         }
     }
 
-    /// Undo, redo, Replace and History on the left; leaving edit mode and saving on the right.
+    private func editedPresetLabel(_ editor: EQManagerEditor) -> some View {
+        let color = isShowingCompared ? EQResponseGraph.comparedCurveColor : EQResponseGraph.baseCurveColor
+        return HStack(spacing: 5) {
+            Image(systemName: "pencil")
+                .foregroundStyle(color)
+            Text(editor.original.name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 150, alignment: .leading)
+        }
+        .help(isShowingCompared ? "Editing the compared preset" : "Editing the preset of the top bar")
+    }
+
+    /// Undo, redo, Replace and History on the left, what to hear in the middle (in the compare
+    /// bar while comparing), leaving edit mode and saving on the right.
     @ViewBuilder
     private func editControls(_ editor: EQManagerEditor) -> some View {
         let saveKind = AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft)
@@ -206,7 +583,12 @@ struct EQManagerRootView: View {
 
         historyMenu(editor)
 
+        // In the middle of the bar, or in the compare bar while comparing
         Spacer()
+        if comparedPreset == nil, !devicesUsingPreset.isEmpty {
+            hearControl
+            Spacer()
+        }
 
         Button(editor.hasChanges ? "Discard" : "Done") {
             editor.discard()
@@ -258,14 +640,15 @@ struct EQManagerRootView: View {
         return EQManagerPresetChooser(
             settings: settings,
             profileManager: profileManager,
-            selectedPresetID: selects ? editor?.draft.id : nil,
-            title: selects ? "Choose a Preset" : "Replace Bands With a Preset",
+            selectedPresetID: chooserSelection(purpose),
+            title: chooserTitle(purpose),
             allowsCreation: selects,
             onChoose: { profile in
                 chooserPurpose = nil
                 switch purpose {
-                case .select: editor = EQManagerEditor(profile: profile)
+                case .select: show(profile)
                 case .replace: replaceContents(with: profile)
+                case .compare: compare(with: profile)
                 }
             },
             onDeselect: onDeselect,
@@ -278,6 +661,40 @@ struct EQManagerRootView: View {
         )
     }
 
+    private func chooserSelection(_ purpose: ChooserPurpose) -> String? {
+        switch purpose {
+        case .select: editor?.draft.id
+        case .replace: nil
+        case .compare: comparedPreset?.id
+        }
+    }
+
+    private func chooserTitle(_ purpose: ChooserPurpose) -> String {
+        switch purpose {
+        case .select: "Choose a Preset"
+        case .replace: "Replace Bands With a Preset"
+        case .compare: "Compare With a Preset"
+        }
+    }
+
+    /// Shows `profile` in the top bar. When it is the compared preset, it moves there with its
+    /// edits, and the comparison ends.
+    private func show(_ profile: AutoEQProfile) {
+        if let other = comparison.comparedEditor, other.original.id == profile.id {
+            editor = other.isEditing ? other : EQManagerEditor(profile: profile)
+            comparison.stopComparing()
+        } else {
+            editor = EQManagerEditor(profile: profile)
+        }
+    }
+
+    /// Compares the preset shown with `profile`, still hearing the preset shown. Choosing the
+    /// preset shown changes nothing.
+    private func compare(with profile: AutoEQProfile) {
+        guard let editor, profile.id != editor.original.id else { return }
+        comparison.compare(with: profile, isEditing: editor.isEditing)
+    }
+
     /// Deletes a preset or template of the library (confirmed in the chooser): the devices that
     /// use it are left with no AutoEQ preset, and the window shows none if it showed it.
     private func deletePreset(_ id: String) {
@@ -288,6 +705,7 @@ struct EQManagerRootView: View {
         profileManager.history.clear(profileID: id)
         profileManager.deleteImportedProfile(id: id)
         if editor?.original.id == id { editor = nil }
+        if comparison.comparedEditor?.original.id == id { comparison.stopComparing() }
     }
 
     // MARK: - Import
@@ -296,6 +714,7 @@ struct EQManagerRootView: View {
         VStack(spacing: 0) {
             topBar
             Divider()
+            compareBar
             editBar
             content
         }
@@ -406,8 +825,11 @@ struct EQManagerRootView: View {
 
     /// Load an earlier version into the draft (one undo step). Nothing is stored until saved.
     private func restore(_ version: AutoEQPresetVersion) {
-        guard let editor else { return }
-        if !editor.isEditing { editor.beginEditing() }
+        guard let editor = activeEditor else { return }
+        if !editor.isEditing {
+            editor.beginEditing()
+            comparison.beginEditing(isShowingCompared ? .compared : .base)
+        }
         let old = version.profile
         editor.apply { draft in
             draft = draft.withCorrection(of: old)
@@ -419,18 +841,23 @@ struct EQManagerRootView: View {
     }
 
     private var clearHistoryTitle: String {
-        guard let id = editor?.original.id else { return "" }
-        let count = profileManager.history.versions(of: id).count
+        guard let editor = activeEditor else { return "" }
+        let count = profileManager.history.versions(of: editor.original.id).count
         let versions = count == 1 ? "the earlier version" : "the \(count) earlier versions"
-        return "Delete \(versions) of “\(editor?.original.name ?? "")”?"
+        return "Delete \(versions) of “\(editor.original.name)”?"
     }
 
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
-        if let editor {
-            EQManagerPresetDetail(editor: editor, templateName: profileManager.templateName(of: editor.draft))
+        if let editor = activeEditor {
+            EQManagerPresetDetail(
+                editor: editor,
+                templateName: profileManager.templateName(of: editor.draft),
+                comparison: detailComparison,
+                color: isShowingCompared ? EQResponseGraph.comparedCurveColor : EQResponseGraph.baseCurveColor
+            )
         } else {
             emptyState
         }
@@ -480,7 +907,7 @@ struct EQManagerRootView: View {
     }
 
     private var saveConfirmationMessage: String {
-        guard let editor else { return "" }
+        guard let editor = activeEditor else { return "" }
         let limit = settings.appSettings.presetHistoryLimit
         let kept = limit > 0
             ? "The current version is kept in its history (the last \(limit) are kept), where it can be restored."
@@ -521,7 +948,8 @@ struct EQManagerRootView: View {
     }
 
     private func createPreset(named name: String, useOnDevices: Bool) {
-        guard let editor else { return }
+        guard let editor = activeEditor else { return }
+        let isCompared = isShowingCompared
         let sourceID = editor.original.id
         guard let preset = profileManager.saveAsNewPreset(editor.draft, name: name) else {
             alertMessage = "Could not save the preset."
@@ -533,8 +961,12 @@ struct EQManagerRootView: View {
                 onDevices: settings.deviceUIDs(usingAutoEQProfile: sourceID)
             )
         }
-        // The edited profile is left as it was; show the new preset
-        self.editor = EQManagerEditor(profile: preset)
+        // The edited profile is left as it was; show the new preset in its place
+        if isCompared {
+            comparison.replaceCompared(with: EQManagerEditor(profile: preset))
+        } else {
+            self.editor = EQManagerEditor(profile: preset)
+        }
     }
 
     /// Store a conversion as a new preset and show it. The converted preset is left as it was.
@@ -548,7 +980,7 @@ struct EQManagerRootView: View {
 
     /// Replace the bands and preamp of the draft (one undo step); name, engine and source stay.
     private func replaceContents(with profile: AutoEQProfile) {
-        editor?.apply { draft in
+        activeEditor?.apply { draft in
             draft.kind = profile.kind
             draft.filters = profile.filters
             draft.curve = profile.curve
@@ -579,7 +1011,7 @@ struct EQManagerRootView: View {
         }
         // A text file does not say which rate its filters were made for: keep the preset's
         // (changeable in the Base rate row)
-        if let draft = editor?.draft {
+        if let draft = activeEditor?.draft {
             parsed.optimizedSampleRate = draft.kind == .parametric ? draft.optimizedSampleRate : AutoEQBaseRate.lastImportRate
         }
         replaceContents(with: parsed)
@@ -748,5 +1180,64 @@ struct EQManagerFavoriteButton: View {
         .onHover { isHovered = $0 }
         .help(isFavorite ? "Remove from favorites (hides it from the AutoEQ popup)" : "Add to favorites (shows it in the AutoEQ popup)")
         .accessibilityLabel(isFavorite ? "Remove from favorites" : "Add to favorites")
+    }
+}
+
+// MARK: - Hear Segments
+
+/// The versions the devices can play, as segments: each its own width, the chosen one filled in
+/// the color of its preset (the accent color for the preset of the top bar, orange for the
+/// compared one).
+private struct EQManagerHearSegments: View {
+    let versions: [EQManagerComparison.Version]
+    let selection: EQManagerComparison.Version
+    let title: (EQManagerComparison.Version) -> String
+    let onSelect: (EQManagerComparison.Version) -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(versions.enumerated()), id: \.element) { index, version in
+                if index > 0 {
+                    separator(between: versions[index - 1], and: version)
+                }
+                segment(version)
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.primary.opacity(0.07)))
+        .fixedSize()
+    }
+
+    /// A thin line between two segments, hidden beside the chosen one, as in a native segmented
+    /// control. It keeps its width when hidden, so nothing moves.
+    private func separator(between left: EQManagerComparison.Version, and right: EQManagerComparison.Version) -> some View {
+        let isHidden = left == selection || right == selection
+        return Rectangle()
+            .fill(Color.primary.opacity(isHidden ? 0 : 0.2))
+            .frame(width: 1, height: 14)
+    }
+
+    private func segment(_ version: EQManagerComparison.Version) -> some View {
+        let isSelected = version == selection
+        let isCompared = version == .compared || version == .comparedEdited
+        let color = isCompared ? EQResponseGraph.comparedCurveColor : EQResponseGraph.baseCurveColor
+        return Button {
+            onSelect(version)
+        } label: {
+            Text(title(version))
+                // The size and weight of a native segmented control's titles
+                .font(.system(size: 13))
+                .foregroundStyle(isSelected ? Color.white : Color.primary)
+                .fixedSize()
+                .padding(.horizontal, 11)
+                .frame(height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isSelected ? color : Color.clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
