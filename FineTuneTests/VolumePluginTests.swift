@@ -846,7 +846,7 @@ struct VolumePluginMenuTests {
     func listsPlugins() {
         let menu = menu(compatible: ["b"], choice: nil)
         #expect(menu.options.map(\.id) == [Menu.noPluginID, "b"])
-        #expect(menu.options.allSatisfy(\.isCompatible))
+        #expect(menu.options.allSatisfy { $0.isCompatible })
         #expect(menu.otherOptions.map(\.id) == ["a", "c"])
         #expect(menu.otherOptions.allSatisfy { !$0.isCompatible })
         #expect(menu.selectedID == Menu.noPluginID)
