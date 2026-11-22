@@ -209,12 +209,13 @@ struct CrossfadeProgressCoreHardeningTests {
 @Suite("CrossfadeState — Idle Phase Multipliers (Core Hardening)")
 struct CrossfadeIdleCoreHardeningTests {
 
-    @Test("Idle with progress >= 1.0: primary=0, secondary=1 (post-crossfade window)")
+    @Test("Idle with progress >= 1.0: primary=1, secondary=1 (a late progress store can't mute the promoted tap)")
     func idlePostCrossfadeWindow() {
         var state = CrossfadeState()
         state.progress = 1.0
 
-        #expect(state.primaryMultiplier == 0.0)
+        // Once idle, the only primary-role callback is the promoted tap (#461)
+        #expect(state.primaryMultiplier == 1.0)
         #expect(state.secondaryMultiplier == 1.0)
     }
 
