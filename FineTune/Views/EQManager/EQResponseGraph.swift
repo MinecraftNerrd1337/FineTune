@@ -1,4 +1,5 @@
 // FineTune/Views/EQManager/EQResponseGraph.swift
+import AppKit
 import SwiftUI
 
 /// Frequency response graph of a preset: log frequency axis (20 Hz to 20 kHz), dB axis,
@@ -6,14 +7,17 @@ import SwiftUI
 /// frequency.
 /// A graphic preset shows its curve and, when there are few enough, its points.
 ///
+/// The dB axis shows the window of `scale`. ⌘-scrolling or ⌘-dragging the graph moves it, as a
+/// plain scroll or drag is left alone, and its top, middle and bottom levels can be typed in.
+///
 /// Layout ideas (decade/minor grid tiers, knob on a stem from 0 dB, drag by offset from
 /// the grab point) come from iQualize's `EQCanvasView` (MIT, Darius). This version keeps
 /// a plainer style for legibility: stronger grid, labels outside the plot, no glow or fills.
 @MainActor
 struct EQResponseGraph: View {
     let profile: AutoEQProfile
-    /// Half-range of the dB axis (12 or 24).
-    let scaleDB: Double
+    /// The dB window shown, which the graph moves when scrolled, dragged or typed in.
+    @Binding var scale: EQGraphScale
     @Binding var selectedBand: Int?
     /// Bands can be dragged (frequency and gain) when true.
     let isEditable: Bool
@@ -34,12 +38,30 @@ struct EQResponseGraph: View {
 
     @State private var hoveredBand: Int?
     @State private var drag: DragInfo?
+    @State private var pan: PanInfo?
+    /// A drag started that moves neither a band nor the window: it stays so until it ends.
+    @State private var isIdleDrag = false
+    @State private var scrollMonitor: Any?
+    @State private var scrollState = ScrollState()
 
     private struct DragInfo {
         let band: Int
         let startFrequency: Double
         let startGain: Double
         var isMoving = false
+    }
+
+    /// A drag that moves the dB window.
+    private struct PanInfo {
+        let startCenter: Int
+        var isMoving = false
+    }
+
+    /// What the ⌘-scroll monitor needs between events.
+    private final class ScrollState {
+        var plotHeight: CGFloat = 1
+        /// Scrolled, in dB, short of a whole one.
+        var pendingDB: CGFloat = 0
     }
 
     private static let insets = EdgeInsets(top: 8, leading: 44, bottom: 22, trailing: 12)
@@ -75,11 +97,48 @@ struct EQResponseGraph: View {
                         case .ended: hoveredBand = nil
                         }
                     }
+                levelFields(plot: plot)
             }
+            .onAppear { scrollState.plotHeight = plot.height }
+            .onChange(of: plot.height) { _, height in scrollState.plotHeight = height }
         }
-        .accessibilityElement()
+        .onHover { hovering in
+            if hovering { installScrollMonitor() } else { removeScrollMonitor() }
+        }
+        .onDisappear { removeScrollMonitor() }
+        .accessibilityElement(children: .contain)
         .accessibilityLabel("Frequency response of \(profile.name)")
     }
+
+    // MARK: - Levels
+
+    /// The top, middle and bottom levels of the axis, which can be typed in to move the window.
+    @ViewBuilder
+    private func levelFields(plot: CGRect) -> some View {
+        levelField(scale.top, range: scale.topRange, y: plot.minY, plot: plot) { scale.setTop($0) }
+        levelField(scale.center, range: scale.centerRange, y: plot.midY, plot: plot, isCenter: true) { scale.setCenter($0) }
+        levelField(scale.bottom, range: scale.bottomRange, y: plot.maxY, plot: plot) { scale.setBottom($0) }
+    }
+
+    private func levelField(
+        _ value: Int,
+        range: ClosedRange<Int>,
+        y: CGFloat,
+        plot: CGRect,
+        isCenter: Bool = false,
+        onCommit: @escaping (Int) -> Void
+    ) -> some View {
+        // Right-aligned where the axis draws its other levels
+        let width = Self.levelFieldWidth
+        return EQScaleNumberField(
+            value: value, range: range, style: .axisLabel, width: width, isEmphasized: isCenter, onCommit: onCommit
+        )
+            .position(x: plot.minX - Self.levelGap - width / 2, y: y)
+    }
+
+    private static let levelFieldWidth: CGFloat = 40
+    /// Space between the axis levels and the plot.
+    private static let levelGap: CGFloat = 3
 
     // MARK: - Geometry
 
@@ -106,15 +165,20 @@ struct EQResponseGraph: View {
     }
 
     private func y(for db: Double, in plot: CGRect) -> CGFloat {
-        plot.midY - CGFloat(db / scaleDB) * plot.height / 2
+        plot.midY - CGFloat((db - Double(scale.center)) / Double(scale.span)) * plot.height / 2
     }
 
     private func gain(atY y: CGFloat, in plot: CGRect) -> Double {
-        Double((plot.midY - y) / (plot.height / 2)) * scaleDB
+        Double(scale.center) + Double((plot.midY - y) / (plot.height / 2)) * Double(scale.span)
+    }
+
+    /// Whether a level is within the window shown.
+    private func shows(_ db: Double) -> Bool {
+        db >= Double(scale.bottom) && db <= Double(scale.top)
     }
 
     private func knobPoint(for filter: AutoEQFilter, in plot: CGRect) -> CGPoint {
-        let clampedGain = min(max(Double(filter.gainDB), -scaleDB), scaleDB)
+        let clampedGain = min(max(Double(filter.gainDB), Double(scale.bottom)), Double(scale.top))
         return CGPoint(x: x(for: filter.frequency, in: plot), y: y(for: clampedGain, in: plot))
     }
 
@@ -164,22 +228,33 @@ struct EQResponseGraph: View {
                            with: .color(.primary.opacity(0.24)), lineWidth: 1)
         }
 
-        let step: Double = scaleDB <= 12 ? 3 : 6
-        var db = -scaleDB
-        while db <= scaleDB + 0.001 {
-            let py = y(for: db, in: plot)
-            let isZero = abs(db) < 0.001
-            let isMajor = abs(db.truncatingRemainder(dividingBy: step * 2)) < 0.001
+        // Lines at the multiples of the step, whatever the window's middle
+        let step = scale.gridStepDB
+        // The top, middle and bottom levels have fields of their own (`levelFields`)
+        let fieldYs = [scale.top, scale.center, scale.bottom].map { y(for: Double($0), in: plot) }
+        var level = Int((Double(scale.bottom) / Double(step)).rounded(.up)) * step
+        while level <= scale.top {
+            let py = y(for: Double(level), in: plot)
+            let isZero = level == 0
+            let isMajor = level % (step * 2) == 0
             context.stroke(line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.maxX, y: py)),
                            with: .color(.primary.opacity(isZero ? 0.45 : isMajor ? 0.20 : 0.10)),
                            lineWidth: isZero ? 1 : 0.5)
-            let label = isZero ? "0 dB" : String(format: "%+.0f", db)
-            context.draw(
-                Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary),
-                at: CGPoint(x: plot.minX - 6, y: py),
-                anchor: .trailing
-            )
-            db += step
+            if !fieldYs.contains(where: { abs($0 - py) < 13 }) {
+                let label = isZero ? "0 dB" : (level > 0 ? "+\(level)" : "\(level)")
+                context.draw(
+                    Text(label).font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary),
+                    at: CGPoint(x: plot.minX - 6, y: py),
+                    anchor: .trailing
+                )
+            }
+            level += step
+        }
+        // A tick marks the middle level when no line does
+        if scale.center % step != 0 {
+            let py = plot.midY
+            context.stroke(line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.minX + 5, y: py)),
+                           with: .color(.primary.opacity(0.35)), lineWidth: 1)
         }
 
         context.stroke(Path(plot), with: .color(.primary.opacity(0.24)), lineWidth: 1)
@@ -222,7 +297,7 @@ struct EQResponseGraph: View {
         let preamp = Double(profile.preampDB)
         guard abs(preamp) >= 0.05 else { return }
         let level = preampMarker == .peakLimit ? -preamp : preamp
-        guard abs(level) <= scaleDB else { return }
+        guard shows(level) else { return }
         let py = y(for: level, in: plot)
         context.stroke(
             line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.maxX, y: py)),
@@ -243,7 +318,7 @@ struct EQResponseGraph: View {
 
     /// A thin line at the perceived level, under the curve, so the curve reads against it.
     private func drawPerceivedLevel(into context: inout GraphicsContext, plot: CGRect) {
-        guard let level = perceivedLevelDB, abs(level) <= scaleDB else { return }
+        guard let level = perceivedLevelDB, shows(level) else { return }
         let py = y(for: level, in: plot)
         let color = Color.accentColor.opacity(0.35)
         context.stroke(
@@ -368,12 +443,22 @@ struct EQResponseGraph: View {
     }
 
     private func handleDragChanged(_ value: DragGesture.Value, plot: CGRect) {
-        if drag == nil {
+        if drag == nil && pan == nil && !isIdleDrag {
             let hit = nearestBand(to: value.startLocation, plot: plot)
             selectedBand = hit
-            guard isEditable, let hit else { return }
-            let filter = profile.filters[hit]
-            drag = DragInfo(band: hit, startFrequency: filter.frequency, startGain: Double(filter.gainDB))
+            if NSEvent.modifierFlags.contains(.command) {
+                // ⌘-dragging moves the dB window, as ⌘-scrolling does
+                pan = PanInfo(startCenter: scale.center)
+            } else if isEditable, let hit {
+                let filter = profile.filters[hit]
+                drag = DragInfo(band: hit, startFrequency: filter.frequency, startGain: Double(filter.gainDB))
+            } else {
+                isIdleDrag = true
+            }
+        }
+        if let info = pan {
+            handlePan(value, info: info, plot: plot)
+            return
         }
         guard var info = drag else { return }
 
@@ -403,6 +488,53 @@ struct EQResponseGraph: View {
             onDragEnded()
         }
         drag = nil
+        if pan?.isMoving == true {
+            NSCursor.pop()
+        }
+        pan = nil
+        isIdleDrag = false
+    }
+
+    /// The curve follows the pointer up and down, by whole dB.
+    private func handlePan(_ value: DragGesture.Value, info: PanInfo, plot: CGRect) {
+        // Ignore the first pixels so a click selects a band without moving the window.
+        if !info.isMoving {
+            guard abs(value.translation.height) >= 3 else { return }
+            pan?.isMoving = true
+            NSCursor.closedHand.push()
+        }
+        let pointsPerDB = plot.height / 2 / CGFloat(scale.span)
+        let movedDB = Int((value.translation.height / pointsPerDB).rounded())
+        scale.setCenter(info.startCenter + movedDB)
+    }
+
+    // MARK: - Scroll
+
+    /// ⌘-scrolling over the graph moves the dB window: a wheel by a dB per line, a trackpad with
+    /// the fingers. Scrolling without ⌘ is left to the window.
+    private func installScrollMonitor() {
+        guard scrollMonitor == nil else { return }
+        let scale = $scale
+        let state = scrollState
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            guard event.modifierFlags.contains(.command) else { return event }
+            if event.phase == .began { state.pendingDB = 0 }
+            let pointsPerDB = state.plotHeight / 2 / CGFloat(scale.wrappedValue.span)
+            state.pendingDB += event.hasPreciseScrollingDeltas
+                ? event.scrollingDeltaY / pointsPerDB
+                : event.scrollingDeltaY
+            let whole = Int(state.pendingDB.rounded(.towardZero))
+            if whole != 0 {
+                state.pendingDB -= CGFloat(whole)
+                scale.wrappedValue.scroll(by: whole)
+            }
+            return nil
+        }
+    }
+
+    private func removeScrollMonitor() {
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+        scrollMonitor = nil
     }
 
     // MARK: - Band Order

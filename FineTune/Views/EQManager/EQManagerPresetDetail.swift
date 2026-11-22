@@ -10,7 +10,8 @@ struct EQManagerPresetDetail: View {
     var templateName: String? = nil
 
     @State private var selectedBand: Int?
-    @State private var scaleDB: Double = 12
+    /// The dB window of the graph, set by every control of the graph.
+    @State private var scale = EQGraphScale()
     /// Latency and accuracy of the preset's linear-phase filter; nil while they are computed.
     @State private var linearPhase: LinearPhaseSummary?
 
@@ -36,7 +37,7 @@ struct EQManagerPresetDetail: View {
                 graphHeader
                 EQResponseGraph(
                     profile: preset,
-                    scaleDB: scaleDB,
+                    scale: $scale,
                     selectedBand: $selectedBand,
                     isEditable: isEditing,
                     onDragBegan: { editor.beginGesture() },
@@ -59,7 +60,7 @@ struct EQManagerPresetDetail: View {
         .padding(DesignTokens.Spacing.lg)
         .onChange(of: preset.id, initial: true) { _, _ in
             selectedBand = nil
-            scaleDB = Self.needsWideScale(preset) ? 24 : 12
+            scale = EQGraphScale(span: Self.needsWideScale(preset) ? 24 : 12)
         }
         .onChange(of: preset.filters.count) { _, count in
             if let band = selectedBand, band >= count { selectedBand = count > 0 ? count - 1 : nil }
@@ -113,7 +114,7 @@ struct EQManagerPresetDetail: View {
         return String(format: "%.2f dB", linearPhase.maxErrorDB)
     }
 
-    /// ±24 dB when the preset does not fit in ±12 dB.
+    /// A ±24 dB scale when the preset does not fit in ±12 dB.
     private static func needsWideScale(_ preset: AutoEQProfile) -> Bool {
         if preset.filters.contains(where: { abs($0.gainDB) > 12 }) || abs(preset.preampDB) > 12 { return true }
         let frequencies = AutoEQResponse.logFrequencies(count: 200)
@@ -319,16 +320,45 @@ struct EQManagerPresetDetail: View {
             Text(graphCaption)
                 .font(.system(size: 11))
                 .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
             Spacer()
-            Picker("Scale", selection: $scaleDB) {
-                Text("±12 dB").tag(12.0)
-                Text("±24 dB").tag(24.0)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .controlSize(.small)
-            .frame(width: 140)
+            scaleControls
         }
+    }
+
+    /// The scale of the graph, ±1 to ±24 dB around its middle level: a slider stepping by a dB,
+    /// and a field for a precise one.
+    private var scaleControls: some View {
+        let range = EQGraphScale.spanRange
+        return HStack(spacing: DesignTokens.Spacing.xs) {
+            Text("Scale")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+            Slider(
+                value: Binding(
+                    get: { Double(scale.span) },
+                    set: { scale.setSpan(Int($0.rounded())) }
+                ),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: 1
+            )
+            .controlSize(.small)
+            .frame(width: 150)
+            Text("±")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+            EQScaleNumberField(value: scale.span, range: range, width: 34) { scale.setSpan($0) }
+            Text("dB")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+        }
+        // Takes its own width: the caption beside it gives way first
+        .fixedSize()
+        .help("Scale of the graph. ⌘-scroll or ⌘-drag the graph to move it up or down, or click its top, middle or bottom level to type one: 0 in the middle centers it.")
     }
 
     private var graphCaption: String {
