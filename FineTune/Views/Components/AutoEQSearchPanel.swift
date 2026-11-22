@@ -199,24 +199,9 @@ struct AutoEQSearchPanel: View {
                 Spacer(minLength: 0)
 
                 HStack(spacing: DesignTokens.Spacing.xs) {
-                    // Remove button
-                    Button {
-                        onSelect(nil)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(
-                                hoveredID == "_remove"
-                                    ? DesignTokens.Colors.textSecondary
-                                    : DesignTokens.Colors.textTertiary
-                            )
-                            .frame(width: 20, height: 20)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .whenHovered { hoveredID = $0 ? "_remove" : nil }
-                    .accessibilityLabel("Remove correction profile")
-                    .accessibilityHint("Returns to no correction state")
+                    // Remove button: a trash in a button shape, so it reads as
+                    // "take the preset off this device" and not "close"
+                    removeButton
                 }
             }
 
@@ -240,6 +225,39 @@ struct AutoEQSearchPanel: View {
         .animation(.easeInOut(duration: 0.15), value: isCorrectionEnabled)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(name) correction profile")
+    }
+
+    // MARK: - Remove Button
+
+    private var removeButton: some View {
+        let isHovered = hoveredID == "_remove"
+        let removeRed = Color(nsColor: .systemRed)
+        return Button {
+            onSelect(nil)
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(isHovered ? removeRed : DesignTokens.Colors.textSecondary)
+                .frame(width: 24, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: DesignTokens.Dimensions.buttonRadius)
+                        .fill(isHovered ? removeRed.opacity(0.15) : Color.primary.opacity(0.07))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: DesignTokens.Dimensions.buttonRadius)
+                        .strokeBorder(
+                            isHovered ? removeRed.opacity(0.45) : Color.primary.opacity(0.12),
+                            lineWidth: 0.5
+                        )
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .whenHovered { hoveredID = $0 ? "_remove" : nil }
+        .animation(DesignTokens.Animation.hover, value: isHovered)
+        .help("Remove the preset from this device")
+        .accessibilityLabel("Remove preset from this device")
+        .accessibilityHint("The device goes back to no correction")
     }
 
     // MARK: - Mini Toggle
