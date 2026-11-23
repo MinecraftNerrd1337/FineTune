@@ -2,7 +2,7 @@
 
 <h3>FineTune</h3>
 
-Control the volume of every app independently, boost quiet ones up to 4x, route audio to different speakers, and shape your sound with EQ and headphone correction. Lives in your menu bar. Free and open-source.
+Control the volume of every app independently, boost quiet ones up to 4x, route audio to different speakers, and shape your sound with an EQ you can customize from top to bottom: as many parametric bands as you need or a graphic curve, per device, starting from scratch or from thousands of AutoEQ headphone corrections. Lives in your menu bar. Free and open-source.
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
 
@@ -69,9 +69,9 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 - **Auto-restore** — When a device reconnects, apps automatically return to it with their volume, routing, and EQ intact
 
 ### 🎛 EQ & Correction
-- **10-band EQ** — 20 presets across 5 categories
-- **User EQ presets** — Save, rename, and manage custom EQ configurations per app
-- **AutoEQ headphone correction** — Search thousands of headphone profiles or import your own ParametricEQ.txt files for per-device frequency response correction
+- **EQ Manager** — Build each device's EQ from top to bottom: up to 128 parametric bands (peak, low shelf, high shelf) with their frequency, gain and Q, or a graphic curve, a preamp, and the engine that runs it (biquad, exact biquad, minimum-phase or linear-phase FIR). Hear your edits live, compare two presets with their levels matched, go back through each preset's version history, and import or export Equalizer APO files (ParametricEQ.txt, GraphicEQ.txt)
+- **AutoEQ headphone correction** — Start from thousands of headphone profiles from the AutoEQ catalog, used as they are or as templates for your own presets
+- **Per-app EQ** — A quick graphic EQ for each app, with 20 presets across 5 categories and your own presets
 - **Loudness compensation** — Automatic bass and treble correction at low volumes using ISO 226:2023 equal-loudness contours, with real-time level management to keep perceived loudness consistent
 
 ### 🖥 Devices & System

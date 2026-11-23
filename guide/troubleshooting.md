@@ -100,7 +100,7 @@ If the keys still don't work right after launch, a WindowServer handoff can brie
 - The EQ is enabled by default. Check that the **toggle switch** in the EQ panel header is on.
 - The default preset is **Flat** (all bands at 0 dB), which makes no audible changes. Select a different preset or adjust the bands manually.
 - EQ is **per-app**, not per-device. Make sure you're adjusting the EQ for the correct app.
-- If using AutoEQ headphone correction, that's separate from the 10-band EQ. Verify a profile is assigned to the correct device via the wand icon
+- If using AutoEQ headphone correction, that's separate from the app's EQ. Verify a profile is assigned to the correct device via the wand icon
 
 ## Audio quality sounds degraded
 

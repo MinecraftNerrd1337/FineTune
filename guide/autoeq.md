@@ -8,7 +8,7 @@ FineTune can apply headphone-specific frequency response corrections using profi
 
 Every pair of headphones colors the sound differently. Some boost bass, others are harsh in the treble. AutoEQ measures these deviations and generates corrective EQ filters. FineTune applies these filters per-device, so each pair of headphones gets its own correction profile.
 
-Corrections are applied on top of FineTune's 10-band EQ, so you can still tweak the sound to your taste after applying a profile.
+Corrections are applied on top of each app's EQ, so you can still tweak the sound to your taste after applying a profile, and any profile can be the starting point of your own preset in the EQ Manager.
 
 ## Browse Built-in Profiles
 
