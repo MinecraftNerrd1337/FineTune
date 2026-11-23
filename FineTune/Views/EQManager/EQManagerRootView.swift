@@ -432,6 +432,8 @@ struct EQManagerRootView: View {
         let showsCompared = isShowingCompared
         return EQManagerPresetDetail.Comparison(
             other: showsCompared ? editor.draft : compared,
+            showsOther: $comparison.showsOtherCurve,
+            showsHalo: $comparison.showsHalo,
             otherOffsetDB: showsCompared ? -comparedOffset : comparedOffset,
             otherColor: showsCompared ? EQResponseGraph.baseCurveColor : EQResponseGraph.comparedCurveColor,
             comparedPreampDB: compared.preampDB,

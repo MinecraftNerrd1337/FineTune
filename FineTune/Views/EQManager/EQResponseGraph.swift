@@ -4,7 +4,7 @@ import SwiftUI
 
 /// Frequency response graph of a preset: log frequency axis (20 Hz to 20 kHz), dB axis,
 /// the summed curve, the preamp level, the perceived level and one point per band, numbered by
-/// frequency.
+/// frequency, which drags it in edit mode (a tick on the curve otherwise).
 /// A graphic preset shows its curve and, when there are few enough, its points.
 ///
 /// The dB axis shows the window of `scale`. ⌘-scrolling or ⌘-dragging the graph moves it, as a
@@ -29,7 +29,7 @@ struct EQResponseGraph: View {
     var perceivedLevelDB: Double? = nil
     /// Another preset, drawn under the curve to compare them.
     var compared: ComparedCurve? = nil
-    /// Color of the curve, its bands and its perceived level.
+    /// Color of the curve, its bands and the middle level of the axis.
     var curveColor: Color = Self.baseCurveColor
 
     /// A preset drawn under the curve, moved by `offsetDB`.
@@ -37,12 +37,16 @@ struct EQResponseGraph: View {
         let profile: AutoEQProfile
         let offsetDB: Double
         let color: Color
+        /// A pale halo around it, which shows where the two curves meet.
+        var showsHalo = true
     }
 
     /// Color of the preset shown in the EQ Manager's top bar.
     static let baseCurveColor = Color.accentColor
     /// Color of the preset compared with it, also shown beside its name in the EQ Manager.
     static let comparedCurveColor = Color.orange
+    /// Color of the perceived level, apart from both presets' colors.
+    static let perceivedLevelColor = Color.purple
 
     /// How the preamp is drawn. `.peakLimit` (default) mirrors it above 0 dB: the curve should
     /// stay under that line. `.gainLevel` draws it at its own (negative) level.
@@ -147,7 +151,8 @@ struct EQResponseGraph: View {
         // Right-aligned where the axis draws its other levels
         let width = Self.levelFieldWidth
         return EQScaleNumberField(
-            value: value, range: range, style: .axisLabel, width: width, isEmphasized: isCenter, onCommit: onCommit
+            value: value, range: range, style: .axisLabel, width: width, isEmphasized: isCenter, tint: curveColor,
+            onCommit: onCommit
         )
             .position(x: plot.minX - Self.levelGap - width / 2, y: y)
     }
@@ -227,7 +232,11 @@ struct EQResponseGraph: View {
         }
 
         if profile.kind == .parametric {
-            drawKnobs(into: &context, plot: plot)
+            if isEditable {
+                drawKnobs(into: &context, plot: plot)
+            } else {
+                drawMarkers(into: &context, plot: plot)
+            }
             drawReadout(into: &context, plot: plot)
         }
     }
@@ -300,27 +309,40 @@ struct EQResponseGraph: View {
         )
     }
 
-    /// The compared preset's curve, thinner and under this one.
+    /// The compared preset's curve, thinner and under this one, in a wide pale halo unless it is
+    /// turned off: where the two curves meet, the halo still shows around the one on top.
     private func drawComparedCurve(into context: inout GraphicsContext, plot: CGRect) {
         guard let compared, compared.profile.hasCorrection else { return }
         let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount)
         let gains = AutoEQResponse.curve(of: compared.profile, frequencies: frequencies).map { $0 + compared.offsetDB }
+        let path = polyline(frequencies: frequencies, gains: gains, plot: plot)
+        if compared.showsHalo {
+            context.stroke(
+                path,
+                with: .color(compared.color.opacity(0.32)),
+                style: StrokeStyle(lineWidth: 7, lineCap: .round, lineJoin: .round)
+            )
+        }
         context.stroke(
-            polyline(frequencies: frequencies, gains: gains, plot: plot),
+            path,
             with: .color(compared.color.opacity(0.8)),
             style: StrokeStyle(lineWidth: 1.5, lineJoin: .round)
         )
     }
 
+    /// What the hovered or selected band adds, as a pale area from 0 dB: a band that does little
+    /// draws little, and no line doubles the 0 dB line.
     private func drawSingleBand(_ filter: AutoEQFilter, into context: inout GraphicsContext, plot: CGRect) {
         let frequencies = AutoEQResponse.logFrequencies(count: Self.curvePointCount / 2)
         let gains = AutoEQResponse.curve(
             of: filter, engine: profile.effectiveEngine, frequencies: frequencies, baseRate: profile.designBaseRate)
-        context.stroke(
-            polyline(frequencies: frequencies, gains: gains, plot: plot),
-            with: .color(curveColor.opacity(0.6)),
-            style: StrokeStyle(lineWidth: 1.2, dash: [4, 3])
-        )
+        guard let first = frequencies.first, let last = frequencies.last else { return }
+        let zeroY = y(for: 0, in: plot)
+        var area = polyline(frequencies: frequencies, gains: gains, plot: plot)
+        area.addLine(to: CGPoint(x: x(for: last, in: plot), y: zeroY))
+        area.addLine(to: CGPoint(x: x(for: first, in: plot), y: zeroY))
+        area.closeSubpath()
+        context.fill(area, with: .color(curveColor.opacity(0.15)))
     }
 
     private func drawPreamp(into context: inout GraphicsContext, plot: CGRect) {
@@ -346,24 +368,28 @@ struct EQResponseGraph: View {
         )
     }
 
-    /// A thin line at the perceived level, under the curve, so the curve reads against it.
+    /// A thin line at the perceived level, under the curve, so the curve reads against it, in a
+    /// color of its own so it is never taken for a curve.
     private func drawPerceivedLevel(into context: inout GraphicsContext, plot: CGRect) {
         guard let level = perceivedLevelDB, shows(level) else { return }
         let py = y(for: level, in: plot)
-        let color = curveColor.opacity(0.35)
+        let color = Self.perceivedLevelColor
         context.stroke(
             line(from: CGPoint(x: plot.minX, y: py), to: CGPoint(x: plot.maxX, y: py)),
-            with: .color(color),
+            with: .color(color.opacity(0.55)),
             lineWidth: 1
         )
-        // Its caption under the line, or above it at the bottom of the graph
-        let below = py + 14 <= plot.maxY
+        // Its level on the side away from 0 dB, so it reads as this line's: above it when
+        // positive, under it when negative, unless the edge of the graph is too close
+        var above = level >= 0
+        if above && py - 14 < plot.minY { above = false }
+        if !above && py + 14 > plot.maxY { above = true }
         context.draw(
-            Text(String(format: "Perceived level %+.1f dB", level))
+            Text(String(format: "%+.1f dB", level))
                 .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(curveColor.opacity(0.6)),
-            at: CGPoint(x: plot.minX + 6, y: below ? py + 2 : py - 2),
-            anchor: below ? .topLeading : .bottomLeading
+                .foregroundStyle(color.opacity(0.9)),
+            at: CGPoint(x: plot.minX + 6, y: above ? py - 2 : py + 2),
+            anchor: above ? .bottomLeading : .topLeading
         )
     }
 
@@ -396,6 +422,41 @@ struct EQResponseGraph: View {
                     anchor: above ? .bottom : .top
                 )
             }
+        }
+    }
+
+    /// Outside edit mode, a short tick on the curve at each band's frequency: where the bands
+    /// sit, without the knobs that drag them. The hovered or selected one is longer, numbered.
+    private func drawMarkers(into context: inout GraphicsContext, plot: CGRect) {
+        let numbers = Self.bandNumbers(profile.filters)
+        for (index, point) in markerPoints(in: plot).enumerated() {
+            let isActive = index == selectedBand || index == hoveredBand
+            let half: CGFloat = isActive ? 7 : 4.5
+            context.stroke(
+                line(from: CGPoint(x: point.x, y: point.y - half), to: CGPoint(x: point.x, y: point.y + half)),
+                with: .color(curveColor),
+                style: StrokeStyle(lineWidth: isActive ? 2 : 1.5, lineCap: .round)
+            )
+            if isActive {
+                context.draw(
+                    Text("\(numbers[index])")
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color.primary),
+                    at: CGPoint(x: point.x, y: point.y - half - 2),
+                    anchor: .bottom
+                )
+            }
+        }
+    }
+
+    /// Where each band's tick sits: on the curve, at the band's frequency, within the window.
+    private func markerPoints(in plot: CGRect) -> [CGPoint] {
+        let frequencies = profile.filters.map(\.frequency)
+        guard !frequencies.isEmpty else { return [] }
+        let gains = AutoEQResponse.curve(of: profile, frequencies: frequencies)
+        return zip(frequencies, gains).map { frequency, gain in
+            let shown = min(max(gain, Double(scale.bottom)), Double(scale.top))
+            return CGPoint(x: x(for: frequency, in: plot), y: y(for: shown, in: plot))
         }
     }
 
@@ -461,9 +522,10 @@ struct EQResponseGraph: View {
 
     private func nearestBand(to point: CGPoint, plot: CGRect) -> Int? {
         guard profile.kind == .parametric else { return nil }
+        // The knobs in edit mode, the ticks on the curve otherwise
+        let points = isEditable ? profile.filters.map { knobPoint(for: $0, in: plot) } : markerPoints(in: plot)
         var best: (index: Int, distance: CGFloat)?
-        for (index, filter) in profile.filters.enumerated() {
-            let knob = knobPoint(for: filter, in: plot)
+        for (index, knob) in points.enumerated() {
             let distance = hypot(knob.x - point.x, knob.y - point.y)
             if distance <= Self.hitRadius, distance < (best?.distance ?? .infinity) {
                 best = (index, distance)

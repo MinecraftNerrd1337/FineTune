@@ -16,8 +16,11 @@ struct EQManagerPresetDetail: View {
 
     /// Two presets compared, seen from the one shown here.
     struct Comparison {
-        /// The other preset, drawn under this one.
+        /// The other preset, drawn under this one when `showsOther` is on, with a halo when
+        /// `showsHalo` is on: the checkboxes beside the graph's scale.
         let other: AutoEQProfile
+        let showsOther: Binding<Bool>
+        let showsHalo: Binding<Bool>
         /// Added to its curve on the graph: what it plays at above this preset (preamps and
         /// extra gain).
         let otherOffsetDB: Double
@@ -33,6 +36,13 @@ struct EQManagerPresetDetail: View {
         let preampOn: Bool
         let setTrim: (Double) -> Void
         let match: () -> Void
+
+        /// The other preset's curve on the graph, unless hidden.
+        var otherCurve: EQResponseGraph.ComparedCurve? {
+            guard showsOther.wrappedValue else { return nil }
+            return EQResponseGraph.ComparedCurve(
+                profile: other, offsetDB: otherOffsetDB, color: otherColor, showsHalo: showsHalo.wrappedValue)
+        }
     }
 
     @State private var selectedBand: Int?
@@ -76,9 +86,7 @@ struct EQManagerPresetDetail: View {
                     },
                     onDragEnded: { editor.endGesture() },
                     perceivedLevelDB: perceived,
-                    compared: comparison.map {
-                        EQResponseGraph.ComparedCurve(profile: $0.other, offsetDB: $0.otherOffsetDB, color: $0.otherColor)
-                    },
+                    compared: comparison?.otherCurve,
                     curveColor: color
                 )
                 // 220 pt at the window's minimum size; grows with the band table as it is enlarged
@@ -92,7 +100,7 @@ struct EQManagerPresetDetail: View {
         .tint(color)
         .onChange(of: preset.id, initial: true) { _, _ in
             selectedBand = nil
-            scale = EQGraphScale(span: Self.needsWideScale(preset) ? 24 : 12)
+            scale = EQGraphScale()
         }
         .onChange(of: preset.filters.count) { _, count in
             if let band = selectedBand, band >= count { selectedBand = count > 0 ? count - 1 : nil }
@@ -144,14 +152,6 @@ struct EQManagerPresetDetail: View {
         guard preset.hasCorrection else { return "—" }
         guard let linearPhase else { return "…" }
         return String(format: "%.2f dB", linearPhase.maxErrorDB)
-    }
-
-    /// A ±24 dB scale when the preset does not fit in ±12 dB.
-    private static func needsWideScale(_ preset: AutoEQProfile) -> Bool {
-        if preset.filters.contains(where: { abs($0.gainDB) > 12 }) || abs(preset.preampDB) > 12 { return true }
-        let frequencies = AutoEQResponse.logFrequencies(count: 200)
-        return AutoEQResponse.curve(of: preset, frequencies: frequencies)
-            .contains { abs($0) > 12 }
     }
 
     // MARK: - Preset Section
@@ -401,8 +401,29 @@ struct EQManagerPresetDetail: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
+            if let comparison {
+                comparedCurveToggles(comparison)
+                    .padding(.trailing, DesignTokens.Spacing.md)
+            }
             scaleControls
         }
+    }
+
+    /// While comparing: whether the other preset's curve is drawn, and its halo.
+    private func comparedCurveToggles(_ comparison: Comparison) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Toggle("Other curve", isOn: comparison.showsOther)
+                .help("Draw the other preset's curve under the one shown")
+            Toggle("Halo", isOn: comparison.showsHalo)
+                .disabled(!comparison.showsOther.wrappedValue)
+                .help("A pale halo around the other curve, which shows where the two curves meet")
+        }
+        .toggleStyle(.checkbox)
+        .controlSize(.small)
+        .font(.system(size: 10))
+        // Settings of the graph, not of either preset: never in the shown preset's color
+        .tint(Color.accentColor)
+        .fixedSize()
     }
 
     /// The scale of the graph, ±1 to ±24 dB around its middle level: a slider stepping by a dB,

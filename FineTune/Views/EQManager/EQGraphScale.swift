@@ -89,6 +89,8 @@ struct EQScaleNumberField: View {
     var width: CGFloat = 38
     /// Tints the pill: the middle level, so the center of the graph shows at any level.
     var isEmphasized = false
+    /// Color of the emphasized pill: the color of the curve shown.
+    var tint: Color = .accentColor
     let onCommit: (Int) -> Void
 
     @State private var draft = ""
@@ -116,10 +118,10 @@ struct EQScaleNumberField: View {
 
     /// A pill, so the levels that can be typed in stand out from the axis' other levels.
     private var label: some View {
-        let tint = isEmphasized ? Color.accentColor : Color.primary
+        let tint = isEmphasized ? self.tint : Color.primary
         return Text(value == 0 ? "0 dB" : text(value))
             .font(.system(size: 10, weight: .medium).monospacedDigit())
-            .foregroundStyle(isEmphasized ? Color.accentColor : Color.primary)
+            .foregroundStyle(isEmphasized ? self.tint : Color.primary)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 5)
