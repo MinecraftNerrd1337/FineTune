@@ -57,6 +57,7 @@ nonisolated struct AppSettings: Codable, Equatable {
     var hudStyle: HUDStyle = .tahoe                // Visual style of the volume HUD
     var mediaKeyControlEnabled: Bool = true        // Intercept F10/F11/F12 to drive the default output device
     var fineTuneHUDEnabled: Bool = true            // FineTune's HUD for the default output device, else none
+    var hudAbsolutePosition: Bool = false          // Under macOS Zoom, the HUD in the part of the screen shown
     var hudLiquidGlass: Bool = true                // The HUD on Liquid Glass (macOS 26+), else on a blur
     var volumeHotkeyStep: VolumeHotkeyStep = .normal  // Slider-domain step per keypress; user-configurable
 
@@ -104,6 +105,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .tahoe
         mediaKeyControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediaKeyControlEnabled) ?? true
         fineTuneHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .fineTuneHUDEnabled) ?? true
+        hudAbsolutePosition = try c.decodeIfPresent(Bool.self, forKey: .hudAbsolutePosition) ?? false
         hudLiquidGlass = try c.decodeIfPresent(Bool.self, forKey: .hudLiquidGlass) ?? true
         volumeHotkeyStep = try c.decodeIfPresent(VolumeHotkeyStep.self, forKey: .volumeHotkeyStep) ?? .normal
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]

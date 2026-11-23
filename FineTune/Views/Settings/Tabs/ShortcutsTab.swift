@@ -97,6 +97,17 @@ struct ShortcutsTab: View {
                     HUDStyleSegmentedControl(selection: $settings.appSettings.hudStyle)
                 }
 
+                SettingsRowDivider()
+                SettingsRow(
+                    "Absolute Position",
+                    description: "While macOS Zoom magnifies the screen, show the HUD in the part you see"
+                ) {
+                    Toggle("", isOn: $settings.appSettings.hudAbsolutePosition)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .labelsHidden()
+                }
+
                 if #available(macOS 26.0, *) {
                     SettingsRowDivider()
                     SettingsRow(

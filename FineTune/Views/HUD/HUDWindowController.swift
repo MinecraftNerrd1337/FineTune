@@ -16,6 +16,10 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     private var backdrop: HUDBackdropView?
     private var hostingView: NSHostingView<AnyView>?
     private var hideTask: Task<Void, Never>?
+    /// Moves the HUD along with what macOS Zoom shows, while the HUD is on screen
+    private var followZoomTask: Task<Void, Never>?
+    /// The HUD's size and style where it was last placed, to place it again as Zoom moves
+    private var placed: (size: NSSize, style: HUDStyle)?
     private var styleAtLastShow: HUDStyle = .tahoe
 
     /// Slider fraction in [0, 1]. The wiring site converts to gain using the current device's tier.
@@ -43,6 +47,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
 
     var hideDelayOverride: Duration?
     var frameProvider: () -> NSRect? = { NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame }
+    var zoomProvider: () -> ZoomViewport.Area? = { ZoomViewport.current() }
     private(set) var showCallCount: Int = 0
     private(set) var showDidUpdatePanel: Bool = false
 
@@ -75,6 +80,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     func shutdown() {
         hideTask?.cancel()
         hideTask = nil
+        followZoomTask?.cancel()
+        followZoomTask = nil
         if let panel, panel.isVisible {
             panel.orderOut(nil)
         }
@@ -306,15 +313,33 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     }
 
     /// Sizes the window around the HUD, with room for the glass's edge, at the HUD's place
-    private func place(_ panel: NSPanel, size: NSSize, style: HUDStyle) {
+    private func place(_ panel: NSPanel, size: NSSize, style: HUDStyle, onlyIfMoved: Bool = false) {
+        placed = (size, style)
         let inset = backdrop?.inset ?? 0
         let origin = position(for: style, size: size)
         let frame = NSRect(
             x: origin.x - inset, y: origin.y - inset,
             width: size.width + inset * 2, height: size.height + inset * 2
         )
+        if onlyIfMoved && panel.frame == frame { return }
         panel.setFrame(frame, display: false)
         refreshShadow(of: panel)
+    }
+
+    /// While macOS Zoom magnifies the screen, keeps the HUD in the part of it shown as the
+    /// pointer moves that part, until the HUD leaves the screen
+    private func followZoom() {
+        guard followZoomTask == nil,
+              settingsManager.appSettings.hudAbsolutePosition,
+              zoomProvider() != nil else { return }
+        followZoomTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(16))
+                guard let self, let panel = self.panel, panel.isVisible, let placed = self.placed else { break }
+                self.place(panel, size: placed.size, style: placed.style, onlyIfMoved: true)
+            }
+            self?.followZoomTask = nil
+        }
     }
 
     /// Puts the HUD on screen, or keeps it there, and hands it to the window server at once, so
@@ -337,6 +362,7 @@ final class HUDWindowController: MediaKeyHUDPresenting {
         }
         panel.orderFrontRegardless()
         CATransaction.flush()
+        followZoom()
     }
 
     /// For the hosting view, so FineTune's dynamic colors resolve as the SwiftUI content does
@@ -347,32 +373,45 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     // MARK: - Position Math
 
     /// Tahoe: top-right. Classic: bottom-center. Under suppression-degraded,
-    /// Tahoe shifts left so it doesn't overlap the native top-right HUD.
+    /// Tahoe shifts left so it doesn't overlap the native top-right HUD. The margins shrink by
+    /// `marginScale`, the magnification macOS Zoom gives them back.
     static func computePosition(
         style: HUDStyle,
         size: NSSize,
         visibleFrame: NSRect,
-        suppressionDegraded: Bool
+        suppressionDegraded: Bool,
+        marginScale: CGFloat = 1
     ) -> NSPoint {
+        let edge = 8 / marginScale
         switch style {
         case .tahoe:
             if suppressionDegraded {
                 let x = visibleFrame.minX + visibleFrame.width * 0.25 - size.width / 2
-                let y = visibleFrame.maxY - size.height - 8
+                let y = visibleFrame.maxY - size.height - edge
                 return NSPoint(x: x, y: y)
             } else {
-                let x = visibleFrame.maxX - size.width - 8
-                let y = visibleFrame.maxY - size.height - 8
+                let x = visibleFrame.maxX - size.width - edge
+                let y = visibleFrame.maxY - size.height - edge
                 return NSPoint(x: x, y: y)
             }
         case .classic:
             let x = visibleFrame.midX - size.width / 2
-            let y = visibleFrame.minY + 140
+            let y = visibleFrame.minY + 140 / marginScale
             return NSPoint(x: x, y: y)
         }
     }
 
     private func position(for style: HUDStyle, size: NSSize) -> NSPoint {
+        // With Absolute Position, under macOS Zoom the HUD goes in the part of the screen shown
+        if settingsManager.appSettings.hudAbsolutePosition, let zoom = zoomProvider() {
+            return Self.computePosition(
+                style: style,
+                size: size,
+                visibleFrame: zoom.visibleRect,
+                suppressionDegraded: mediaKeyStatus.suppressionDegraded,
+                marginScale: zoom.factor
+            )
+        }
         let frame = frameProvider() ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         return Self.computePosition(
             style: style,

@@ -92,6 +92,7 @@ If the keys still don't work right after launch, a WindowServer handoff can brie
 ## Volume HUD not appearing
 
 - Check Settings → **Shortcuts**. **Use FineTune HUD** shows FineTune's HUD; turned off, no indicator shows while FineTune captures the volume keys, for apps that show their own (a notch app). macOS's own indicator can't show a level FineTune sets: turn **Capture Volume Keys** off to get it back, with macOS's volume steps.
+- With macOS Zoom magnifying the screen, turn on **Absolute Position** to show the HUD in the part of the screen you see, in the same corner. Off (the default), the HUD keeps its place on the whole screen, which Zoom may not show.
 - Switch HUD styles if one isn't rendering. Tahoe uses macOS 26's system HUD look; Classic matches the older translucent rounded-rect style.
 
 ## EQ not applying / sounds the same
