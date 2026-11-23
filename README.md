@@ -2,7 +2,7 @@
 
 <h3>FineTune - ZebraPaw's Fork</h3>
 
-Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves, run as biquads or by convolution. Lives in your menu bar. Free and open-source.
+Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves (the format of Wavelet and Equalizer APO), run as biquads or by convolution. Lives in your menu bar. Free and open-source.
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
 
@@ -47,7 +47,7 @@ Open it from the sliders button at the top of the menu bar panel.
 
 ### Build your presets band by band
 
-Start from an empty preset or from one of thousands of headphone profiles, then shape it: drag a point on the graph, or type the exact frequency, gain and Q. Up to 128 bands (peak, low shelf, high shelf), a preamp, and the sample rate the filters were designed for. Rather work with a curve? A preset can also be a GraphicEQ curve.
+Start from an empty preset or from one of thousands of headphone profiles, then shape it: drag a point on the graph, or type the exact frequency, gain and Q. Up to 128 bands (peak, low shelf, high shelf), a preamp, and the sample rate the filters were designed for. Rather work with a curve? A preset can also be a GraphicEQ curve, the format Wavelet and Equalizer APO use, so a curve made there plays here as is.
 
 Profiles you download or import stay untouched as templates: changing one saves your version as a new preset.
 

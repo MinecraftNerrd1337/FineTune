@@ -2,7 +2,7 @@
 
 <h3>FineTune - ZebraPaw's Fork</h3>
 
-按 App 调节音量、增益与路由，再为每台输出设备从头到尾打造自己的 EQ：参数滤波器或 GraphicEQ 曲线，以 Biquad 或卷积方式运行。常驻菜单栏，免费且开源。
+按 App 调节音量、增益与路由，再为每台输出设备从头到尾打造自己的 EQ：参数滤波器或 GraphicEQ 曲线（Wavelet 与 Equalizer APO 使用的格式），以 Biquad 或卷积方式运行。常驻菜单栏，免费且开源。
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="下载 macOS 版本" height="48"/></a>
 
@@ -50,7 +50,7 @@ Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 
 
 ### 逐个频段打造预设
 
-从一个空白预设开始，或者从数千条耳机曲线中的一条开始，然后慢慢塑造：在图上拖动一个点，或输入精确的频率、增益和 Q 值。最多 128 个频段（峰值、低架、高架），一个前级增益，以及滤波器设计时所用的采样率。更喜欢用曲线？预设也可以是一条 GraphicEQ 曲线。
+从一个空白预设开始，或者从数千条耳机曲线中的一条开始，然后慢慢塑造：在图上拖动一个点，或输入精确的频率、增益和 Q 值。最多 128 个频段（峰值、低架、高架），一个前级增益，以及滤波器设计时所用的采样率。更喜欢用曲线？预设也可以是一条 GraphicEQ 曲线，也就是 Wavelet 和 Equalizer APO 使用的格式，在那里做好的曲线可以直接拿来用。
 
 下载或导入的配置会作为模板保持原样：修改它们会把你的版本另存为新预设。
 
