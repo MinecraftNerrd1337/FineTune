@@ -414,7 +414,7 @@ struct EQManagerPresetDetail: View {
         VStack(alignment: .leading, spacing: 0) {
             Toggle("Other curve", isOn: comparison.showsOther)
                 .help("Draw the other preset's curve under the one shown")
-            Toggle("Halo", isOn: comparison.showsHalo)
+            Toggle("With halo", isOn: comparison.showsHalo)
                 .disabled(!comparison.showsOther.wrappedValue)
                 .help("A pale halo around the other curve, which shows where the two curves meet")
         }

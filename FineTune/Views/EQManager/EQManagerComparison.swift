@@ -38,8 +38,9 @@ final class EQManagerComparison {
     var displayed: Side = .base
     /// The other preset's curve is drawn under the one shown.
     var showsOtherCurve = true
-    /// The other preset's curve has a pale halo, which shows where the two curves meet.
-    var showsHalo = true
+    /// The other preset's curve has a pale halo, which shows where the two curves meet. Off
+    /// until asked for.
+    var showsHalo = false
 
     /// The version chosen. It may not be available any more (editing ended): see `current(in:)`.
     private(set) var version: Version = .edited

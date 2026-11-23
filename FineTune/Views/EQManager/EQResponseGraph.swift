@@ -38,7 +38,7 @@ struct EQResponseGraph: View {
         let offsetDB: Double
         let color: Color
         /// A pale halo around it, which shows where the two curves meet.
-        var showsHalo = true
+        var showsHalo = false
     }
 
     /// Color of the preset shown in the EQ Manager's top bar.
