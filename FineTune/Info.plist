@@ -13,7 +13,7 @@
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/MinecraftNerrd1337/FineTune/main/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>xExSoQmCLDCez0KyhZ9EM9PdOZFZgyX/+VF+OVrpIlo=</string>
+	<string>TA_CLE_PUBLIQUE</string>
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
 	<key>CFBundleURLTypes</key>
