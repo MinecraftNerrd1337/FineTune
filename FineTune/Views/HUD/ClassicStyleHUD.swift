@@ -2,7 +2,8 @@
 import SwiftUI
 
 /// 200×200 pre-Tahoe-style volume HUD: 80 pt glyph, 16-tile segment row and the percentage.
-/// Stateless.
+/// As in macOS's own, the tiles are light on a dark strip and fill by quarters: a level between
+/// two tiles lights part of the next one. Stateless.
 struct ClassicStyleHUD: View {
     let sliderFraction: Float
     let mute: Bool
@@ -16,9 +17,11 @@ struct ClassicStyleHUD: View {
     /// Also the corner of the blur AppKit draws behind it
     static let cornerRadius: CGFloat = 16
     private static let iconSize: CGFloat = 80
-    private static let tileSize: CGFloat = 7.5
-    private static let tileSpacing: CGFloat = 2
-    private static let tileSideInset: CGFloat = 20
+    private static let tileSize: CGFloat = 8.25
+    /// The strip between the tiles and around them
+    private static let tileGap: CGFloat = 1.5
+    /// A tile lights by quarters, as in macOS's own HUD
+    private static let tileSteps: Float = 4
 
     @Environment(\.hudOnGlass) private var onGlass
     @Environment(\.colorScheme) private var colorScheme
@@ -37,8 +40,11 @@ struct ClassicStyleHUD: View {
         Int((displayValue * 100).rounded())
     }
 
-    private var filledTileCount: Int {
-        Int((displayValue * Float(Self.tileCount)).rounded())
+    /// How much of a tile is lit, from 0 to 1, by quarters.
+    private func litFraction(ofTile index: Int) -> CGFloat {
+        let quarters = (displayValue * Float(Self.tileCount) * Self.tileSteps).rounded()
+        let lit = quarters / Self.tileSteps - Float(index)
+        return CGFloat(max(0, min(1, lit)))
     }
 
     private var waveIconName: String {
@@ -93,15 +99,16 @@ struct ClassicStyleHUD: View {
     private var tileSection: some View {
         VStack(spacing: 0) {
             Spacer().frame(height: 26)
-            HStack(spacing: Self.tileSpacing) {
-                Spacer().frame(width: Self.tileSideInset)
+            HStack(spacing: Self.tileGap) {
                 ForEach(0..<Self.tileCount, id: \.self) { index in
                     Rectangle()
-                        .fill(index < filledTileCount ? palette.litTile : palette.unlitTile)
-                        .frame(width: Self.tileSize, height: Self.tileSize)
+                        .fill(palette.litTile)
+                        .frame(width: Self.tileSize * litFraction(ofTile: index), height: Self.tileSize)
+                        .frame(width: Self.tileSize, alignment: .leading)
                 }
-                Spacer().frame(width: Self.tileSideInset)
             }
+            .padding(Self.tileGap)
+            .background(Rectangle().fill(palette.tileStrip))
             Text(mute ? "Muted" : "\(displayedPercent)%")
                 .font(.system(size: 13, weight: .semibold).monospacedDigit())
                 .foregroundStyle(palette.text)

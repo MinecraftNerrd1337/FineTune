@@ -34,13 +34,15 @@ struct HUDPalette {
         onGlass ? ink.opacity(0.75) : DesignTokens.Colors.textSecondary
     }
 
-    /// The square HUD's tiles, up to the level and past it
+    /// The square HUD's tiles up to the level, light on a dark strip as in macOS's own HUD: the
+    /// strip outlines them, and past the level it shows alone. Opaque, so they read on any
+    /// background, on the glass as on the blur.
     var litTile: Color {
-        onGlass ? ink : .primary
+        colorScheme == .dark ? Color(white: 0.93) : .white
     }
 
-    var unlitTile: Color {
-        onGlass ? ink.opacity(0.25) : .primary.opacity(0.25)
+    var tileStrip: Color {
+        colorScheme == .dark ? Color(white: 0.16) : Color(white: 0.42)
     }
 
     /// The corner HUD's bar, up to the level and past it. On Liquid Glass, on a track of the
