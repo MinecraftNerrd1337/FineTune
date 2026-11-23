@@ -17,10 +17,16 @@ jobs:
 
       - name: Check the update key is this fork's
         run: |
-          # The upstream app's Sparkle public key: updates signed with this fork's private
-          # key would be refused by every copy built with it
-          if grep -q "xExSoQmCLDCez0KyhZ9EM9PdOZFZgyX/+VF+OVrpIlo=" FineTune/Info.plist; then
+          # Every copy built with a wrong key refuses all the updates that follow: the key must be
+          # this fork's Sparkle public key, an Ed25519 key of 32 bytes in base64
+          KEY=$(/usr/libexec/PlistBuddy -c "Print :SUPublicEDKey" FineTune/Info.plist)
+          if [ "$KEY" = "xExSoQmCLDCez0KyhZ9EM9PdOZFZgyX/+VF+OVrpIlo=" ]; then
             echo "::error::SUPublicEDKey in FineTune/Info.plist is still the upstream key. Run Sparkle's generate_keys, put the public key there and the private key in the SPARKLE_PRIVATE_KEY secret."
+            exit 1
+          fi
+          BYTES=$(printf '%s' "$KEY" | base64 --decode 2>/dev/null | wc -c | tr -d ' ')
+          if [ "$BYTES" != "32" ]; then
+            echo "::error::SUPublicEDKey in FineTune/Info.plist ($KEY) is not a Sparkle public key. Print yours with Sparkle's generate_keys -p."
             exit 1
           fi
 
