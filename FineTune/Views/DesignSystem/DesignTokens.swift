@@ -489,6 +489,6 @@ enum DesignTokens {
         static let repository = URL(string: "https://github.com/MinecraftNerrd1337/FineTune")!
 
         /// Project license on GitHub
-        static let license = URL(string: "https://github.com/ronitsingh10/FineTune/blob/main/LICENSE")!
+        static let license = URL(string: "https://github.com/MinecraftNerrd1337/FineTune/blob/main/LICENSE")!
     }
 }

@@ -65,6 +65,9 @@ struct AboutTab: View {
 
             Text("·")
             Text("© \(yearText) Ronit Singh")
+
+            Text("·")
+            Text("ZebraPaw's Fork")
         }
         .font(.system(size: 10))
         .foregroundStyle(.tertiary)

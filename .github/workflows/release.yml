@@ -166,7 +166,7 @@ jobs:
           # Run generate_appcast to update appcast.xml with proper EdDSA signature
           sparkle_tools/bin/generate_appcast \
             --ed-key-file "$RUNNER_TEMP/sparkle_private_key" \
-            --download-url-prefix "https://github.com/ronitsingh10/FineTune/releases/download/v${VERSION}/" \
+            --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/" \
             -o appcast.xml \
             Release/
 
