@@ -82,23 +82,13 @@ struct AboutLinkChip: View {
 // MARK: - Previews
 
 #Preview("About Link Chip") {
-    HStack(spacing: 8) {
-        AboutLinkChip(
-            label: "Donate",
-            icon: "heart.fill",
-            hoverIcon: "heart.fill",
-            hoverColor: .pink,
-            url: DesignTokens.Links.support,
-            isPrimary: true
-        )
-        AboutLinkChip(
-            label: "Star on GitHub",
-            icon: "star",
-            hoverIcon: "star.fill",
-            hoverColor: .yellow,
-            url: URL(string: "https://github.com/ronitsingh10/FineTune")!
-        )
-    }
+    AboutLinkChip(
+        label: "Star on GitHub",
+        icon: "star",
+        hoverIcon: "star.fill",
+        hoverColor: .yellow,
+        url: DesignTokens.Links.repository
+    )
     .padding(24)
     .frame(width: 520, height: 80)
     .darkGlassBackground()

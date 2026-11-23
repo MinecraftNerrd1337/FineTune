@@ -69,9 +69,6 @@ struct MenuBarPanelView: View {
     /// collapsed). Mirrors the `expandedRowID` pattern used for per-app EQ.
     @State private var expandedDeviceUID: String?
 
-    /// Hover state for support link heart animation
-    @State private var isSupportHovered = false
-
     /// Namespace for device toggle animation
     @Namespace private var deviceToggleNamespace
 
@@ -370,24 +367,8 @@ struct MenuBarPanelView: View {
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.xs)
 
-            // Footer: support link + quit
+            // Footer: quit
             HStack {
-                Button {
-                    NSWorkspace.shared.open(DesignTokens.Links.support)
-                } label: {
-                    Label("Donate", systemImage: isSupportHovered ? "heart.fill" : "heart")
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isSupportHovered ? Color(nsColor: .systemPink) : DesignTokens.Colors.textTertiary)
-                .onHover { hovering in
-                    withAnimation(DesignTokens.Animation.hover) {
-                        isSupportHovered = hovering
-                    }
-                }
-                .accessibilityLabel("Donate to FineTune")
-                .help("Donate to FineTune")
-
                 Spacer()
 
                 Button {

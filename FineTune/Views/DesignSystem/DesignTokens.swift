@@ -485,8 +485,8 @@ enum DesignTokens {
     // MARK: - Links
 
     enum Links {
-        /// Financial support page (currently Ko-fi, URL is platform-agnostic in UI)
-        static let support = URL(string: "https://ko-fi.com/ronitsingh10")!
+        /// This fork's repository on GitHub
+        static let repository = URL(string: "https://github.com/MinecraftNerrd1337/FineTune")!
 
         /// Project license on GitHub
         static let license = URL(string: "https://github.com/ronitsingh10/FineTune/blob/main/LICENSE")!
