@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// What the AutoEQ wand of an output device shows and changes, read from the engine. The device
-/// rows of the menu bar panel and the EQ Manager's Apply to DAC menu build their wand from it,
+/// rows of the menu bar panel and the EQ Manager's DACs menu build their wand from it,
 /// so both show and change the same settings.
 @MainActor
 struct AutoEQDeviceMenu {

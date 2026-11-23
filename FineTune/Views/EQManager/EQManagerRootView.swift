@@ -8,8 +8,10 @@ import UniformTypeIdentifiers
 /// Saving follows the library's rules (`AutoEQProfileManager.saveKind`): a preset is saved in
 /// place, after a confirmation (a setting) and with its replaced version kept in its history; a
 /// template keeps its bands, so changing them saves a new preset. The Convert menu makes a new
-/// preset from the one shown, in another form (`EQManagerConvertSheet`). The Apply to DAC menu
-/// makes an output device use the preset shown (`EQManagerApplyButton`). The devices that use
+/// preset from the one shown, in another form (`EQManagerConvertSheet`). The DACs menu opens the
+/// preset an output device uses, or makes a device use the preset shown
+/// (`EQManagerDACMenuButton`). Opening another preset over unsaved changes asks to save or
+/// discard them first (`EQManagerOpenRequest`). The devices that use
 /// the preset shown can play it as saved, with its edits, or another preset it is compared
 /// with, at the same perceived level (`EQManagerComparison`).
 @MainActor
@@ -42,6 +44,14 @@ struct EQManagerRootView: View {
     @State private var newPresetRequest: EQManagerNewPresetRequest?
     @State private var isClearHistoryConfirmationPresented = false
     @State private var conversionRequest: EQManagerConversionRequest?
+    /// A preset to open over unsaved changes: the dialog asks what to do with them.
+    @State private var openRequest: EQManagerOpenRequest?
+    /// A preset picked in the chooser: it opens once the chooser is gone.
+    @State private var openAfterChooser: EQManagerOpenRequest?
+    /// A preset to open once the changes are saved as a new preset, from the new preset sheet.
+    @State private var openAfterNewPreset: EQManagerOpenRequest?
+    /// Name of the preset edited, when it is asked for again: an alert says it is already open.
+    @State private var alreadyEditingName: String?
 
     private var profileManager: AutoEQProfileManager { audioEngine.autoEQProfileManager }
 
@@ -53,9 +63,16 @@ struct EQManagerRootView: View {
                 request: request,
                 onCreate: { name, useOnDevices in
                     newPresetRequest = nil
-                    createPreset(named: name, useOnDevices: useOnDevices)
+                    let pending = openAfterNewPreset
+                    openAfterNewPreset = nil
+                    if createPreset(named: name, useOnDevices: useOnDevices), let pending {
+                        open(pending.target)
+                    }
                 },
-                onCancel: { newPresetRequest = nil }
+                onCancel: {
+                    newPresetRequest = nil
+                    openAfterNewPreset = nil
+                }
             )
             .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
         }
@@ -435,45 +452,47 @@ struct EQManagerRootView: View {
             EQManagerPresetSelectorButton(preset: editor?.draft) {
                 chooserPurpose = .select
             }
-            .disabled(editor?.isEditing == true)
-            .help(editor?.isEditing == true ? "Save or discard your changes to choose another preset" : "")
 
-            if let editor {
-                EQManagerFavoriteButton(
-                    isFavorite: settings.isAutoEQFavorite(id: editor.draft.id),
-                    onToggle: { toggleFavorite(editor.draft.id) }
-                )
-            }
+            // Every control stays in place with no preset shown, dimmed, so none ever moves
+            EQManagerFavoriteButton(
+                isFavorite: editor.map { settings.isAutoEQFavorite(id: $0.draft.id) } ?? false,
+                onToggle: { if let editor { toggleFavorite(editor.draft.id) } }
+            )
+            .disabled(editor == nil)
 
             Spacer()
 
-            if let editor {
-                Button {
-                    chooserPurpose = .compare
-                } label: {
-                    // While comparing, it changes the compared preset
-                    Label(comparedPreset == nil ? "Compare" : "Change", systemImage: "square.split.2x1")
-                }
-                .disabled(comparison.comparedHasChanges)
-                .help(compareHelp)
-                EQManagerApplyButton(
-                    audioEngine: audioEngine,
-                    preset: editor.original,
-                    hasChanges: editor.hasChanges
-                )
-                convertMenu(editor)
-                // Stays in place in edit mode, so the menus beside it don't move: the edit
-                // controls have a bar of their own (`editBar`)
-                Button {
-                    editor.beginEditing()
-                    comparison.beginEditing(.base)
-                    comparison.displayed = .base
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
-                .disabled(editor.isEditing)
-                .help(editHelp(editor))
+            // Beside the preset selector: it opens the preset of a device, with or without one shown
+            EQManagerDACMenuButton(
+                audioEngine: audioEngine,
+                preset: editor?.original,
+                hasChanges: editor?.hasChanges == true,
+                onOpen: { openPreset(id: $0) }
+            )
+
+            Button {
+                chooserPurpose = .compare
+            } label: {
+                // While comparing, it changes the compared preset
+                Label(comparedPreset == nil ? "Compare" : "Change", systemImage: "square.split.2x1")
             }
+            .disabled(editor == nil || comparison.comparedHasChanges)
+            .help(compareHelp)
+
+            convertMenu(editor)
+
+            // Stays in place in edit mode, so the menus beside it don't move: the edit
+            // controls have a bar of their own (`editBar`)
+            Button {
+                guard let editor else { return }
+                editor.beginEditing()
+                comparison.beginEditing(.base)
+                comparison.displayed = .base
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+            .disabled(editor == nil || editor?.isEditing == true)
+            .help(editor.map { editHelp($0) } ?? "")
         }
         .padding(.horizontal, DesignTokens.Spacing.lg)
         .padding(.vertical, DesignTokens.Spacing.md)
@@ -496,6 +515,7 @@ struct EQManagerRootView: View {
     }
 
     private var compareHelp: String {
+        guard editor != nil else { return "" }
         if comparison.comparedHasChanges {
             return "The compared preset has unsaved changes: show it with the arrows to save or discard them"
         }
@@ -635,7 +655,7 @@ struct EQManagerRootView: View {
     private func presetChooser(_ purpose: ChooserPurpose) -> EQManagerPresetChooser {
         let selects = purpose == .select
         let onDelete: ((String) -> Void)? = selects ? { deletePreset($0) } : nil
-        // The chooser opens outside edit mode only: nothing unsaved is lost
+        // Unsaved changes are asked about once the chooser is gone
         let onDeselect: (() -> Void)? = selects ? { showNoPreset() } : nil
         return EQManagerPresetChooser(
             settings: settings,
@@ -646,7 +666,7 @@ struct EQManagerRootView: View {
             onChoose: { profile in
                 chooserPurpose = nil
                 switch purpose {
-                case .select: show(profile)
+                case .select: openAfterChooser = EQManagerOpenRequest(target: profile)
                 case .replace: replaceContents(with: profile)
                 case .compare: compare(with: profile)
                 }
@@ -711,20 +731,22 @@ struct EQManagerRootView: View {
     // MARK: - Import
 
     private var layout: some View {
-        VStack(spacing: 0) {
-            topBar
-            Divider()
-            compareBar
-            editBar
-            content
-        }
-        .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
+        withOpenDialogs(
+            VStack(spacing: 0) {
+                topBar
+                Divider()
+                compareBar
+                editBar
+                content
+            }
+            .frame(minWidth: Self.size.width, maxWidth: .infinity, minHeight: Self.size.height, maxHeight: .infinity)
+        )
     }
 
     /// The preset chooser, and the import sheet that takes its place for a filter list.
     private func withPresetSheets(_ view: some View) -> some View {
         view
-            .sheet(item: $chooserPurpose, onDismiss: presentPendingImport) { purpose in
+            .sheet(item: $chooserPurpose, onDismiss: afterChooser) { purpose in
                 presetChooser(purpose)
                     .preferredColorScheme(settings.appSettings.appearance.swiftUIColorScheme)
             }
@@ -734,8 +756,12 @@ struct EQManagerRootView: View {
             }
     }
 
-    /// A sheet replaces another only once the first is gone.
-    private func presentPendingImport() {
+    /// A sheet or dialog replaces the chooser only once it is gone.
+    private func afterChooser() {
+        if let request = openAfterChooser {
+            openAfterChooser = nil
+            requestOpen(request.target)
+        }
         guard let request = importAfterChooser else { return }
         importAfterChooser = nil
         importRequest = request
@@ -764,31 +790,142 @@ struct EQManagerRootView: View {
     }
 
     private func showNoPreset() {
+        openAfterChooser = EQManagerOpenRequest(target: nil)
         chooserPurpose = nil
-        editor = nil
+    }
+
+    // MARK: - Opening a Preset
+
+    /// Opens the preset a device uses, from the DACs menu.
+    private func openPreset(id: String) {
+        if let profile = profileManager.profile(for: id) {
+            requestOpen(profile)
+            return
+        }
+        Task { @MainActor in
+            if let profile = await profileManager.resolveProfile(for: id) {
+                requestOpen(profile)
+            } else {
+                alertMessage = "The preset of this DAC is not available."
+            }
+        }
+    }
+
+    /// Shows `profile` in the top bar, or no preset when nil, from the chooser or the DACs
+    /// menu. Asking for the preset shown changes nothing: in edit mode, an alert says it is the
+    /// one edited. Unsaved changes are saved or discarded first, on a dialog that can also cancel.
+    private func requestOpen(_ profile: AutoEQProfile?) {
+        guard let editor else {
+            open(profile)
+            return
+        }
+        // Commit a value still being typed in a field: it counts as a change
+        NSApp.windows.first { $0.title == Self.title }?.makeFirstResponder(nil)
+        if profile?.id == editor.original.id {
+            if editor.isEditing { alreadyEditingName = editor.original.name }
+            return
+        }
+        if editor.hasChanges {
+            openRequest = EQManagerOpenRequest(target: profile)
+        } else {
+            open(profile)
+        }
+    }
+
+    private func open(_ profile: AutoEQProfile?) {
+        if let profile {
+            show(profile)
+        } else {
+            editor = nil
+        }
+    }
+
+    /// Saves the changes of the preset shown, then opens the preset asked for. A template or
+    /// catalog preset keeps its bands: the changes go to a new preset, named on a sheet first.
+    private func saveThenOpen(_ request: EQManagerOpenRequest) {
+        guard let editor else { return }
+        switch AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft) {
+        case .updateInPlace:
+            saveInPlace(editor)
+            // Not saved: an alert says so, and the preset stays shown
+            if !editor.hasChanges { open(request.target) }
+        case .createPreset:
+            comparison.displayed = .base
+            requestNewPreset(from: editor)
+            openAfterNewPreset = request
+        }
+    }
+
+    private var openRequestTitle: String {
+        let name = editor?.original.name ?? ""
+        guard let target = openRequest?.target else { return "Save your changes to “\(name)” before closing it?" }
+        return "Save your changes to “\(name)” before opening “\(target.name)”?"
+    }
+
+    private var openRequestMessage: String {
+        guard let editor else { return "" }
+        switch AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft) {
+        case .createPreset:
+            return "This preset keeps its bands: your changes go to a new preset. If you don’t save them, they are lost."
+        case .updateInPlace:
+            return "If you don’t save them, your changes are lost."
+        }
+    }
+
+    private var saveBeforeOpenLabel: String {
+        guard let editor else { return "Save" }
+        let kind = AutoEQProfileManager.saveKind(original: editor.original, draft: editor.draft)
+        return kind == .createPreset ? "Save as New Preset..." : "Save"
+    }
+
+    /// The dialog for unsaved changes, and the alert for the preset already edited.
+    private func withOpenDialogs(_ view: some View) -> some View {
+        view
+            .confirmationDialog(
+                openRequestTitle,
+                isPresented: Binding(get: { openRequest != nil }, set: { if !$0 { openRequest = nil } }),
+                titleVisibility: .visible,
+                presenting: openRequest
+            ) { request in
+                Button(saveBeforeOpenLabel) { saveThenOpen(request) }
+                Button("Discard Changes", role: .destructive) { open(request.target) }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text(openRequestMessage)
+            }
+            .alert(
+                "You’re already editing “\(alreadyEditingName ?? "")”",
+                isPresented: Binding(get: { alreadyEditingName != nil }, set: { if !$0 { alreadyEditingName = nil } })
+            ) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("It’s the preset shown. Save or discard your changes in the bar below.")
+            }
     }
 
     // MARK: - Convert
 
     /// New presets made from this one in another form. Disabled in edit mode: a conversion
     /// starts from the stored preset.
-    private func convertMenu(_ editor: EQManagerEditor) -> some View {
-        let preset = editor.original
+    private func convertMenu(_ editor: EQManagerEditor?) -> some View {
+        let preset = editor?.original
+        let kinds = preset.map { EQManagerConversionKind.available(for: $0.kind) } ?? []
         return Menu {
-            ForEach(EQManagerConversionKind.available(for: preset.kind)) { kind in
+            ForEach(kinds) { kind in
                 Button(kind.menuTitle) {
-                    conversionRequest = EQManagerConversionRequest(kind: kind, source: preset)
+                    if let preset { conversionRequest = EQManagerConversionRequest(kind: kind, source: preset) }
                 }
             }
         } label: {
             Label("Convert", systemImage: "arrow.triangle.2.circlepath")
         }
         .fixedSize()
-        .disabled(editor.isEditing || !preset.hasCorrection)
+        .disabled(editor == nil || editor?.isEditing == true || preset?.hasCorrection != true)
         .help(convertHelp(editor))
     }
 
-    private func convertHelp(_ editor: EQManagerEditor) -> String {
+    private func convertHelp(_ editor: EQManagerEditor?) -> String {
+        guard let editor else { return "" }
         if editor.isEditing { return "Leave edit mode to convert this preset: a conversion starts from the saved preset" }
         return editor.original.hasCorrection
             ? "Make a new preset from this one in another form. This preset is not changed."
@@ -947,13 +1084,15 @@ struct EQManagerRootView: View {
         )
     }
 
-    private func createPreset(named name: String, useOnDevices: Bool) {
-        guard let editor = activeEditor else { return }
+    /// Whether the preset was made.
+    @discardableResult
+    private func createPreset(named name: String, useOnDevices: Bool) -> Bool {
+        guard let editor = activeEditor else { return false }
         let isCompared = isShowingCompared
         let sourceID = editor.original.id
         guard let preset = profileManager.saveAsNewPreset(editor.draft, name: name) else {
             alertMessage = "Could not save the preset."
-            return
+            return false
         }
         if useOnDevices {
             audioEngine.switchAutoEQProfile(
@@ -967,6 +1106,7 @@ struct EQManagerRootView: View {
         } else {
             self.editor = EQManagerEditor(profile: preset)
         }
+        return true
     }
 
     /// Store a conversion as a new preset and show it. The converted preset is left as it was.
@@ -1016,6 +1156,15 @@ struct EQManagerRootView: View {
         }
         replaceContents(with: parsed)
     }
+}
+
+// MARK: - Open Request
+
+/// A preset to open in the EQ Manager, or no preset when `target` is nil, while the preset shown
+/// has unsaved changes or the chooser is still on screen.
+struct EQManagerOpenRequest: Identifiable {
+    let id = UUID()
+    let target: AutoEQProfile?
 }
 
 // MARK: - New Preset Sheet
@@ -1166,20 +1315,27 @@ struct EQManagerFavoriteButton: View {
     let onToggle: () -> Void
 
     @State private var isHovered = false
+    @Environment(\.isEnabled) private var isEnabled
 
     var body: some View {
         Button(action: onToggle) {
             Image(systemName: isFavorite ? "star.fill" : "star")
                 .font(.system(size: 14))
                 .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(isFavorite || isHovered ? DesignTokens.Colors.interactiveActive : DesignTokens.Colors.interactiveDefault)
+                .foregroundStyle(starColor)
                 .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Dimmed with no preset shown, like the other controls of the top bar
+        .opacity(isEnabled ? 1 : 0.4)
         .onHover { isHovered = $0 }
         .help(isFavorite ? "Remove from favorites (hides it from the AutoEQ popup)" : "Add to favorites (shows it in the AutoEQ popup)")
         .accessibilityLabel(isFavorite ? "Remove from favorites" : "Add to favorites")
+    }
+
+    private var starColor: Color {
+        isFavorite || (isHovered && isEnabled) ? DesignTokens.Colors.interactiveActive : DesignTokens.Colors.interactiveDefault
     }
 }
 

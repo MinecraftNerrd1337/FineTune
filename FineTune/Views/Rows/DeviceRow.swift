@@ -376,7 +376,7 @@ extension DeviceRow {
 
 /// The badge of a device row. When a plugin sets the device's level, a puzzle piece sits on its
 /// top corner, so the DACs a plugin drives stand out in a list. The piece cuts its own shape, a
-/// little larger, out of the badge. Also used by the EQ Manager's Apply to DAC menu.
+/// little larger, out of the badge. Also used by the EQ Manager's DACs menu.
 struct DeviceRowBadge: View {
     let icon: NSImage?
     let isSelected: Bool
