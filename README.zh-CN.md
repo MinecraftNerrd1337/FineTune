@@ -1,8 +1,8 @@
 <img src="assets/icon.png" width="170" height="170" alt="FineTune 应用图标" align="left"/>
 
-<h3>FineTune</h3>
+<h3>FineTune - ZebraPaw's Fork</h3>
 
-为每一个 App 单独控制音量、把过轻的声音最高放大 4 倍、把音频路由到不同的扬声器，再用一套从头到尾都能自定义的 EQ 塑造声音：按需添加任意多个参数频段，或使用图示曲线，每台设备各自独立，可以从零开始，也可以从数千条 AutoEQ 耳机校正曲线出发。常驻菜单栏，免费且开源。
+按 App 调节音量、增益与路由，再为每台输出设备从头到尾打造自己的 EQ：参数滤波器或 GraphicEQ 曲线，以 Biquad 或卷积方式运行。常驻菜单栏，免费且开源。
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="下载 macOS 版本" height="48"/></a>
 
@@ -28,6 +28,17 @@
 <p align="center">
   <img src="assets/screenshot-eq.png" alt="FineTune：Brave 浏览器一行展开，EQ 面板打开，已选中「Vocal Clarity」预设" width="700">
 </p>
+
+## 这个 Fork 新增了什么
+
+基于 Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune)，围绕「由你亲手塑造的声音」重新打造：
+
+- **EQ 管理器** —— 为每台设备创建和编辑预设：最多 128 个参数频段，或一条 GraphicEQ 曲线。编辑时实时试听，在电平匹配的前提下用耳朵对比两个预设，并回溯每个预设的历史版本
+- **卷积引擎** —— 最小相位与线性相位 FIR，以及精确拟合的 Biquad，并可在图示与参数预设之间互相转换
+- **Equalizer APO 文件** —— 导入和导出 ParametricEQ.txt 与 GraphicEQ.txt，来源可以是 AutoEQ、Wavelet 或 Equalizer APO
+- **音量插件** —— 对 macOS 无法设置音量的 DAC，通过 DAC 自己的指令实现硬件音量
+- **按 DAC 路由** —— 每台输出设备一个聚合设备，多设备输出时每台都有自己的 AutoEQ 预设和主音量
+- **音量 HUD** —— Liquid Glass 风格的 HUD，DAC 自身按键改变音量时也会显示，并在 macOS 缩放下保持可见
 
 ## 安装
 

@@ -1,8 +1,8 @@
 <img src="assets/icon.png" width="170" height="170" alt="FineTune app icon" align="left"/>
 
-<h3>FineTune</h3>
+<h3>FineTune - ZebraPaw's Fork</h3>
 
-Control the volume of every app independently, boost quiet ones up to 4x, route audio to different speakers, and shape your sound with an EQ you can customize from top to bottom: as many parametric bands as you need or a graphic curve, per device, starting from scratch or from thousands of AutoEQ headphone corrections. Lives in your menu bar. Free and open-source.
+Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves, run as biquads or by convolution. Lives in your menu bar. Free and open-source.
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
 
@@ -25,6 +25,17 @@ Control the volume of every app independently, boost quiet ones up to 4x, route 
 <p align="center">
   <img src="assets/screenshot-eq.png" alt="FineTune showing the Brave Browser app row expanded with the EQ panel open and a Vocal Clarity preset selected" width="700">
 </p>
+
+## What This Fork Adds
+
+A fork of [FineTune](https://github.com/ronitsingh10/FineTune) by Ronit Singh, rebuilt around sound you shape yourself:
+
+- **EQ Manager** — Create and edit each device's presets: up to 128 parametric bands, or a GraphicEQ curve. Hear your edits live, compare two presets by ear with their levels matched, and go back through each preset's history
+- **Convolution engines** — Minimum-phase and linear-phase FIR, alongside exact-fitted biquads, and conversion between graphic and parametric presets
+- **Equalizer APO files** — Import and export ParametricEQ.txt and GraphicEQ.txt, from AutoEQ, Wavelet or Equalizer APO
+- **Volume plugins** — Hardware volume for DACs whose level macOS can't set, through the DAC's own commands
+- **Per-DAC routing** — One aggregate per output device, each with its own AutoEQ preset and master volume in multi-device output
+- **Volume HUD** — A Liquid Glass HUD, shown when a DAC's own buttons change its level too, and kept in view under macOS Zoom
 
 ## Install
 
