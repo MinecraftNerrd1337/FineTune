@@ -83,6 +83,8 @@ The EQ Manager keeps two kinds of profiles:
 - **Templates**: imported files and profiles downloaded from the AutoEQ catalog. Their bands (or curve) and preamp never change. Their name, base rate, correction engine and precision can be edited.
 - **Presets**: created in the EQ Manager, empty or from a template, and edited in place.
 
+To save a preset as a file, right-click it in the preset selector, then **Export...**: a list of filters becomes a ParametricEQ.txt file, a curve a GraphicEQ.txt file, which Equalizer APO, AutoEQ, Wavelet and FineTune read back. The file says, in a comment, the rate the filters were made for, which the format has no field for.
+
 To delete a preset or a template, right-click it in the preset selector, then **Delete...**. Its version history goes with it, and the devices that used it are left with no AutoEQ preset. It cannot be undone.
 
 **DACs**, in the top bar beside **Compare**, lists the devices that support AutoEQ as the menu bar panel does, each with its wand, which opens the same menu as in the panel. It is there with no preset shown too. Click a device to open the preset it uses (**View preset** shows on hover). While a preset is shown, the check next to a device's wand applies that preset to it, with its correction on; a preset can be used on several devices. A check after a device's name marks the devices that already use the preset shown. The devices hidden from the panel are listed too, dimmed, while ⌥ is held. With unsaved changes, save or discard them before applying: a device gets the saved preset.

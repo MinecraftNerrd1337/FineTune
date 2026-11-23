@@ -156,6 +156,44 @@ struct EQManagerPresetChooser: View {
         return text
     }
 
+    // MARK: - Export
+
+    /// Saves the preset as a ParametricEQ.txt or GraphicEQ.txt file, where the user picks.
+    /// A catalog profile is fetched first, as choosing it would.
+    private func export(_ entry: AutoEQCatalogEntry) {
+        guard loadingID == nil else { return }
+        errorMessage = nil
+        if let profile = profileManager.profile(for: entry.id) {
+            save(profile)
+            return
+        }
+        loadingID = entry.id
+        Task { @MainActor in
+            let profile = await profileManager.resolveProfile(for: entry)
+            loadingID = nil
+            if let profile {
+                save(profile)
+            } else {
+                errorMessage = "Could not load \(entry.name)"
+            }
+        }
+    }
+
+    private func save(_ profile: AutoEQProfile) {
+        let panel = NSSavePanel()
+        panel.title = "Export “\(profile.name)”"
+        panel.message = "Equalizer APO, AutoEQ and Wavelet read this file, as FineTune does."
+        panel.nameFieldStringValue = AutoEQExporter.fileName(for: profile)
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try AutoEQExporter.text(for: profile).write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            errorMessage = "Could not save \(url.lastPathComponent): \(error.localizedDescription)"
+        }
+    }
+
     private func delete(_ entry: AutoEQCatalogEntry) {
         deleteCandidate = nil
         onDelete?(entry.id)
@@ -374,9 +412,11 @@ struct EQManagerPresetChooser: View {
         .onTapGesture { choose(entry) }
         .accessibilityAddTraits(isSelected ? AccessibilityTraits([.isButton, .isSelected]) : .isButton)
         .overlay {
-            if isDeletable(entry) {
-                EQManagerDeleteMenu(title: entry.name) { deleteCandidate = entry }
-            }
+            EQManagerPresetMenu(
+                title: entry.name,
+                onExport: { export(entry) },
+                onDelete: isDeletable(entry) ? { deleteCandidate = entry } : nil
+            )
         }
     }
 
@@ -635,23 +675,27 @@ struct EQManagerImportSheet: View {
 
 // MARK: - Delete Menu
 
-/// The right-click menu of a library row, drawn by AppKit: SwiftUI's contextMenu does not show
+/// The right-click menu of a preset row, drawn by AppKit: SwiftUI's contextMenu does not show
 /// a red item. Headed with the preset's name, so a misclick shows which one it is about, then
-/// Delete... in red.
-struct EQManagerDeleteMenu: NSViewRepresentable {
+/// Export..., then Delete... in red for the presets and templates of the library.
+struct EQManagerPresetMenu: NSViewRepresentable {
     let title: String
-    let onDelete: () -> Void
+    let onExport: () -> Void
+    /// Nil for a preset that can't be deleted: the menu has no Delete then
+    let onDelete: (() -> Void)?
 
     func makeNSView(context: Context) -> RightClickView { RightClickView() }
 
     func updateNSView(_ view: RightClickView, context: Context) {
         view.title = title
+        view.onExport = onExport
         view.onDelete = onDelete
     }
 
     final class RightClickView: NSView {
         var title = ""
-        var onDelete: () -> Void = {}
+        var onExport: () -> Void = {}
+        var onDelete: (() -> Void)?
 
         /// Takes right clicks (and control-clicks) only: the row under it keeps its hover,
         /// clicks and buttons.
@@ -667,17 +711,24 @@ struct EQManagerDeleteMenu: NSViewRepresentable {
             menu.autoenablesItems = false
             menu.addItem(.sectionHeader(title: title))
 
-            let label = "Delete..."
-            let item = NSMenuItem(title: label, action: #selector(deleteChosen), keyEquivalent: "")
-            item.target = self
-            item.attributedTitle = NSAttributedString(string: label, attributes: [
-                .foregroundColor: NSColor.systemRed,
-                .font: NSFont.menuFont(ofSize: 0),
-            ])
-            menu.addItem(item)
+            let export = NSMenuItem(title: "Export...", action: #selector(exportChosen), keyEquivalent: "")
+            export.target = self
+            menu.addItem(export)
+
+            if onDelete != nil {
+                let label = "Delete..."
+                let item = NSMenuItem(title: label, action: #selector(deleteChosen), keyEquivalent: "")
+                item.target = self
+                item.attributedTitle = NSAttributedString(string: label, attributes: [
+                    .foregroundColor: NSColor.systemRed,
+                    .font: NSFont.menuFont(ofSize: 0),
+                ])
+                menu.addItem(item)
+            }
             return menu
         }
 
-        @objc private func deleteChosen() { onDelete() }
+        @objc private func exportChosen() { onExport() }
+        @objc private func deleteChosen() { onDelete?() }
     }
 }
