@@ -2,7 +2,7 @@
 
 <h3>FineTune - ZebraPaw's Fork</h3>
 
-Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves (the format of Wavelet and Equalizer APO), run as biquads or by convolution. Lives in your menu bar. Free and open-source.
+Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves (as used by Wavelet and Equalizer APO), run as biquads or by convolution. Lives in your menu bar. Free and open-source.
 
 <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
 
