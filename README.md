@@ -80,13 +80,11 @@ All the details are in the [AutoEQ guide](guide/autoeq.md).
 
 ## Install
 
-**Homebrew** (recommended)
+[Download the latest release](https://github.com/MinecraftNerrd1337/FineTune/releases/latest), open the DMG and drag FineTune to your Applications folder. It runs natively on both Apple silicon and Intel Macs.
 
-```bash
-brew install --cask finetune
-```
+The first time, macOS won't open it right away: this fork is signed with its own certificate rather than an Apple Developer ID, so Apple hasn't notarized it. Open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. After that it opens normally, and updates install on their own.
 
-**Manual** — [Download latest release](https://github.com/MinecraftNerrd1337/FineTune/releases/latest)
+> The `finetune` Homebrew cask installs the original FineTune, not this fork.
 
 ## Quick Start
 

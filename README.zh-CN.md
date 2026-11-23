@@ -83,13 +83,11 @@ Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 
 
 ## 安装
 
-**Homebrew**（推荐）
+[下载最新版本](https://github.com/MinecraftNerrd1337/FineTune/releases/latest)，打开 DMG，把 FineTune 拖进「应用程序」文件夹即可。Apple 芯片和 Intel Mac 都原生运行。
 
-```bash
-brew install --cask finetune
-```
+第一次打开时，macOS 不会直接放行：这个 fork 使用自己的证书签名，而不是 Apple Developer ID，因此没有经过 Apple 公证。先尝试打开一次，然后前往 **系统设置 → 隐私与安全性**，点击 **仍要打开**。之后就能正常打开，更新也会自动安装。
 
-**手动安装** —— [下载最新版本](https://github.com/MinecraftNerrd1337/FineTune/releases/latest)
+> Homebrew 的 `finetune` cask 安装的是原版 FineTune，而不是这个 fork。
 
 ## 快速上手
 
