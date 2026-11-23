@@ -45,10 +45,7 @@ Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 
 从菜单栏面板顶部的推子按钮打开。
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-edit-dark.png">
-    <img src="assets/screenshot-eq-manager-edit-light.png" alt="EQ 管理器正在编辑 Sony WH-1000XM4 预设：十个频段既是频响图上的点，也是类型、频率、增益与 Q 值的表格行" width="800">
-  </picture>
+  <img src="assets/screenshot-eq-manager-edit-dark.png" alt="EQ 管理器正在编辑 Sony WH-1000XM4 预设：十个频段既是频响图上的点，也是类型、频率、增益与 Q 值的表格行" width="800">
 </p>
 
 ### 逐个频段打造预设
@@ -66,10 +63,7 @@ Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 
 把第二个预设放在第一个旁边：两条曲线画在同一张图上，点一下就能切换正在听的那个。FineTune 会自动匹配两者的响度，响一点的那个不会仅仅因为更响而胜出。对比时两个预设都可以编辑。
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-compare-dark.png">
-    <img src="assets/screenshot-eq-manager-compare-light.png" alt="EQ 管理器在同一张图上对比蓝色的 Sony WH-1000XM4 预设与橙色的 Apple AirPods Pro 2 预设" width="800">
-  </picture>
+  <img src="assets/screenshot-eq-manager-compare-dark.png" alt="EQ 管理器在同一张图上对比蓝色的 Sony WH-1000XM4 预设与橙色的 Apple AirPods Pro 2 预设" width="800">
 </p>
 
 ### 选择播放方式

@@ -42,10 +42,7 @@ Per-app volume, boost and routing, and an EQ for each output device that you bui
 Open it from the sliders button at the top of the menu bar panel.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-edit-dark.png">
-    <img src="assets/screenshot-eq-manager-edit-light.png" alt="The EQ Manager editing the Sony WH-1000XM4 preset: its ten bands as points on the frequency response graph and as rows of type, frequency, gain and Q" width="800">
-  </picture>
+  <img src="assets/screenshot-eq-manager-edit-dark.png" alt="The EQ Manager editing the Sony WH-1000XM4 preset: its ten bands as points on the frequency response graph and as rows of type, frequency, gain and Q" width="800">
 </p>
 
 ### Build your presets band by band
@@ -63,10 +60,7 @@ Your changes play live on every device that uses the preset, before you save any
 Put a second preset beside the first: both curves on one graph, and a click to switch which one you hear. FineTune matches their loudness on its own, so the louder one doesn't win just for being louder. You can edit either while comparing.
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-compare-dark.png">
-    <img src="assets/screenshot-eq-manager-compare-light.png" alt="The EQ Manager comparing the Sony WH-1000XM4 preset, in blue, with the Apple AirPods Pro 2 preset, in orange, on the same graph" width="800">
-  </picture>
+  <img src="assets/screenshot-eq-manager-compare-dark.png" alt="The EQ Manager comparing the Sony WH-1000XM4 preset, in blue, with the Apple AirPods Pro 2 preset, in orange, on the same graph" width="800">
 </p>
 
 ### Choose how it's played
