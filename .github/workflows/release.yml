@@ -7,7 +7,9 @@ on:
 
 jobs:
   build:
-    runs-on: macos-26
+    # The maintainer's own Mac, started with the runner's ./run.sh when releasing: GitHub's macOS
+    # runners are too scarce to count on. Only tag pushes run here, never pull requests.
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: write
 
@@ -30,10 +32,9 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+      # The Xcode xcode-select points to on this Mac: choosing another one would need sudo
+      - name: Show Xcode
+        run: xcodebuild -version
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,7 +42,7 @@ jobs:
           node-version: '20'
 
       - name: Install create-dmg dependencies
-        run: brew install graphicsmagick imagemagick
+        run: command -v gm >/dev/null || brew install graphicsmagick imagemagick
 
       # The app is signed with this fork's own self-signed certificate, not an Apple Developer
       # ID: the same identity on every release keeps the audio recording permission and lets
@@ -58,8 +59,11 @@ jobs:
           # Decode certificate
           echo "$SIGNING_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
 
-          # Create temporary keychain
+          # Create temporary keychain. create-keychain adds it to the Mac's keychain search list:
+          # the list is put back as it was, and codesign is pointed at the keychain
+          ORIGINAL_KEYCHAINS=$(security list-keychains -d user | xargs)
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s $ORIGINAL_KEYCHAINS
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
@@ -72,9 +76,6 @@ jobs:
           # Allow codesign to access the certificate
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Add keychain to search list (prepend to ensure it's found first)
-          security list-keychain -d user -s "$KEYCHAIN_PATH" $(security list-keychain -d user | tr -d '"')
 
           # Verify certificate is available (a self-signed one is listed, though not as "valid")
           security find-identity -p codesigning "$KEYCHAIN_PATH"
@@ -116,7 +117,7 @@ jobs:
 
           # Each piece keeps its identifier and entitlements; inner code first, the app last
           sign() {
-            codesign --force --sign "$CERT_IDENTITY" --timestamp=none \
+            codesign --force --sign "$CERT_IDENTITY" --keychain "$RUNNER_TEMP/build.keychain" --timestamp=none \
               --preserve-metadata=identifier,entitlements "$1"
           }
           # Sparkle's loose helper, then the nested bundles, deepest first
@@ -199,3 +200,9 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/build.keychain" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/certificate.p12"
