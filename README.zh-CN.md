@@ -31,14 +31,61 @@
 
 ## 这个 Fork 新增了什么
 
-基于 Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune)，围绕「由你亲手塑造的声音」重新打造：
+Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 调节音量和路由方面已经做得很出色。我想在 EQ 上走得更远：不离开菜单栏，就能为自己的耳机和 DAC 打造并细调校正曲线。所以这个 fork 加入了完整的 EQ 编辑器、卷积引擎，以及一些为 DAC 用户准备的功能。
 
-- **EQ 管理器** —— 为每台设备创建和编辑预设：最多 128 个参数频段，或一条 GraphicEQ 曲线。编辑时实时试听，在电平匹配的前提下用耳朵对比两个预设，并回溯每个预设的历史版本
-- **卷积引擎** —— 最小相位与线性相位 FIR，以及精确拟合的 Biquad，并可在图示与参数预设之间互相转换
-- **Equalizer APO 文件** —— 导入和导出 ParametricEQ.txt 与 GraphicEQ.txt，来源可以是 AutoEQ、Wavelet 或 Equalizer APO
-- **音量插件** —— 对 macOS 无法设置音量的 DAC，通过 DAC 自己的指令实现硬件音量
-- **按 DAC 路由** —— 每台输出设备一个聚合设备，多设备输出时每台都有自己的 AutoEQ 预设和主音量
-- **音量 HUD** —— Liquid Glass 风格的 HUD，DAC 自身按键改变音量时也会显示，并在 macOS 缩放下保持可见
+- **真正的 EQ 编辑器** —— 也就是下面介绍的 EQ 管理器。
+- **卷积** —— 预设除了 Biquad，还可以用最小相位或线性相位 FIR 滤波器运行，GraphicEQ 曲线会完全按照画出的样子播放。
+- **Equalizer APO 文件，导入导出都行** —— 导入来自 AutoEQ、Wavelet 或 Equalizer APO 的 ParametricEQ.txt、GraphicEQ.txt，也能把自己的预设导出回去。
+- **为 macOS 控制不了的 DAC 提供真正的音量** —— 一个小小的音量插件使用 DAC 自己的协议，音量键调节的是 DAC 真实的音量，而不是衰减信号。第一个插件支持 iBasso 的 DAC，[指南](guide/volume-plugins.md)介绍了如何为你的 DAC 写一个。
+- **每台 DAC 一套校正** —— 一个 App 同时在多台输出设备上播放时，每台设备保留自己的 AutoEQ 预设和主音量。
+- **跟得上的音量 HUD** —— macOS 26 上的 Liquid Glass HUD，转动 DAC 本身的旋钮时也会出现，开启 macOS 缩放时会停在你正在看的位置。
+
+## EQ 管理器
+
+从菜单栏面板顶部的推子按钮打开。
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-edit-dark.png">
+    <img src="assets/screenshot-eq-manager-edit-light.png" alt="EQ 管理器正在编辑 Sony WH-1000XM4 预设：十个频段既是频响图上的点，也是类型、频率、增益与 Q 值的表格行" width="800">
+  </picture>
+</p>
+
+### 逐个频段打造预设
+
+从一个空白预设开始，或者从数千条耳机曲线中的一条开始，然后慢慢塑造：在图上拖动一个点，或输入精确的频率、增益和 Q 值。最多 128 个频段（峰值、低架、高架），一个前级增益，以及滤波器设计时所用的采样率。更喜欢用曲线？预设也可以是一条 GraphicEQ 曲线。
+
+下载或导入的配置会作为模板保持原样：修改它们会把你的版本另存为新预设。
+
+### 边改边听
+
+所有改动都会在使用该预设的每台设备上实时播放，无需先保存。在 **Saved** 和 **Edited** 之间切换（或按 ⌘B），就能听出你到底改了什么。
+
+### 用耳朵对比两个预设
+
+把第二个预设放在第一个旁边：两条曲线画在同一张图上，点一下就能切换正在听的那个。FineTune 会自动匹配两者的响度，响一点的那个不会仅仅因为更响而胜出。对比时两个预设都可以编辑。
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-compare-dark.png">
+    <img src="assets/screenshot-eq-manager-compare-light.png" alt="EQ 管理器在同一张图上对比蓝色的 Sony WH-1000XM4 预设与橙色的 Apple AirPods Pro 2 预设" width="800">
+  </picture>
+</p>
+
+### 选择播放方式
+
+- **Biquad** —— 经典的参数均衡器。无延迟。
+- **精确 Biquad** —— 同样的滤波器，经过修正，让频谱顶端也和你画出的曲线一致，无论 DAC 的采样率是多少。无延迟。
+- **最小相位 FIR** —— 用卷积精确还原曲线，相位特性与模拟 EQ 相同。无延迟。
+- **线性相位 FIR** —— 精确还原曲线，完全不改变相位，代价是一点延迟；精度由你决定。
+
+### 转换、回退、导出
+
+- **转换**：把曲线变成频段、把频段变成曲线、增减预设的频段数，或把滤波器换到另一个采样率。FineTune 会告诉你结果与原版相差多少。
+- **历史**：保留每次保存所替换的版本，随时可以回退。
+- **导出...**：在预设的右键菜单中，将其存为 ParametricEQ.txt 或 GraphicEQ.txt。
+
+所有细节见 [AutoEQ 指南](guide/autoeq.zh-CN.md)。
 
 ## 安装
 
@@ -83,7 +130,7 @@ brew install --cask finetune
 - **自动恢复** —— 设备重新接入后，相关 App 会自动回到这台设备，并保留原本的音量、路由与 EQ 设置
 
 ### 🎛 EQ 与校正
-- **EQ 管理器** —— 从头到尾自定义每台设备的 EQ：最多 128 个参数频段（峰值、低架、高架），可设置各自的频率、增益与 Q 值，或使用图示曲线；还可设置前级增益以及运行它的引擎（Biquad、精确 Biquad、最小相位或线性相位 FIR）。编辑时可实时试听，在电平匹配的前提下对比两个预设，回溯每个预设的版本历史，并导入或导出 Equalizer APO 文件（ParametricEQ.txt、GraphicEQ.txt）
+- **EQ 管理器** —— 逐个频段或用一条曲线打造每台设备的 EQ，实时试听，用耳朵对比预设，并可导出。见 [EQ 管理器](#eq-管理器)
 - **AutoEQ 耳机校正** —— 以 AutoEQ 目录中的数千条耳机曲线为起点，可直接使用，也可作为你自己预设的模板
 - **App EQ** —— 为每个 App 提供快速的图示均衡器，内置 5 大类、共 20 个预设，也可保存你自己的预设
 - **响度补偿** —— 在低音量下，依据 ISO 226:2023 等响度曲线自动补偿低频和高频，并实时管理整体电平，让感知响度保持一致

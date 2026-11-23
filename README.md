@@ -28,14 +28,61 @@ Per-app volume, boost and routing, and an EQ for each output device that you bui
 
 ## What This Fork Adds
 
-A fork of [FineTune](https://github.com/ronitsingh10/FineTune) by Ronit Singh, rebuilt around sound you shape yourself:
+[FineTune](https://github.com/ronitsingh10/FineTune) by Ronit Singh already handles per-app volume and routing beautifully. I wanted more from the EQ side: to build and fine-tune corrections for my own headphones and DACs without leaving the menu bar. So this fork adds a full EQ editor, convolution engines, and a few things for DAC owners.
 
-- **EQ Manager** — Create and edit each device's presets: up to 128 parametric bands, or a GraphicEQ curve. Hear your edits live, compare two presets by ear with their levels matched, and go back through each preset's history
-- **Convolution engines** — Minimum-phase and linear-phase FIR, alongside exact-fitted biquads, and conversion between graphic and parametric presets
-- **Equalizer APO files** — Import and export ParametricEQ.txt and GraphicEQ.txt, from AutoEQ, Wavelet or Equalizer APO
-- **Volume plugins** — Hardware volume for DACs whose level macOS can't set, through the DAC's own commands
-- **Per-DAC routing** — One aggregate per output device, each with its own AutoEQ preset and master volume in multi-device output
-- **Volume HUD** — A Liquid Glass HUD, shown when a DAC's own buttons change its level too, and kept in view under macOS Zoom
+- **A real EQ editor** — The EQ Manager, below.
+- **Convolution** — Presets can run as minimum-phase or linear-phase FIR filters, not only as biquads, and GraphicEQ curves play exactly as drawn.
+- **Equalizer APO files, both ways** — Bring in a ParametricEQ.txt or GraphicEQ.txt from AutoEQ, Wavelet or Equalizer APO, and export your own presets back to them.
+- **Real volume on DACs macOS can't control** — A small volume plugin speaks the DAC's own protocol, so the volume keys move the DAC's actual level instead of attenuating the signal. The first plugin is for iBasso DACs, and the [guide](guide/volume-plugins.md) shows how to write one for yours.
+- **One correction per DAC** — When an app plays on several outputs at once, each output keeps its own AutoEQ preset and its own master volume.
+- **A volume HUD that keeps up** — A Liquid Glass HUD on macOS 26, which also shows up when you turn the knob on the DAC itself, and stays where you're looking while macOS Zoom is on.
+
+## EQ Manager
+
+Open it from the sliders button at the top of the menu bar panel.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-edit-dark.png">
+    <img src="assets/screenshot-eq-manager-edit-light.png" alt="The EQ Manager editing the Sony WH-1000XM4 preset: its ten bands as points on the frequency response graph and as rows of type, frequency, gain and Q" width="800">
+  </picture>
+</p>
+
+### Build your presets band by band
+
+Start from an empty preset or from one of thousands of headphone profiles, then shape it: drag a point on the graph, or type the exact frequency, gain and Q. Up to 128 bands (peak, low shelf, high shelf), a preamp, and the sample rate the filters were designed for. Rather work with a curve? A preset can also be a GraphicEQ curve.
+
+Profiles you download or import stay untouched as templates: changing one saves your version as a new preset.
+
+### Hear it while you edit
+
+Your changes play live on every device that uses the preset, before you save anything. Switch between **Saved** and **Edited** (or press ⌘B) to hear exactly what you changed.
+
+### Compare two presets by ear
+
+Put a second preset beside the first: both curves on one graph, and a click to switch which one you hear. FineTune matches their loudness on its own, so the louder one doesn't win just for being louder. You can edit either while comparing.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/screenshot-eq-manager-compare-dark.png">
+    <img src="assets/screenshot-eq-manager-compare-light.png" alt="The EQ Manager comparing the Sony WH-1000XM4 preset, in blue, with the Apple AirPods Pro 2 preset, in orange, on the same graph" width="800">
+  </picture>
+</p>
+
+### Choose how it's played
+
+- **Biquad** — The classic parametric EQ. No latency.
+- **Exact biquad** — The same filters, corrected so the top of the spectrum matches the curve you drew, whatever your DAC's sample rate. No latency.
+- **Minimum-phase FIR** — The exact curve, by convolution, with the phase of an analog EQ. No latency.
+- **Linear-phase FIR** — The exact curve with no phase change at all, for a little latency; you choose how precise it is.
+
+### Convert, go back, export
+
+- **Convert** a curve into bands, bands into a curve, a preset to fewer or more bands, or filters to another sample rate. FineTune tells you how far the result strays from the original.
+- **History** keeps the versions each save replaces, so you can always go back.
+- **Export...**, in a preset's right-click menu, saves it as a ParametricEQ.txt or GraphicEQ.txt.
+
+All the details are in the [AutoEQ guide](guide/autoeq.md).
 
 ## Install
 
@@ -80,7 +127,7 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 - **Auto-restore** — When a device reconnects, apps automatically return to it with their volume, routing, and EQ intact
 
 ### 🎛 EQ & Correction
-- **EQ Manager** — Build each device's EQ from top to bottom: up to 128 parametric bands (peak, low shelf, high shelf) with their frequency, gain and Q, or a graphic curve, a preamp, and the engine that runs it (biquad, exact biquad, minimum-phase or linear-phase FIR). Hear your edits live, compare two presets with their levels matched, go back through each preset's version history, and import or export Equalizer APO files (ParametricEQ.txt, GraphicEQ.txt)
+- **EQ Manager** — Build each device's EQ band by band or as a curve, hear it live, compare presets by ear, and export them. See [EQ Manager](#eq-manager)
 - **AutoEQ headphone correction** — Start from thousands of headphone profiles from the AutoEQ catalog, used as they are or as templates for your own presets
 - **Per-app EQ** — A quick graphic EQ for each app, with 20 presets across 5 categories and your own presets
 - **Loudness compensation** — Automatic bass and treble correction at low volumes using ISO 226:2023 equal-loudness contours, with real-time level management to keep perceived loudness consistent
