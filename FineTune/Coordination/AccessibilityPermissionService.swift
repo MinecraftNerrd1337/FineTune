@@ -17,9 +17,12 @@ protocol AccessibilityTrustProviding: AnyObject {
 @MainActor
 final class AccessibilityPermissionService: AccessibilityTrustProviding {
     private(set) var isTrustedCached: Bool
+    /// Whether macOS was asked to show its Accessibility prompt since launch. Once the prompt was
+    /// dismissed, macOS may not show it again: System Settings grants the access then.
+    private(set) var hasPromptedForTrust = false
 
     /// Invoked on the main actor whenever `isTrustedCached` flips. Global path —
-    /// `.onChange` in a view is insufficient because the popup may not be mounted.
+    /// `.onChange` in a view is insufficient because the panel may not be mounted.
     var onTrustChanged: ((Bool) -> Void)?
 
     private var trustObserver: NSObjectProtocol?
@@ -101,11 +104,15 @@ final class AccessibilityPermissionService: AccessibilityTrustProviding {
         NSWorkspace.shared.open(url)
     }
 
-    /// Registers in the AX list and opens System Settings as a cross-version fallback.
+    /// Asks with macOS's own prompt, which registers FineTune in the Accessibility list and
+    /// leads to System Settings itself. Opening System Settings at the same time would hide the
+    /// prompt behind it, so that is only done when asked again, for a prompt that was dismissed.
     func requestAccess() {
-        let trusted = promptForTrust()
-        if !trusted {
+        if hasPromptedForTrust {
             openSystemSettings()
+        } else {
+            hasPromptedForTrust = true
+            promptForTrust()
         }
     }
 }

@@ -37,8 +37,8 @@ struct MediaKeyMonitorLifecycleTests {
         )
 
         let status = MediaKeyStatus()
-        let popup = PopupVisibilityService()
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, popupVisibility: popup)
+        let menuBarPanel = PanelVisibilityService()
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, panelVisibility: menuBarPanel)
         hud.frameProvider = { NSRect(x: 0, y: 0, width: 1440, height: 900) }
 
         let monitor = MediaKeyMonitor(
@@ -47,7 +47,7 @@ struct MediaKeyMonitorLifecycleTests {
             settingsManager: settings,
             accessibility: MockAccessibilityTrustProviding(isTrusted: true),
             hudController: hud,
-            popupVisibility: popup,
+            panelVisibility: menuBarPanel,
             mediaKeyStatus: status
         )
         return (monitor, status, settings, hud)
@@ -115,7 +115,7 @@ struct MediaKeyMonitorLifecycleTests {
         let (monitor, _, _, hud) = makeMonitor()
         // Invoke handleCore directly so we don't depend on a wired-up AudioEngine
         // default device — this is equivalent to 10 `handle(.volumeUp(isRepeat: true))`
-        // calls with popup hidden and no fullscreen app, on a hardware-tier device
+        // calls with the menu bar panel hidden and no fullscreen app, on a hardware-tier device
         // (no DDC coalescing).
         var currentVolume: Float = 0.0
         for _ in 0..<10 {

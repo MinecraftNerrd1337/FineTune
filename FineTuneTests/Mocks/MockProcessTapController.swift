@@ -98,6 +98,19 @@ final class MockProcessTapController: ProcessTapControlling {
         events.append(.updateAutoEQProfile(profileID: profile?.id))
     }
 
+    /// Per-device AutoEQ and gains, kept apart from `events` so that event sequences stay as
+    /// they were for single-device taps. A missing key means "never set".
+    private(set) var autoEQProfileIDsByDevice: [String: String?] = [:]
+    private(set) var outputGainsByDevice: [String: Float] = [:]
+
+    func updateAutoEQProfile(_ profile: AutoEQProfile?, for deviceUID: String) {
+        autoEQProfileIDsByDevice.updateValue(profile?.id, forKey: deviceUID)
+    }
+
+    func setOutputGain(_ gain: Float, for deviceUID: String) {
+        outputGainsByDevice[deviceUID] = gain
+    }
+
     func setAutoEQPreampEnabled(_ enabled: Bool) {
         events.append(.setAutoEQPreampEnabled(enabled))
     }

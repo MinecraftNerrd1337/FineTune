@@ -1,9 +1,10 @@
-// FineTune/Views/MenuBarPopupView.swift
+// FineTune/Views/MenuBarPanelView.swift
 import AudioToolbox
+import FluidMenuBarExtra
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct MenuBarPopupView: View {
+struct MenuBarPanelView: View {
     @Bindable var audioEngine: AudioEngine
     @Bindable var deviceVolumeMonitor: DeviceVolumeMonitor
     @ObservedObject var updateManager: UpdateManager
@@ -17,14 +18,14 @@ struct MenuBarPopupView: View {
     /// Transient status (offline, suppressionDegraded) for the media-keys banner.
     @Bindable var mediaKeyStatus: MediaKeyStatus
 
-    /// Shared popup visibility flag — mirrored to this service so `MediaKeyMonitor`
-    /// can skip HUD display while the popup is the "HUD".
-    @Bindable var popupVisibility: PopupVisibilityService
+    /// Shared panel visibility flag — mirrored to this service so `MediaKeyMonitor`
+    /// can skip HUD display while the panel is the "HUD".
+    @Bindable var panelVisibility: PanelVisibilityService
 
     /// Preview HUD button hook in Settings.
     let hudController: HUDWindowController
 
-    /// Needed so the popup can reconcile the tap state when the user toggles
+    /// Needed so the panel can reconcile the tap state when the user toggles
     /// `mediaKeyControlEnabled` inside Settings. Trust-flip reconciliation is
     /// handled globally via `AccessibilityPermissionService.onTrustChanged`
     /// wired in `FineTuneApp.init`.
@@ -46,13 +47,8 @@ struct MenuBarPopupView: View {
     /// Debounce EQ toggle to prevent rapid clicks during animation
     @State private var isEQAnimating = false
 
-    /// Track popup visibility to pause VU meter polling when hidden
-    @State private var isPopupVisible = true
-
-    /// Error message shown when AutoEQ profile import fails
-    @State private var autoEQImportError: String?
-    /// Task that auto-clears the import error after 3 seconds
-    @State private var importErrorClearTask: Task<Void, Never>?
+    /// Track panel visibility to pause VU meter polling when hidden
+    @State private var isPanelVisible = true
 
     /// Memoized paired Bluetooth devices
     @State private var pairedDevices: [PairedBluetoothDevice] = []
@@ -73,36 +69,33 @@ struct MenuBarPopupView: View {
     /// collapsed). Mirrors the `expandedRowID` pattern used for per-app EQ.
     @State private var expandedDeviceUID: String?
 
-    /// Hover state for support link heart animation
-    @State private var isSupportHovered = false
-
     /// Namespace for device toggle animation
     @Namespace private var deviceToggleNamespace
 
-    @State private var navModel = PopupKeyboardNavModel()
+    @State private var navModel = PanelKeyboardNavModel()
     /// Logical keyboard-nav selection. Plain @State (not @FocusState) so reads
     /// and writes are synchronous within a single event handler — using
     /// @FocusState here raced with SwiftUI's auto-focus-on-key-window claim
     /// (WWDC23 "SwiftUI cookbook for focus" calls this anti-pattern). A single
-    /// focusable anchor on the popup body root receives key events; rows
+    /// focusable anchor on the panel body root receives key events; rows
     /// render their selection state purely from this @State value.
-    @State private var selectedRow: PopupKeyboardNavModel.RowID? = nil
+    @State private var selectedRow: PanelKeyboardNavModel.RowID? = nil
     /// True once the user presses any nav-vocabulary key. Gates the row-highlight
-    /// visual so a fresh popup opens clean even though `selectedRow` may be set.
+    /// visual so a fresh panel opens clean even though `selectedRow` may be set.
     @State private var hasKeyboardEngaged: Bool = false
     /// `.onKeyPress` only fires when the modifier-owning view (or a focused
     /// descendant) has focus, so the body root holds a focus anchor.
     @FocusState private var anchorFocused: Bool
     /// Owns keyboard percentage entry (buffer + commit/restore signals), broadcast to
     /// rows via the environment. First responder stays on the nav anchor throughout.
-    @State private var textEntry = PopupTextEntryCoordinator()
+    @State private var textEntry = PanelTextEntryCoordinator()
 
     @Environment(\.openSettings) private var openSettings
 
     // MARK: - Resolved Dimensions
 
-    private var popupDimensions: PopupDimensions {
-        audioEngine.settingsManager.appSettings.popupSize.dimensions
+    private var panelDimensions: PanelDimensions {
+        audioEngine.settingsManager.appSettings.panelSize.dimensions
     }
 
     var body: some View {
@@ -119,6 +112,7 @@ struct MenuBarPopupView: View {
                 }
                 Spacer()
                 editPriorityButton
+                eqManagerButton
                 settingsButton
             }
             .padding(.bottom, DesignTokens.Spacing.xs)
@@ -128,7 +122,7 @@ struct MenuBarPopupView: View {
                     mainContent(scrollProxy: proxy)
                 }
                 .scrollIndicators(.never)
-                .frame(maxHeight: popupDimensions.maxContentHeight)
+                .frame(maxHeight: panelDimensions.maxContentHeight)
                 .onChange(of: selectedRow) { _, newFocus in
                     guard let newFocus else { return }
                     withAnimation(DesignTokens.Animation.hover) {
@@ -137,8 +131,8 @@ struct MenuBarPopupView: View {
                 }
             }
         }
-        .padding(popupDimensions.contentPadding)
-        .frame(width: popupDimensions.width)
+        .padding(panelDimensions.contentPadding)
+        .frame(width: panelDimensions.width)
         .background(
             WindowAppearanceBridge(appearance: audioEngine.settingsManager.appSettings.appearance.nsAppearance)
                 .frame(width: 0, height: 0)
@@ -151,9 +145,9 @@ struct MenuBarPopupView: View {
             updateSortedInputDevices()
             pairedDevices = audioEngine.bluetoothDeviceMonitor.pairedDevices
             isBluetoothOn = audioEngine.bluetoothDeviceMonitor.isBluetoothOn
-            // popupVisibility.isVisible is driven by the filtered NSWindow key
+            // panelVisibility.isVisible is driven by the filtered NSWindow key
             // notifications below, not by .onAppear — SwiftUI mounts this view
-            // before the popup is actually shown, and setting isVisible here
+            // before the panel is actually shown, and setting isVisible here
             // would suppress the HUD on the first media key at cold launch.
         }
         .onChange(of: audioEngine.outputDevices) { _, _ in
@@ -198,14 +192,14 @@ struct MenuBarPopupView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { notification in
             // Global notification — fires for every window in the process. Filter to
-            // FluidMenuBarExtra's popup window so unrelated windows (the HID-tap
-            // primer, NSAlert panels, etc.) don't mark the popup as visible and
+            // FluidMenuBarExtra's panel window so unrelated windows (the HID-tap
+            // primer, NSAlert panels, etc.) don't mark the panel as visible and
             // suppress the HUD.
             guard let window = notification.object as? NSWindow,
                   String(describing: type(of: window)).contains("FluidMenuBarExtra")
             else { return }
-            isPopupVisible = true
-            popupVisibility.isVisible = true
+            isPanelVisible = true
+            panelVisibility.isVisible = true
             audioEngine.bluetoothDeviceMonitor.refresh()
             syncNavOrder()
             hasKeyboardEngaged = false
@@ -217,22 +211,22 @@ struct MenuBarPopupView: View {
             guard let window = notification.object as? NSWindow,
                   String(describing: type(of: window)).contains("FluidMenuBarExtra")
             else { return }
-            isPopupVisible = false
-            popupVisibility.isVisible = false
+            isPanelVisible = false
+            panelVisibility.isVisible = false
             hasKeyboardEngaged = false
             selectedRow = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             // SwiftUI Menu tracking (e.g. sample-rate picker in the device
-            // inspector) makes the popup window resign key without deactivating
+            // inspector) makes the panel window resign key without deactivating
             // the app. Only treat app-level deactivation as a real dismiss so
-            // in-popup pickers don't collapse edit mode.
+            // in-panel pickers don't collapse edit mode.
             exitEditModeSaving()
         }
         // Single focus anchor on the body root. `.onKeyPress` only fires when
         // the modifier-owning view (or a focused descendant) has focus, so the
-        // anchor must claim it on popup open. `.focusEffectDisabled` suppresses
-        // the OS-drawn focus ring around the entire popup.
+        // anchor must claim it on panel open. `.focusEffectDisabled` suppresses
+        // the OS-drawn focus ring around the entire panel.
         .focusable()
         .focusEffectDisabled()
         .focused($anchorFocused)
@@ -275,6 +269,34 @@ struct MenuBarPopupView: View {
         .help(isEditingDevicePriority ? "Done reordering" : "Reorder devices")
     }
 
+    // MARK: - EQ Manager Button
+
+    /// Opens the EQ Manager without going through a device's AutoEQ menu.
+    private var eqManagerButton: some View {
+        Button("EQ Manager", systemImage: "slider.vertical.3") {
+            openEQManager()
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.plain)
+        .font(.system(size: 12))
+        .symbolRenderingMode(.hierarchical)
+        .foregroundStyle(DesignTokens.Colors.interactiveDefault)
+        .frame(
+            minWidth: DesignTokens.Dimensions.minTouchTarget,
+            minHeight: DesignTokens.Dimensions.minTouchTarget
+        )
+        .contentShape(Rectangle())
+        .help("Open the EQ Manager")
+    }
+
+    private func openEQManager() {
+        exitEditModeSaving()
+        // As from the AutoEQ popup: without "Keep Panel Open", the panel steps aside for the manager
+        let stepAside = FluidMenuBarExtraBehavior.dismissesOnFocusLoss
+        EQManagerWindowController.shared.show()
+        if stepAside { FluidMenuBarExtraBehavior.dismiss() }
+    }
+
     // MARK: - Settings Button
 
     private var settingsButton: some View {
@@ -293,9 +315,9 @@ struct MenuBarPopupView: View {
         .contentShape(Rectangle())
     }
 
-    /// Handles Escape key: closes EQ first, then dismisses the popup.
+    /// Handles Escape key: closes EQ first, then dismisses the panel.
     /// Escape order: expanded device detail → edit mode → expanded app EQ →
-    /// popup dismiss. Expanded device detail is checked before
+    /// panel dismiss. Expanded device detail is checked before
     /// `isEditingDevicePriority` so Escape collapses the row first rather than
     /// tearing down edit mode entirely.
     private func handleEscape() {
@@ -317,7 +339,7 @@ struct MenuBarPopupView: View {
                 expandedRowID = nil
             }
         } else {
-            NSApp.keyWindow?.resignKey()
+            FluidMenuBarExtraBehavior.dismiss()
         }
     }
 
@@ -345,24 +367,8 @@ struct MenuBarPopupView: View {
             Divider()
                 .padding(.vertical, DesignTokens.Spacing.xs)
 
-            // Footer: support link + quit
+            // Footer: quit
             HStack {
-                Button {
-                    NSWorkspace.shared.open(DesignTokens.Links.support)
-                } label: {
-                    Label("Donate", systemImage: isSupportHovered ? "heart.fill" : "heart")
-                }
-                .buttonStyle(.plain)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(isSupportHovered ? Color(nsColor: .systemPink) : DesignTokens.Colors.textTertiary)
-                .onHover { hovering in
-                    withAnimation(DesignTokens.Animation.hover) {
-                        isSupportHovered = hovering
-                    }
-                }
-                .accessibilityLabel("Donate to FineTune")
-                .help("Donate to FineTune")
-
                 Spacer()
 
                 Button {
@@ -565,17 +571,10 @@ struct MenuBarPopupView: View {
                         isFocused: hasKeyboardEngaged && selectedRow == .device(uid: device.uid),
                         iconOverrideSymbol: audioEngine.settingsManager.getDeviceIconOverride(for: device.uid)
                     )
-                    .id(PopupKeyboardNavModel.RowID.device(uid: device.uid))
+                    .id(PanelKeyboardNavModel.RowID.device(uid: device.uid))
                 }
             } else {
                 ForEach(sortedDevices) { device in
-                    let selection = audioEngine.getAutoEQSelection(for: device.uid)
-                    let profileName: String? = {
-                        guard let sel = selection else { return nil }
-                        return audioEngine.autoEQProfileManager.profile(for: sel.profileID)?.name
-                            ?? audioEngine.autoEQProfileManager.catalogEntry(for: sel.profileID)?.name
-                    }()
-
                     DeviceRow(
                         device: device,
                         isDefault: device.id == deviceVolumeMonitor.defaultDeviceID,
@@ -592,41 +591,17 @@ struct MenuBarPopupView: View {
                             let currentMute = deviceVolumeMonitor.muteStates[device.id] ?? false
                             deviceVolumeMonitor.setMute(for: device.id, to: !currentMute)
                         },
-                        autoEQProfileName: profileName,
-                        autoEQEnabled: selection?.isEnabled ?? false,
-                        onAutoEQToggle: { enabled in
-                            audioEngine.setAutoEQEnabled(for: device.uid, enabled: enabled)
-                        },
-                        autoEQProfileManager: audioEngine.autoEQProfileManager,
-                        autoEQSelection: selection,
-                        autoEQFavoriteIDs: audioEngine.settingsManager.favoriteAutoEQProfileIDs,
-                        onAutoEQSelect: { profile in
-                            audioEngine.setAutoEQProfile(for: device.uid, profileID: profile?.id)
-                        },
-                        onAutoEQImport: {
-                            importAutoEQFile(for: device.uid)
-                        },
-                        onAutoEQToggleFavorite: { id in
-                            if audioEngine.settingsManager.isAutoEQFavorite(id: id) {
-                                audioEngine.settingsManager.unfavoriteAutoEQProfile(id: id)
-                            } else {
-                                audioEngine.settingsManager.favoriteAutoEQProfile(id: id)
-                            }
-                        },
-                        autoEQImportError: autoEQImportError,
-                        autoEQPreampEnabled: audioEngine.autoEQPreampEnabled,
-                        onAutoEQPreampToggle: {
-                            audioEngine.setAutoEQPreampEnabled(!audioEngine.autoEQPreampEnabled)
-                        },
+                        autoEQ: AutoEQDeviceMenu(deviceUID: device.uid, audioEngine: audioEngine),
                         isFocused: hasKeyboardEngaged && selectedRow == .device(uid: device.uid),
                         iconOverrideSymbol: audioEngine.settingsManager.getDeviceIconOverride(for: device.uid),
                         masterVolume: audioEngine.deviceMasterVolume(for: device.uid),
                         onMasterVolumeChange: { volume in
                             audioEngine.setDeviceMasterVolume(volume, for: device.uid)
                         },
-                        optionKeyEditsMasterVolume: audioEngine.settingsManager.appSettings.masterVolumeOptionKeyEnabled
+                        optionKeyEditsMasterVolume: audioEngine.settingsManager.appSettings.masterVolumeOptionKeyEnabled,
+                        volumePluginName: volumePluginName(for: device.id)
                     )
-                    .id(PopupKeyboardNavModel.RowID.device(uid: device.uid))
+                    .id(PanelKeyboardNavModel.RowID.device(uid: device.uid))
                 }
 
             }
@@ -701,7 +676,8 @@ struct MenuBarPopupView: View {
                         keepAliveStatus: audioEngine.deviceKeepAlive.status(for: device.uid),
                         onKeepAliveChange: { enabled in
                             audioEngine.deviceKeepAlive.setEnabled(enabled, for: device.uid)
-                        }
+                        },
+                        pluginMenu: volumePluginMenu(for: device)
                     )
                 }
             }
@@ -722,6 +698,46 @@ struct MenuBarPopupView: View {
             }
             return true
         }
+    }
+
+    /// The volume plugin menu of a device's details, once a plugin is installed
+    private func volumePluginMenu(for device: AudioDevice) -> DeviceDetailSheet.PluginMenu? {
+        #if !APP_STORE
+        let controller = audioEngine.volumePlugins
+        let plugins = controller.plugins.filter(\.isUsable).map { (id: $0.id, name: $0.name) }
+        let state = controller.state(for: device.id, uid: device.uid)
+        var choosesPlugin = false
+        if case .plugin(_)? = state.choice {
+            choosesPlugin = true
+        }
+        guard !plugins.isEmpty || choosesPlugin else { return nil }
+        let deviceID = device.id
+        let uid = device.uid
+        return DeviceDetailSheet.PluginMenu.make(
+            plugins: plugins,
+            compatibleIDs: state.compatiblePluginIDs,
+            choice: state.choice,
+            activePluginID: state.activePluginID,
+            problem: state.problem,
+            onSelect: { pluginID in
+                let choice: VolumePluginChoice = pluginID == DeviceDetailSheet.PluginMenu.noPluginID
+                    ? .noPlugin
+                    : .plugin(pluginID)
+                controller.choose(choice, deviceID: deviceID, deviceUID: uid)
+            }
+        )
+        #else
+        return nil
+        #endif
+    }
+
+    /// The plugin that sets a device's level, for the puzzle piece on its row
+    private func volumePluginName(for deviceID: AudioDeviceID) -> String? {
+        #if !APP_STORE
+        return audioEngine.volumePlugins.pluginName(for: deviceID)
+        #else
+        return nil
+        #endif
     }
 
     @ViewBuilder
@@ -894,7 +910,7 @@ struct MenuBarPopupView: View {
                 isFocused: hasKeyboardEngaged && selectedRow == .app(persistenceID: displayableApp.id),
                 onAppActivate: { activateApp(pid: app.id, bundleID: app.bundleID) }
             )
-            .id(PopupKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
+            .id(PanelKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
         } else if let deviceUID = audioEngine.getDeviceUID(for: app) {
             AppRowWithLevelPolling(
                 app: app,
@@ -912,7 +928,7 @@ struct MenuBarPopupView: View {
                     audioEngine.setBoost(for: app, to: boost)
                 },
                 getAudioLevel: { audioEngine.getAudioLevel(for: app) },
-                isPopupVisible: isPopupVisible,
+                isPanelVisible: isPanelVisible,
                 onVolumeChange: { volume in
                     audioEngine.setVolume(for: app, to: volume)
                 },
@@ -960,7 +976,7 @@ struct MenuBarPopupView: View {
                 },
                 isFocused: hasKeyboardEngaged && selectedRow == .app(persistenceID: displayableApp.id)
             )
-            .id(PopupKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
+            .id(PanelKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
         }
     }
 
@@ -1028,7 +1044,7 @@ struct MenuBarPopupView: View {
             },
             isFocused: hasKeyboardEngaged && selectedRow == .app(persistenceID: displayableApp.id)
         )
-        .id(PopupKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
+        .id(PanelKeyboardNavModel.RowID.app(persistenceID: displayableApp.id))
     }
 
     /// Toggle EQ panel for an app (shared between active and inactive rows)
@@ -1044,7 +1060,7 @@ struct MenuBarPopupView: View {
                 expandedRowID = appID
             }
             if isExpanding {
-                scrollProxy.scrollTo(PopupKeyboardNavModel.RowID.app(persistenceID: appID), anchor: .top)
+                scrollProxy.scrollTo(PanelKeyboardNavModel.RowID.app(persistenceID: appID), anchor: .top)
             }
         }
 
@@ -1176,10 +1192,7 @@ struct MenuBarPopupView: View {
     /// and we don't want the main view to show zero rows in that window.
     private func updateSortedDevices() {
         let all = audioEngine.prioritySortedOutputDevices
-        let defaultUID = deviceVolumeMonitor.defaultDeviceUID
-        let filtered = all.filter { device in
-            device.uid == defaultUID || !audioEngine.settingsManager.isOutputDeviceHidden(device.uid)
-        }
+        let filtered = all.filter { !audioEngine.isOutputDeviceHiddenFromPanel($0) }
         sortedDevices = filtered.isEmpty ? all : filtered
     }
 
@@ -1193,40 +1206,6 @@ struct MenuBarPopupView: View {
             device.uid == defaultUID || !audioEngine.settingsManager.isInputDeviceHidden(device.uid)
         }
         sortedInputDevices = filtered.isEmpty ? all : filtered
-    }
-
-    /// Opens a file panel to import a ParametricEQ.txt for a device
-    private func importAutoEQFile(for deviceUID: String) {
-        // Dismiss the main popup so the file picker isn't obscured
-        NSApp.keyWindow?.resignKey()
-
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [UTType.plainText]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        panel.message = "Select an AutoEQ ParametricEQ.txt file"
-        // FineTune is an agent app (LSUIElement): without activation the panel opens behind other apps.
-        NSApp.activate(ignoringOtherApps: true)
-        panel.level = .modalPanel
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            let name = url.deletingPathExtension().lastPathComponent
-            Task { @MainActor in
-                if let profile = audioEngine.autoEQProfileManager.importProfile(from: url, name: name) {
-                    audioEngine.setAutoEQProfile(for: deviceUID, profileID: profile.id)
-                    autoEQImportError = nil
-                } else {
-                    autoEQImportError = "Could not read profile — check file format"
-                    importErrorClearTask?.cancel()
-                    importErrorClearTask = Task {
-                        try? await Task.sleep(for: .seconds(3))
-                        guard !Task.isCancelled else { return }
-                        withAnimation { autoEQImportError = nil }
-                    }
-                }
-            }
-        }
-        panel.makeKeyAndOrderFront(nil)
     }
 
     // MARK: - Keyboard Navigation
@@ -1249,7 +1228,7 @@ struct MenuBarPopupView: View {
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
         // `.onKeyPress` also fires for focused descendants; yield while a TextField is editing so its Return commits via onSubmit instead of activating a row.
         if NSApp.keyWindow?.firstResponder is NSTextView { return .ignored }
-        // Keyboard entry mode: the popup owns every key so the anchor keeps first responder.
+        // Keyboard entry mode: the panel owns every key so the anchor keeps first responder.
         if textEntry.buffer != nil {
             return handleKeyboardEditKey(keyPress)
         }
@@ -1267,7 +1246,7 @@ struct MenuBarPopupView: View {
         // Wake gate: compute target locally so first-press actions never read a
         // stale selection. ↑/↓ wake without moving; action keys wake and act on
         // the default in the same press.
-        let target: PopupKeyboardNavModel.RowID?
+        let target: PanelKeyboardNavModel.RowID?
         let wokeUp: Bool
         if !hasKeyboardEngaged && isRecognized {
             hasKeyboardEngaged = true
@@ -1348,7 +1327,7 @@ struct MenuBarPopupView: View {
         return String(ch)
     }
 
-    private func adjustVolume(at target: PopupKeyboardNavModel.RowID?, direction: Int, shift: Bool) -> KeyPress.Result {
+    private func adjustVolume(at target: PanelKeyboardNavModel.RowID?, direction: Int, shift: Bool) -> KeyPress.Result {
         guard let target else { return .ignored }
         let baseStep = audioEngine.settingsManager.appSettings.volumeHotkeyStep.sliderDelta
         let step = shift ? baseStep * 2.0 : baseStep
@@ -1420,7 +1399,7 @@ struct MenuBarPopupView: View {
         setGain(nextGain)
     }
 
-    private func toggleMute(for target: PopupKeyboardNavModel.RowID?) -> KeyPress.Result {
+    private func toggleMute(for target: PanelKeyboardNavModel.RowID?) -> KeyPress.Result {
         guard let target else { return .ignored }
         switch target {
         case .app(let persistenceID):
@@ -1450,7 +1429,7 @@ struct MenuBarPopupView: View {
         }
     }
 
-    private func activate(_ target: PopupKeyboardNavModel.RowID?) -> KeyPress.Result {
+    private func activate(_ target: PanelKeyboardNavModel.RowID?) -> KeyPress.Result {
         guard let target else { return .ignored }
         switch target {
         case .device(let uid):
@@ -1465,7 +1444,7 @@ struct MenuBarPopupView: View {
                 }
                 audioEngine.setDefaultOutputDevice(device.id)
             }
-            NSApp.keyWindow?.resignKey()
+            FluidMenuBarExtraBehavior.dismiss()
             return .handled
         case .app(let persistenceID):
             if let app = audioEngine.apps.first(where: { $0.persistenceIdentifier == persistenceID }),
@@ -1508,7 +1487,7 @@ struct MenuBarPopupView: View {
 
 // MARK: - Previews
 
-#Preview("Menu Bar Popup") {
+#Preview("Menu Bar Panel") {
     // Note: This preview requires mock AudioEngine and DeviceVolumeMonitor
     // For now, just show the structure
     PreviewContainer {

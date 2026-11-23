@@ -42,12 +42,12 @@ struct FineTuneApp: App {
     @State private var audioEngine: AudioEngine
     @State private var accessibility: AccessibilityPermissionService
     @State private var mediaKeyStatus: MediaKeyStatus
-    @State private var popupVisibility: PopupVisibilityService
+    @State private var panelVisibility: PanelVisibilityService
     @State private var hudController: HUDWindowController
     @State private var mediaKeyMonitor: MediaKeyMonitor
     @State private var feedbackPlayer: VolumeFeedbackPlayer
     @State private var iconCoordinator: MenuBarIconCoordinator
-    @State private var menuBarPopupController: MenuBarPopupController
+    @State private var menuBarPanelController: MenuBarPanelController
     @State private var shortcutsRegistry: ShortcutsRegistry
     @State private var resolver: TargetAppResolver
     @StateObject private var updateManager = UpdateManager()
@@ -58,9 +58,8 @@ struct FineTuneApp: App {
     private let launchIconImage: NSImage
 
     var body: some Scene {
-        // Declared before FluidMenuBarExtra so this Settings scene wins over
-        // FluidMenuBarExtra's `Settings {}` placeholder. Both ⌘, and the
-        // gear button route here via openSettings().
+        // The app's only Settings scene (the vendored FluidMenuBarExtra no longer adds
+        // one). Both ⌘, and the gear button route here via openSettings().
         Settings {
             SettingsRootView(
                 settings: audioEngine.settingsManager,
@@ -73,6 +72,17 @@ struct FineTuneApp: App {
                 updateManager: updateManager
             )
         }
+        .commands {
+            // FineTune shows a menu bar only while Settings or the EQ Manager is open.
+            // There, ⌘Q closes those windows and FineTune stays in the menu bar.
+            // The panel's Quit button stays the way to quit.
+            CommandGroup(replacing: .appTermination) {
+                Button("Close FineTune Windows") {
+                    ActivationPolicyController.shared.closeAppWindows()
+                }
+                .keyboardShortcut("q")
+            }
+        }
         FluidMenuBarExtra("FineTune", image: launchIconImage, isInserted: $showMenuBarExtra) {
             menuBarContent
         }
@@ -83,19 +93,19 @@ struct FineTuneApp: App {
         // `deviceVolumeMonitor` is declared as `any DeviceVolumeProviding` on
         // AudioEngine so tests can inject mocks; in production it's always the
         // concrete `DeviceVolumeMonitor` that this view consumes directly.
-        MenuBarPopupView(
+        MenuBarPanelView(
             audioEngine: audioEngine,
             deviceVolumeMonitor: audioEngine.deviceVolumeMonitor as! DeviceVolumeMonitor,
             updateManager: updateManager,
             permission: audioEngine.permission,
             accessibility: accessibility,
             mediaKeyStatus: mediaKeyStatus,
-            popupVisibility: popupVisibility,
+            panelVisibility: panelVisibility,
             hudController: hudController,
             mediaKeyMonitor: mediaKeyMonitor
         )
         .task {
-            // Idempotent: subsequent task runs (popup re-open) are no-ops inside start().
+            // Idempotent: subsequent task runs (panel re-open) are no-ops inside start().
             shortcutsRegistry.start()
         }
     }
@@ -108,16 +118,22 @@ struct FineTuneApp: App {
 
         let settings = SettingsManager()
         let profileManager = AutoEQProfileManager()
+        profileManager.attachUserProfileStore(settings)
         let permission = AudioRecordingPermission()
         let engine = AudioEngine(permission: permission, settingsManager: settings, autoEQProfileManager: profileManager)
         _audioEngine = State(initialValue: engine)
+        EQManagerWindowController.shared.configure(settings: settings, audioEngine: engine)
+
+        // "Keep Panel Open": the panel ignores focus loss and only the menu bar icon closes it.
+        FluidMenuBarExtraBehavior.dismissesOnFocusLossProvider = { !settings.appSettings.keepPanelOpen }
+        ActivationPolicyController.shared.start()
 
         // Media keys / HUD services — instantiated at app scope so the tap
-        // and HUD panel outlive popup open/close cycles.
+        // and HUD panel outlive panel open/close cycles.
         let accessibilityService = AccessibilityPermissionService()
         let statusService = MediaKeyStatus()
-        let popupService = PopupVisibilityService()
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: statusService, popupVisibility: popupService)
+        let panelService = PanelVisibilityService()
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: statusService, panelVisibility: panelService)
         let feedbackPlayer = VolumeFeedbackPlayer()
 
         // Wire the interactive Tahoe slider back to the device volume monitor.
@@ -144,19 +160,43 @@ struct FineTuneApp: App {
             )
         }
 
+        let readDeviceState: @MainActor () -> HUDWindowController.DeviceState? = { [weak engine] in
+            guard let engine else { return nil }
+            let volumeMonitor = engine.deviceVolumeMonitor
+            let deviceID = volumeMonitor.defaultDeviceID
+            guard deviceID.isValid, let gain = volumeMonitor.volumes[deviceID] else { return nil }
+            let tier = volumeMonitor.outputVolumeBackend(for: deviceID)
+            return HUDWindowController.DeviceState(
+                sliderFraction: VolumeMapping.sliderFraction(forSystemGain: gain, tier: tier),
+                mute: volumeMonitor.muteStates[deviceID] ?? false,
+                deviceName: engine.deviceMonitor.outputDevices.first { $0.id == deviceID }?.name ?? ""
+            )
+        }
+        // A level changed on the device itself (a DAC's own buttons) shows in the HUD on screen
+        hud.followDeviceState(readDeviceState)
+        // and brings the HUD up, as the media keys do, when the default output device's own
+        // buttons change it (a DAC a volume plugin drives)
+        // FineTune's HUD, unless Use FineTune HUD is off
+        let deviceHUD = VolumeHUDRouter(fineTuneHUD: hud, settingsManager: settings)
+        engine.onLevelChangedOnDevice = { [weak engine] deviceID in
+            guard let engine, deviceID == engine.deviceVolumeMonitor.defaultDeviceID,
+                  let state = readDeviceState() else { return }
+            deviceHUD.show(sliderFraction: state.sliderFraction, mute: state.mute, deviceName: state.deviceName)
+        }
+
         let monitor = MediaKeyMonitor(
             decoder: IOKitMediaKeyDecoder(),
             audioEngine: engine,
             settingsManager: settings,
             accessibility: accessibilityService,
-            hudController: hud,
-            popupVisibility: popupService,
+            hudController: deviceHUD,
+            panelVisibility: panelService,
             mediaKeyStatus: statusService
         )
         monitor.feedbackPlayer = feedbackPlayer
         _accessibility = State(initialValue: accessibilityService)
         _mediaKeyStatus = State(initialValue: statusService)
-        _popupVisibility = State(initialValue: popupService)
+        _panelVisibility = State(initialValue: panelService)
         _hudController = State(initialValue: hud)
         _mediaKeyMonitor = State(initialValue: monitor)
         _feedbackPlayer = State(initialValue: feedbackPlayer)
@@ -195,7 +235,7 @@ struct FineTuneApp: App {
         // before the user first opens Settings. The trust-flip callback wires
         // the monitor to reconcile its tap state whenever trust changes — this
         // is the single source of truth for retroactive start/stop (a `.onChange`
-        // inside MenuBarPopupView would miss flips when the popup is closed).
+        // inside MenuBarPanelView would miss flips when the panel is closed).
         accessibilityService.onTrustChanged = { [weak monitor] _ in
             monitor?.reconcile()
         }
@@ -204,21 +244,21 @@ struct FineTuneApp: App {
 
         // Global hotkeys (KeyboardShortcuts SPM, Carbon-backed; no Accessibility
         // permission required for the hotkey itself). Registry start() is deferred
-        // to a SwiftUI `.task` on the popup content so the FluidMenuBarExtra
+        // to a SwiftUI `.task` on the panel content so the FluidMenuBarExtra
         // status item has been materialized before any hotkey can fire.
-        let popupController = MenuBarPopupController()
+        let panelController = MenuBarPanelController()
         let resolver = TargetAppResolver(
             ownBundleID: Bundle.main.bundleIdentifier ?? "com.finetuneapp.FineTune"
         )
         resolver.start()
         let registry = ShortcutsRegistry(
             settings: settings,
-            popupController: popupController,
+            panelController: panelController,
             resolver: resolver,
             audioEngine: engine,
             hud: hud
         )
-        _menuBarPopupController = State(initialValue: popupController)
+        _menuBarPanelController = State(initialValue: panelController)
         _shortcutsRegistry = State(initialValue: registry)
         _resolver = State(initialValue: resolver)
 

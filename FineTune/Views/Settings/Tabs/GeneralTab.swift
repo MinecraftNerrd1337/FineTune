@@ -54,6 +54,16 @@ struct GeneralTab: View {
             }
             SettingsRowDivider()
             SettingsRow(
+                "Keep Panel Open",
+                description: "Clicking elsewhere leaves the panel open. Click the menu bar icon to close it"
+            ) {
+                Toggle("", isOn: $settings.appSettings.keepPanelOpen)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
                 "Device Disconnect Alerts",
                 description: "Show notification when an audio device disconnects"
             ) {
@@ -77,10 +87,10 @@ struct GeneralTab: View {
             }
             SettingsRowDivider()
             SettingsRow(
-                "Popup Size",
+                "Panel Size",
                 description: "Smaller fits more on screen; larger leaves more breathing room."
             ) {
-                PopupSizeTilePicker(selection: $settings.appSettings.popupSize)
+                PanelSizeTilePicker(selection: $settings.appSettings.panelSize)
             }
         }
     }
@@ -91,7 +101,7 @@ struct GeneralTab: View {
         SettingsSection("Data") {
             SettingsRow(
                 "Reset All Settings",
-                description: "Clear all volumes, EQ, and device routings"
+                description: "Clear all volumes, EQ, and device routings. Your AutoEQ presets and templates are kept."
             ) {
                 Button(role: .destructive) {
                     showResetConfirmation = true

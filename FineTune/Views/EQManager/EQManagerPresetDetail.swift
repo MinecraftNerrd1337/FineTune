@@ -1,0 +1,786 @@
+// FineTune/Views/EQManager/EQManagerPresetDetail.swift
+import SwiftUI
+
+/// The selected preset: attributes and preamp on the left, response graph and bands on the right.
+/// Fields become editable when the editor is in edit mode.
+@MainActor
+struct EQManagerPresetDetail: View {
+    let editor: EQManagerEditor
+    /// Name of the template the preset was made from, if any.
+    var templateName: String? = nil
+    /// While two presets are compared: the other one, drawn on the graph, and the level of the
+    /// compared one, set in the Preamp section.
+    var comparison: Comparison? = nil
+    /// Color of this preset's curve and controls: which of the compared presets it is.
+    var color: Color = EQResponseGraph.baseCurveColor
+
+    /// Two presets compared, seen from the one shown here.
+    struct Comparison {
+        /// The other preset, drawn under this one when `showsOther` is on, with a halo when
+        /// `showsHalo` is on: the checkboxes beside the graph's scale.
+        let other: AutoEQProfile
+        let showsOther: Binding<Bool>
+        let showsHalo: Binding<Bool>
+        /// Added to its curve on the graph: what it plays at above this preset (preamps and
+        /// extra gain).
+        let otherOffsetDB: Double
+        let otherColor: Color
+        /// Preamp of the compared preset (this one or the other).
+        let comparedPreampDB: Float
+        /// Extra gain of the compared preset, added to its preamp when the Preamp switch is on,
+        /// so both play at the same level. Applied whether the preamp is on or off.
+        let trimDB: Double
+        /// The extra gain follows the level match (it was not set by hand).
+        let isMatched: Bool
+        /// The Preamp switch is on: its preamp plays too.
+        let preampOn: Bool
+        let setTrim: (Double) -> Void
+        let match: () -> Void
+
+        /// The other preset's curve on the graph, unless hidden.
+        var otherCurve: EQResponseGraph.ComparedCurve? {
+            guard showsOther.wrappedValue else { return nil }
+            return EQResponseGraph.ComparedCurve(
+                profile: other, offsetDB: otherOffsetDB, color: otherColor, showsHalo: showsHalo.wrappedValue)
+        }
+    }
+
+    @State private var selectedBand: Int?
+    /// The dB window of the graph, set by every control of the graph.
+    @State private var scale = EQGraphScale()
+    /// Latency and accuracy of the preset's linear-phase filter; nil while they are computed.
+    @State private var linearPhase: LinearPhaseSummary?
+
+    private var preset: AutoEQProfile { editor.draft }
+    private var isEditing: Bool { editor.isEditing }
+
+    var body: some View {
+        // Shown in the Preamp section and drawn on the graph
+        let perceived = AutoEQResponse.perceivedLevelChangeDB(preset)
+
+        HStack(alignment: .top, spacing: DesignTokens.Spacing.lg) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: DesignTokens.Spacing.lg) {
+                    presetSection
+                    preampSection(perceived: perceived)
+                }
+                .padding(.bottom, DesignTokens.Spacing.sm)
+            }
+            .scrollIndicators(.never)
+            .frame(width: 280)
+
+            VStack(spacing: DesignTokens.Spacing.sm) {
+                graphHeader
+                EQResponseGraph(
+                    profile: preset,
+                    scale: $scale,
+                    selectedBand: $selectedBand,
+                    isEditable: isEditing,
+                    onDragBegan: { editor.beginGesture() },
+                    onDrag: { band, frequency, gain in
+                        editor.updateGesture { profile in
+                            guard profile.filters.indices.contains(band) else { return }
+                            profile.filters[band].frequency = frequency
+                            profile.filters[band].gainDB = gain
+                        }
+                    },
+                    onDragEnded: { editor.endGesture() },
+                    perceivedLevelDB: perceived,
+                    compared: comparison?.otherCurve,
+                    curveColor: color
+                )
+                // 220 pt at the window's minimum size; grows with the band table as it is enlarged
+                .frame(minHeight: 220, maxHeight: .infinity)
+
+                bandsSection
+            }
+        }
+        .padding(DesignTokens.Spacing.lg)
+        // Toggles, sliders and buttons take the color of the preset, so the compared one reads apart
+        .tint(color)
+        .onChange(of: preset.id, initial: true) { _, _ in
+            selectedBand = nil
+            scale = EQGraphScale()
+        }
+        .onChange(of: preset.filters.count) { _, count in
+            if let band = selectedBand, band >= count { selectedBand = count > 0 ? count - 1 : nil }
+        }
+        .task(id: LatencyKey(preset)) {
+            // Designing the filter takes a few milliseconds: wait until edits pause
+            linearPhase = nil
+            guard preset.effectiveEngine == .linearPhaseFIR, preset.hasCorrection else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            linearPhase = FIRKernelCache.linearPhaseSummary(of: preset, sampleRate: AutoEQResponse.defaultSampleRate)
+                .map { LinearPhaseSummary(latencyMS: $0.latencyMS, maxErrorDB: $0.maxErrorDB) }
+        }
+    }
+
+    private struct LinearPhaseSummary {
+        let latencyMS: Double
+        let maxErrorDB: Double
+    }
+
+    /// What the latency of a preset depends on.
+    private struct LatencyKey: Equatable {
+        let engine: AutoEQCorrectionEngine
+        let filters: [AutoEQFilter]
+        let curve: [AutoEQCurvePoint]
+        let baseRate: Double
+        let toleranceDB: Double
+
+        init(_ preset: AutoEQProfile) {
+            engine = preset.effectiveEngine
+            // Only the linear-phase filter has a latency to compute
+            let isLinear = engine == .linearPhaseFIR
+            filters = isLinear ? preset.filters : []
+            curve = isLinear ? preset.curve : []
+            baseRate = isLinear ? preset.optimizedSampleRate : 0
+            toleranceDB = isLinear ? preset.effectiveLinearPhaseToleranceDB : 0
+        }
+    }
+
+    private var latencyText: String {
+        guard preset.effectiveEngine == .linearPhaseFIR else { return "None" }
+        guard preset.hasCorrection else { return "—" }
+        guard let linearPhase else { return "…" }
+        return String(format: "%.1f ms", linearPhase.latencyMS)
+    }
+
+    /// Largest deviation of the linear-phase filter from the curve, 20 Hz to 20 kHz.
+    private var maxErrorText: String {
+        guard preset.hasCorrection else { return "—" }
+        guard let linearPhase else { return "…" }
+        return String(format: "%.2f dB", linearPhase.maxErrorDB)
+    }
+
+    // MARK: - Preset Section
+
+    private var presetSection: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            presetRows
+            Text(preset.effectiveEngine.summary)
+                .font(.system(size: 10))
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+            if isEditing && editor.original.isTemplate {
+                Label(
+                    "This is a template: its bands stay as \(templateOrigin). Changing them saves a new preset.",
+                    systemImage: "info.circle"
+                )
+                .font(.system(size: 10))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    private var presetRows: some View {
+        SettingsSection("Preset") {
+            row("Name") {
+                if isEditing {
+                    CommitTextField(value: preset.name, width: 150) { newName in
+                        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmed.isEmpty else { return }
+                        editor.apply { $0.name = trimmed }
+                    }
+                } else {
+                    valueText(preset.name)
+                }
+            }
+            Divider()
+            row("Type") { valueText(preset.kind.displayName) }
+            if let bandCount = preset.bandCount {
+                Divider()
+                row("Bands") { valueText("\(bandCount) / \(AutoEQProfile.maxFilters)") }
+            }
+            Divider()
+            row("Correction") {
+                if isEditing {
+                    Picker("Correction", selection: Binding(
+                        get: { preset.effectiveEngine },
+                        set: { engine in editor.apply { $0.engine = engine } }
+                    )) {
+                        ForEach(AutoEQCorrectionEngine.available(for: preset.kind)) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .frame(width: 170)
+                } else {
+                    valueText(preset.effectiveEngine.displayName)
+                }
+            }
+            if preset.kind == .parametric {
+                Divider()
+                row("Base rate") {
+                    if isEditing {
+                        Picker("Base rate", selection: Binding(
+                            get: { preset.optimizedSampleRate },
+                            set: { rate in editor.apply { $0.optimizedSampleRate = rate } }
+                        )) {
+                            ForEach(baseRateChoices, id: \.self) { Text(AutoEQBaseRate.label($0)).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 170)
+                    } else {
+                        valueText(AutoEQBaseRate.label(preset.optimizedSampleRate))
+                    }
+                }
+                .help("Sample rate the filters were designed for. AutoEQ uses 44.1 kHz. The exact engines reproduce the curve the filters have at this rate, whatever the rate of the device.")
+            }
+            if preset.effectiveEngine == .linearPhaseFIR {
+                Divider()
+                row("Precision") {
+                    if isEditing {
+                        Picker("Precision", selection: Binding(
+                            get: { preset.effectiveLinearPhaseToleranceDB },
+                            set: { tolerance in
+                                editor.apply { $0.linearPhaseToleranceDB = AutoEQLinearPhasePrecision.stored(tolerance) }
+                            }
+                        )) {
+                            ForEach(AutoEQLinearPhasePrecision.choices, id: \.self) {
+                                Text(AutoEQLinearPhasePrecision.label($0)).tag($0)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 170)
+                    } else {
+                        valueText(AutoEQLinearPhasePrecision.label(preset.effectiveLinearPhaseToleranceDB))
+                    }
+                }
+                .help("How closely the filter follows the curve above 100 Hz (twice as loosely at 20 Hz). A tighter precision needs a longer filter: more latency and more CPU. The latency stops at 85 ms, so a very tight precision may not be reached: Max error shows how close the filter gets.")
+            }
+            Divider()
+            row("Latency") { valueText(latencyText) }
+            if preset.effectiveEngine == .linearPhaseFIR {
+                Divider()
+                row("Max error") { valueText(maxErrorText) }
+                    .help("Largest difference between the filter and the curve, from 20 Hz to 20 kHz, at 48 kHz.")
+            }
+            Divider()
+            row("Role") { valueText(preset.isTemplate ? "Template" : "Preset") }
+                .help(preset.isTemplate
+                      ? "From a file or the AutoEQ catalog: its bands never change. Changing them saves a new preset."
+                      : "Created in the EQ Manager and saved in place. Earlier versions are kept in its history.")
+            Divider()
+            row("Source") { valueText(templateName.map { "From \($0)" } ?? preset.sourceLabel ?? "AutoEQ") }
+        }
+    }
+
+    /// How a template came to the library, for the edit-mode note.
+    private var templateOrigin: String {
+        switch editor.original.source {
+        case .imported: return "imported"
+        case .downloaded: return "downloaded"
+        default: return "published"
+        }
+    }
+
+    /// The offered rates, plus the preset's own when it is not one of them.
+    private var baseRateChoices: [Double] {
+        let choices = AutoEQBaseRate.choices
+        return choices.contains(preset.optimizedSampleRate) ? choices : [preset.optimizedSampleRate] + choices
+    }
+
+    // MARK: - Preamp Section
+
+    private func preampSection(perceived: Double?) -> some View {
+        let recommended = AutoEQResponse.recommendedPreampDB(preset)
+        let peak = AutoEQResponse.peakDB(preset)
+        let clipRisk = peak.map { AutoEQResponse.clipRiskDB(preampDB: Double(preset.preampDB), peakDB: $0) } ?? 0
+
+        return VStack(alignment: .leading, spacing: DesignTokens.Spacing.xs) {
+            SettingsSection("Preamp") {
+                row("Preamp") {
+                    if isEditing {
+                        DecimalField(
+                            value: Double(preset.preampDB),
+                            fractionDigits: 1,
+                            suffix: "dB"
+                        ) { value in
+                            let range = AutoEQProfile.preampRange
+                            editor.apply { $0.preampDB = min(max(Float(value), range.lowerBound), range.upperBound) }
+                        }
+                    } else {
+                        valueText(String(format: "%+.1f dB", preset.preampDB))
+                    }
+                }
+                Divider()
+                row("Recommended") {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        valueText(recommended.map { String(format: "%+.1f dB", $0) } ?? "—")
+                        if isEditing, let recommended {
+                            Button("Use") {
+                                editor.apply { $0.preampDB = Float(recommended) }
+                            }
+                            .controlSize(.small)
+                            .disabled(abs(Double(preset.preampDB) - recommended) < 0.05)
+                        }
+                    }
+                }
+                .help("The peak boost as a cut, so the corrected sound never exceeds the original level.")
+                Divider()
+                row("Peak boost") { valueText(peak.map { String(format: "%+.1f dB", $0) } ?? "—") }
+                Divider()
+                row("Perceived level") { valueText(perceived.map { String(format: "%+.1f dB", $0) } ?? "—") }
+                    .help("How much quieter or louder the curve sounds (the RMS of music through it), drawn as a thin line on the graph. With a device's correction off and its preamp on, FineTune adds this level to the preamp, so the loudness stays the same.")
+                if let comparison {
+                    Divider()
+                    levelMatchRows(comparison)
+                }
+            }
+
+            if clipRisk > 0 {
+                Label(String(format: "Can clip by up to %.1f dB", clipRisk), systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    /// The extra gain of the compared preset, added to its preamp: the level match, or set by
+    /// hand with the field or the slider.
+    @ViewBuilder
+    private func levelMatchRows(_ comparison: Comparison) -> some View {
+        let total = (comparison.preampOn ? Double(comparison.comparedPreampDB) : 0) + comparison.trimDB
+        Group {
+            VStack(spacing: 0) {
+                row("Level match") {
+                    HStack(spacing: DesignTokens.Spacing.sm) {
+                        DecimalField(value: comparison.trimDB, fractionDigits: 1, suffix: "dB") { comparison.setTrim($0) }
+                        Button("Auto") { comparison.match() }
+                            .controlSize(.small)
+                            .disabled(comparison.isMatched)
+                    }
+                }
+                Slider(
+                    value: Binding(get: { min(max(comparison.trimDB, -12), 12) }, set: { comparison.setTrim($0) }),
+                    in: -12...12,
+                    step: 0.5
+                )
+                .controlSize(.small)
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.bottom, DesignTokens.Spacing.sm)
+            }
+            Divider()
+            row(comparison.preampOn ? "Compared preamp" : "Compared gain") {
+                valueText(String(format: "%+.1f dB", total))
+            }
+        }
+        .help(levelMatchHelp(comparison))
+    }
+
+    private func levelMatchHelp(_ comparison: Comparison) -> String {
+        let added = comparison.preampOn
+            ? "Added to the preamp of the compared preset (\(String(format: "%+.1f dB", comparison.comparedPreampDB))), shown as Compared preamp."
+            : "The preamp is off: only this gain is added to the compared preset, shown as Compared gain."
+        let state = comparison.isMatched
+            ? "Auto: it makes the compared preset sound as loud as this one, as each device plays them (its Correction switch, the Preamp switch, both preamps and curves), and follows every change."
+            : "Set by hand: Auto matches the levels again."
+        return "\(added) \(state)"
+    }
+
+    // MARK: - Graph Header
+
+    private var graphHeader: some View {
+        HStack {
+            Text("Frequency Response")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(DesignTokens.Colors.textPrimary)
+            Text(graphCaption)
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+            if let comparison {
+                comparedCurveToggles(comparison)
+                    .padding(.trailing, DesignTokens.Spacing.md)
+            }
+            scaleControls
+        }
+    }
+
+    /// While comparing: whether the other preset's curve is drawn, and its halo.
+    private func comparedCurveToggles(_ comparison: Comparison) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Toggle("Other curve", isOn: comparison.showsOther)
+                .help("Draw the other preset's curve under the one shown")
+            Toggle("With halo", isOn: comparison.showsHalo)
+                .disabled(!comparison.showsOther.wrappedValue)
+                .help("A pale halo around the other curve, which shows where the two curves meet")
+        }
+        .toggleStyle(.checkbox)
+        .controlSize(.small)
+        .font(.system(size: 10))
+        // Settings of the graph, not of either preset: never in the shown preset's color
+        .tint(Color.accentColor)
+        .fixedSize()
+    }
+
+    /// The scale of the graph, ±1 to ±24 dB around its middle level: a slider stepping by a dB,
+    /// and a field for a precise one.
+    private var scaleControls: some View {
+        let range = EQGraphScale.spanRange
+        return HStack(spacing: DesignTokens.Spacing.xs) {
+            Text("Scale")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+            Slider(
+                value: Binding(
+                    get: { Double(scale.span) },
+                    set: { scale.setSpan(Int($0.rounded())) }
+                ),
+                in: Double(range.lowerBound)...Double(range.upperBound),
+                step: 1
+            )
+            .controlSize(.small)
+            .frame(width: 150)
+            Text("±")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+            EQScaleNumberField(value: scale.span, range: range, width: 34) { scale.setSpan($0) }
+            Text("dB")
+                .font(.system(size: 11))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+                .fixedSize()
+        }
+        // Takes its own width: the caption beside it gives way first
+        .fixedSize()
+        .help("Scale of the graph. ⌘-scroll or ⌘-drag the graph to move it up or down, or click its top, middle or bottom level to type one: 0 in the middle centers it.")
+    }
+
+    private var graphCaption: String {
+        switch preset.effectiveEngine {
+        case .biquad: return "Biquad filters played at 48 kHz"
+        case .matchedBiquad: return "Exact biquad filters played at 48 kHz"
+        case .minimumPhaseFIR, .linearPhaseFIR:
+            guard preset.kind == .parametric else { return "Exact curve" }
+            let rate = preset.optimizedSampleRate
+            return rate > 0 ? "Exact curve of \(AutoEQBaseRate.label(rate)) filters" : "Exact curve of analog filters"
+        }
+    }
+
+    // MARK: - Bands Section
+
+    @ViewBuilder
+    private var bandsSection: some View {
+        switch preset.kind {
+        case .parametric:
+            VStack(spacing: DesignTokens.Spacing.xs) {
+                if isEditing {
+                    HStack {
+                        Text("Drag a point on the graph to move a band, or type values below.")
+                            .font(.system(size: 10))
+                            .foregroundStyle(DesignTokens.Colors.textTertiary)
+                        Spacer()
+                        Button {
+                            addBand()
+                        } label: {
+                            Label("Add Band", systemImage: "plus")
+                        }
+                        .controlSize(.small)
+                        .disabled(preset.filters.count >= AutoEQProfile.maxFilters)
+                    }
+                }
+                if preset.filters.isEmpty {
+                    placeholder(isEditing ? "No bands yet. Add one above." : "No bands yet. Click Edit to add some.")
+                } else {
+                    bandTable
+                }
+            }
+        case .graphic:
+            if preset.curve.isEmpty {
+                placeholder("No curve yet. Import a GraphicEQ file (AutoEQ, Wavelet, Equalizer APO) to fill this preset.")
+            } else {
+                curveTable
+            }
+        }
+    }
+
+    /// The points of a graphic preset (read-only).
+    private var curveTable: some View {
+        VStack(spacing: 0) {
+            BandRowLayout(isHeader: true) {
+                Text("#").bandColumn(0, isHeader: true)
+                Text("Frequency").bandColumn(2, isHeader: true)
+                Text("Gain").bandColumn(3, isHeader: true)
+            }
+            Divider()
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(preset.curve.enumerated()), id: \.offset) { index, point in
+                        BandRowLayout(isHeader: false) {
+                            Text("\(index + 1)").bandColumn(0)
+                            Text(EQResponseGraph.formatFrequency(point.frequency)).bandColumn(2)
+                            Text(String(format: "%+.1f dB", point.gainDB)).bandColumn(3)
+                        }
+                        .background(index % 2 == 0 ? Color.clear : DesignTokens.Colors.pickerBackground.opacity(0.5))
+                    }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    private var bandTable: some View {
+        VStack(spacing: 0) {
+            BandRowLayout(isHeader: true) {
+                Text("#").bandColumn(0, isHeader: true)
+                Text("Type").bandColumn(1, isHeader: true)
+                Text("Frequency").bandColumn(2, isHeader: true)
+                Text("Gain").bandColumn(3, isHeader: true)
+                Text("Q").bandColumn(4, isHeader: true)
+            }
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        // Listed by frequency; `index` stays the band's position in the preset.
+                        let order = EQResponseGraph.frequencyOrder(preset.filters)
+                        ForEach(Array(order.enumerated()), id: \.element) { rank, index in
+                            bandRow(index: index, number: rank + 1, filter: preset.filters[index])
+                                .id(index)
+                        }
+                    }
+                }
+                .onChange(of: selectedBand) { _, band in
+                    guard let band else { return }
+                    withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(band) }
+                }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private func bandRow(index: Int, number: Int, filter: AutoEQFilter) -> some View {
+        let isSelected = index == selectedBand
+        BandRowLayout(isHeader: false, isEditing: isEditing) {
+            Text("\(number)").bandColumn(0)
+            if isEditing {
+                Picker("Type", selection: Binding(
+                    get: { filter.type },
+                    set: { type in updateBand(index) { $0.type = type } }
+                )) {
+                    Text("Peak").tag(AutoEQFilter.FilterType.peaking)
+                    Text("Low shelf").tag(AutoEQFilter.FilterType.lowShelf)
+                    Text("High shelf").tag(AutoEQFilter.FilterType.highShelf)
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .bandColumn(1)
+                DecimalField(value: filter.frequency, fractionDigits: 0, suffix: "Hz") { value in
+                    let range = AutoEQFilter.frequencyRange
+                    updateBand(index) { $0.frequency = min(max(value, range.lowerBound), range.upperBound) }
+                }
+                .bandColumn(2)
+                DecimalField(value: Double(filter.gainDB), fractionDigits: 1, suffix: "dB") { value in
+                    let range = AutoEQFilter.gainRange
+                    updateBand(index) { $0.gainDB = min(max(Float(value), range.lowerBound), range.upperBound) }
+                }
+                .bandColumn(3)
+                DecimalField(value: filter.q, fractionDigits: 2, suffix: nil) { value in
+                    let range = AutoEQFilter.qRange
+                    updateBand(index) { $0.q = min(max(value, range.lowerBound), range.upperBound) }
+                }
+                .bandColumn(4)
+                Button {
+                    removeBand(index)
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove band \(number)")
+                .bandColumn(5)
+            } else {
+                Text(EQResponseGraph.typeName(filter.type)).bandColumn(1)
+                Text(EQResponseGraph.formatFrequency(filter.frequency)).bandColumn(2)
+                Text(String(format: "%+.1f dB", filter.gainDB)).bandColumn(3)
+                Text(String(format: "%.2f", filter.q)).bandColumn(4)
+            }
+        }
+        .background(
+            isSelected
+                ? color.opacity(0.18)
+                : (number % 2 == 1 ? Color.clear : DesignTokens.Colors.pickerBackground.opacity(0.5))
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { selectedBand = index }
+    }
+
+    // MARK: - Band Edits
+
+    private func updateBand(_ index: Int, _ change: @escaping (inout AutoEQFilter) -> Void) {
+        editor.apply { profile in
+            guard profile.filters.indices.contains(index) else { return }
+            change(&profile.filters[index])
+        }
+    }
+
+    private func addBand() {
+        editor.apply { profile in
+            guard profile.filters.count < AutoEQProfile.maxFilters else { return }
+            profile.filters.append(AutoEQFilter(type: .peaking, frequency: 1000, gainDB: 0, q: 1))
+        }
+        selectedBand = preset.filters.count - 1
+    }
+
+    private func removeBand(_ index: Int) {
+        editor.apply { profile in
+            guard profile.filters.indices.contains(index) else { return }
+            profile.filters.remove(at: index)
+        }
+        selectedBand = nil
+    }
+
+    // MARK: - Building Blocks
+
+    private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: DesignTokens.Spacing.sm) {
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(DesignTokens.Colors.textSecondary)
+            Spacer(minLength: DesignTokens.Spacing.sm)
+            content()
+        }
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .frame(height: 32)
+    }
+
+    private func valueText(_ value: String) -> some View {
+        Text(value)
+            .font(.system(size: 12, weight: .medium).monospacedDigit())
+            .foregroundStyle(DesignTokens.Colors.textPrimary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private func placeholder(_ message: String) -> some View {
+        Text(message)
+            .font(.system(size: 11))
+            .foregroundStyle(DesignTokens.Colors.textTertiary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(DesignTokens.Colors.autoEQEmptyBorder, style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+            )
+    }
+}
+
+// MARK: - Band Row Layout
+
+/// One row of the band table (header or band).
+private struct BandRowLayout<Content: View>: View {
+    let isHeader: Bool
+    var isEditing = false
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        HStack(spacing: 0) {
+            content()
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, DesignTokens.Spacing.sm)
+        .frame(height: isHeader ? 26 : (isEditing ? 30 : 24))
+    }
+}
+
+/// Fixed column widths shared by the header and the band rows.
+private struct BandColumn: ViewModifier {
+    static let widths: [CGFloat] = [36, 120, 130, 110, 90, 28]
+
+    let index: Int
+    let isHeader: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .font(isHeader ? .system(size: 10, weight: .semibold) : .system(size: 12).monospacedDigit())
+            .foregroundStyle(isHeader ? DesignTokens.Colors.textTertiary : DesignTokens.Colors.textPrimary)
+            .frame(width: Self.widths[index], alignment: index == 1 ? .leading : .trailing)
+            .padding(.trailing, DesignTokens.Spacing.sm)
+    }
+}
+
+private extension View {
+    func bandColumn(_ index: Int, isHeader: Bool = false) -> some View {
+        modifier(BandColumn(index: index, isHeader: isHeader))
+    }
+}
+
+// MARK: - Text Fields
+
+/// Text field that reports its value only when the user presses Return or leaves the field,
+/// so typing a word is one undo step, not one per keystroke.
+struct CommitTextField: View {
+    let value: String
+    var width: CGFloat = 120
+    let onCommit: (String) -> Void
+
+    @State private var text = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        TextField("", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .frame(width: width)
+            .focused($isFocused)
+            .onAppear { text = value }
+            .onChange(of: value) { _, newValue in
+                if !isFocused { text = newValue }
+            }
+            .onChange(of: isFocused) { _, focused in
+                if !focused { onCommit(text) }
+            }
+            .onSubmit { onCommit(text) }
+    }
+}
+
+/// Numeric text field with a unit suffix, committed on Return or when leaving the field.
+struct DecimalField: View {
+    let value: Double
+    let fractionDigits: Int
+    let suffix: String?
+    let onCommit: (Double) -> Void
+
+    var body: some View {
+        HStack(spacing: 3) {
+            TextField(
+                "",
+                value: Binding(get: { value }, set: { onCommit($0) }),
+                format: .number.precision(.fractionLength(fractionDigits)).grouping(.never)
+            )
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.small)
+            .multilineTextAlignment(.trailing)
+            .frame(width: 64)
+            if let suffix {
+                Text(suffix)
+                    .font(.system(size: 10))
+                    .foregroundStyle(DesignTokens.Colors.textTertiary)
+            }
+        }
+    }
+}

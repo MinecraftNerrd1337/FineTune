@@ -32,19 +32,8 @@ struct DeviceRow: View {
     let onVolumeChange: (Float) -> Void
     let onMuteToggle: () -> Void
 
-    // AutoEQ (all optional — existing call sites work without them)
-    let autoEQProfileName: String?
-    let autoEQEnabled: Bool
-    let onAutoEQToggle: ((Bool) -> Void)?
-    let autoEQProfileManager: AutoEQProfileManager?
-    let autoEQSelection: AutoEQSelection?
-    let autoEQFavoriteIDs: Set<String>
-    let onAutoEQSelect: ((AutoEQProfile?) -> Void)?
-    let onAutoEQImport: (() -> Void)?
-    let onAutoEQToggleFavorite: ((String) -> Void)?
-    let autoEQImportError: String?
-    let autoEQPreampEnabled: Bool
-    let onAutoEQPreampToggle: (() -> Void)?
+    /// The device's AutoEQ, for its subtitle and wand (optional — without it, neither shows)
+    let autoEQ: AutoEQDeviceMenu?
     let isFocused: Bool
     let iconOverrideSymbol: String?
 
@@ -52,6 +41,9 @@ struct DeviceRow: View {
     let masterVolume: Float
     let onMasterVolumeChange: ((Float) -> Void)?
     let optionKeyEditsMasterVolume: Bool
+
+    /// The volume plugin that sets the device's level, marked by a puzzle piece on its badge
+    let volumePluginName: String?
 
     @State private var sliderValue: Double
     /// Slider position of the master volume, mirrored like `sliderValue` for the device volume.
@@ -124,23 +116,13 @@ struct DeviceRow: View {
         onSetDefault: @escaping () -> Void,
         onVolumeChange: @escaping (Float) -> Void,
         onMuteToggle: @escaping () -> Void,
-        autoEQProfileName: String? = nil,
-        autoEQEnabled: Bool = false,
-        onAutoEQToggle: ((Bool) -> Void)? = nil,
-        autoEQProfileManager: AutoEQProfileManager? = nil,
-        autoEQSelection: AutoEQSelection? = nil,
-        autoEQFavoriteIDs: Set<String> = [],
-        onAutoEQSelect: ((AutoEQProfile?) -> Void)? = nil,
-        onAutoEQImport: (() -> Void)? = nil,
-        onAutoEQToggleFavorite: ((String) -> Void)? = nil,
-        autoEQImportError: String? = nil,
-        autoEQPreampEnabled: Bool = true,
-        onAutoEQPreampToggle: (() -> Void)? = nil,
+        autoEQ: AutoEQDeviceMenu? = nil,
         isFocused: Bool = false,
         iconOverrideSymbol: String? = nil,
         masterVolume: Float = 1.0,
         onMasterVolumeChange: ((Float) -> Void)? = nil,
-        optionKeyEditsMasterVolume: Bool = false
+        optionKeyEditsMasterVolume: Bool = false,
+        volumePluginName: String? = nil
     ) {
         self.device = device
         self.isDefault = isDefault
@@ -150,23 +132,13 @@ struct DeviceRow: View {
         self.onSetDefault = onSetDefault
         self.onVolumeChange = onVolumeChange
         self.onMuteToggle = onMuteToggle
-        self.autoEQProfileName = autoEQProfileName
-        self.autoEQEnabled = autoEQEnabled
-        self.onAutoEQToggle = onAutoEQToggle
-        self.autoEQProfileManager = autoEQProfileManager
-        self.autoEQSelection = autoEQSelection
-        self.autoEQFavoriteIDs = autoEQFavoriteIDs
-        self.onAutoEQSelect = onAutoEQSelect
-        self.onAutoEQImport = onAutoEQImport
-        self.onAutoEQToggleFavorite = onAutoEQToggleFavorite
-        self.autoEQImportError = autoEQImportError
-        self.autoEQPreampEnabled = autoEQPreampEnabled
-        self.onAutoEQPreampToggle = onAutoEQPreampToggle
+        self.autoEQ = autoEQ
         self.isFocused = isFocused
         self.iconOverrideSymbol = iconOverrideSymbol
         self.masterVolume = masterVolume
         self.onMasterVolumeChange = onMasterVolumeChange
         self.optionKeyEditsMasterVolume = optionKeyEditsMasterVolume
+        self.volumePluginName = volumePluginName
         self._sliderValue = State(initialValue: Self.volumeToSlider(volume, backend: volumeBackend))
         self._masterSliderValue = State(initialValue: VolumeMapping.gainToSlider(masterVolume))
     }
@@ -191,6 +163,15 @@ struct DeviceRow: View {
             }
     }
 
+    /// The device's badge, with the puzzle piece of the plugin that sets its level.
+    private var badge: some View {
+        DeviceRowBadge(
+            icon: displayIcon,
+            isSelected: isDefault,
+            volumePluginName: volumeBackend == .plugin ? volumePluginName : nil
+        )
+    }
+
     // MARK: - Device Header
 
     private var deviceHeader: some View {
@@ -199,7 +180,7 @@ struct DeviceRow: View {
             // Selection is now signalled by accent-colored gradient on the
             // badge plus bold device name; the row-level gesture in `body`
             // handles tap-to-set-default.
-            DeviceBadge(icon: displayIcon, isSelected: isDefault)
+            badge
 
             // Device name + optional AutoEQ profile subtitle + AutoEQ picker
             HStack(spacing: DesignTokens.Spacing.xs) {
@@ -209,7 +190,7 @@ struct DeviceRow: View {
                         .lineLimit(1)
                         .help(device.name)
 
-                    if let subtitle = Self.autoEQSubtitle(profileName: autoEQProfileName, isEnabled: autoEQEnabled) {
+                    if let subtitle = autoEQ?.subtitle {
                         Text(subtitle)
                             .font(.system(size: 9))
                             .foregroundStyle(DesignTokens.Colors.textTertiary)
@@ -220,24 +201,8 @@ struct DeviceRow: View {
                 Spacer(minLength: 0)
 
                 // AutoEQ picker inside the name area so slider length stays consistent
-                if device.supportsAutoEQ,
-                   let profileManager = autoEQProfileManager,
-                   let onSelect = onAutoEQSelect,
-                   let onImport = onAutoEQImport {
-                    AutoEQPicker(
-                        profileManager: profileManager,
-                        profileName: autoEQProfileName,
-                        selection: autoEQSelection,
-                        favoriteIDs: autoEQFavoriteIDs,
-                        onSelect: onSelect,
-                        onImport: onImport,
-                        onToggleFavorite: { id in onAutoEQToggleFavorite?(id) },
-                        importError: autoEQImportError,
-                        isCorrectionEnabled: autoEQEnabled,
-                        onCorrectionToggle: onAutoEQToggle,
-                        preampEnabled: autoEQPreampEnabled,
-                        onPreampToggle: onAutoEQPreampToggle
-                    )
+                if device.supportsAutoEQ, let autoEQ {
+                    AutoEQPicker(menu: autoEQ)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -367,13 +332,6 @@ extension DeviceRow {
     static func sliderToVolume(_ slider: Double, backend: VolumeControlTier) -> Float {
         VolumeMapping.systemGain(forSliderFraction: slider, tier: backend)
     }
-
-    // MARK: - Subtitle
-
-    static func autoEQSubtitle(profileName: String?, isEnabled: Bool) -> String? {
-        guard let profileName else { return nil }
-        return isEnabled ? profileName : "\(profileName) (off)"
-    }
 }
 
 // MARK: - Previews
@@ -411,5 +369,74 @@ extension DeviceRow {
                 onMuteToggle: {}
             )
         }
+    }
+}
+
+// MARK: - Badge
+
+/// The badge of a device row. When a plugin sets the device's level, a puzzle piece sits on its
+/// top corner, so the DACs a plugin drives stand out in a list. The piece cuts its own shape, a
+/// little larger, out of the badge. Also used by the EQ Manager's DACs menu.
+struct DeviceRowBadge: View {
+    let icon: NSImage?
+    let isSelected: Bool
+    /// The volume plugin that sets the device's level, if one does
+    let volumePluginName: String?
+
+    /// Where the puzzle piece sits, from the badge's top trailing corner
+    private static let pluginMarkOffset = CGSize(width: 3, height: -3)
+    /// The gap the piece cuts around itself in the badge
+    private static let pluginMarkGap: CGFloat = 1.5
+
+    var body: some View {
+        if let volumePluginName {
+            DeviceBadge(icon: icon, isSelected: isSelected)
+                .mask {
+                    ZStack(alignment: .topTrailing) {
+                        Rectangle()
+                        PuzzlePieceMark(spread: Self.pluginMarkGap)
+                            .offset(Self.pluginMarkOffset)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                }
+                .overlay(alignment: .topTrailing) {
+                    PuzzlePieceMark()
+                        .foregroundStyle(DesignTokens.Colors.textSecondary)
+                        .offset(Self.pluginMarkOffset)
+                        .help("Volume set by the “\(volumePluginName)” plugin")
+                        .accessibilityLabel("Volume set by the “\(volumePluginName)” plugin")
+                }
+        } else {
+            DeviceBadge(icon: icon, isSelected: isSelected)
+        }
+    }
+}
+
+// MARK: - Puzzle Piece Mark
+
+/// The puzzle piece on the badge of a device a volume plugin drives. With a spread, the piece is
+/// that much larger on every side, for the gap it cuts around itself in the badge.
+private struct PuzzlePieceMark: View {
+    var spread: CGFloat = 0
+
+    var body: some View {
+        if spread > 0 {
+            // The piece, moved by the spread in every direction
+            ZStack {
+                glyph
+                ForEach(0..<16, id: \.self) { index in
+                    let angle = CGFloat(index) * .pi / 8
+                    glyph.offset(x: spread * cos(angle), y: spread * sin(angle))
+                }
+            }
+        } else {
+            glyph
+        }
+    }
+
+    private var glyph: some View {
+        Image(systemName: "puzzlepiece.fill")
+            .font(.system(size: 10, weight: .semibold))
     }
 }

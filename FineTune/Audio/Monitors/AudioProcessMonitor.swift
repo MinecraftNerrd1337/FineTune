@@ -15,6 +15,11 @@ private struct AppFingerprint: Hashable {
 @MainActor
 final class AudioProcessMonitor: AudioProcessMonitoring {
     private(set) var activeApps: [AudioApp] = []
+    /// PIDs of the apps in `activeApps` that are playing, as of the last refresh. Observed,
+    /// unlike the HAL property it is read from, so that the list of playing apps updates when
+    /// an app starts or stops playing without the process list changing: `activeApps` then
+    /// stays equal (`AudioApp` compares PIDs) and setting it notifies no one.
+    private(set) var streamingAppIDs: Set<pid_t> = []
     var onAppsChanged: (([AudioApp]) -> Void)?
 
     /// Snapshot of the previous streaming/input state. We cannot derive the
@@ -345,16 +350,18 @@ final class AudioProcessMonitor: AudioProcessMonitoring {
             // engine even when the process/object list itself does not change.
             // previousFingerprints must be stored separately: recomputing the
             // "old" value from activeApps would read the already-updated HAL state.
+            let streaming = Set(sorted.filter { $0.processObjectIDs.contains { $0.readProcessIsRunning() } }.map(\.id))
             let newSet = Set(sorted.map {
                 AppFingerprint(
                     pid: $0.id,
                     objectIDs: $0.processObjectIDs,
-                    hasRunningProcess: $0.processObjectIDs.contains { $0.readProcessIsRunning() },
+                    hasRunningProcess: streaming.contains($0.id),
                     isRunningInput: $0.isRunningInput
                 )
             })
 
             activeApps = sorted
+            streamingAppIDs = streaming
             if previousFingerprints != newSet {
                 previousFingerprints = newSet
                 onAppsChanged?(activeApps)
@@ -363,6 +370,12 @@ final class AudioProcessMonitor: AudioProcessMonitoring {
         } catch {
             logger.error("Failed to refresh process list: \(error.localizedDescription)")
         }
+    }
+
+    /// Whether the app was playing at the last refresh, which every change of a process's
+    /// IsRunning triggers. Read from `streamingAppIDs`, so views that ask are updated.
+    func isStreaming(_ app: AudioApp) -> Bool {
+        streamingAppIDs.contains(app.id)
     }
 
     private func updateProcessListeners(for processIDs: [AudioObjectID]) {

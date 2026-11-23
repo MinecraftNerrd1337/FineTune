@@ -48,7 +48,7 @@ final class ShortcutsRegistry {
     )
 
     private let settings: SettingsManager
-    private let popupController: any MenuBarPopupControlling
+    private let panelController: any MenuBarPanelControlling
     private let resolver: any TargetAppResolving
     private let audioEngine: any AudioEngineDispatching
     private let hud: any PerAppHUDPresenting
@@ -63,13 +63,13 @@ final class ShortcutsRegistry {
 
     init(
         settings: SettingsManager,
-        popupController: any MenuBarPopupControlling,
+        panelController: any MenuBarPanelControlling,
         resolver: any TargetAppResolving,
         audioEngine: any AudioEngineDispatching,
         hud: any PerAppHUDPresenting
     ) {
         self.settings = settings
-        self.popupController = popupController
+        self.panelController = panelController
         self.resolver = resolver
         self.audioEngine = audioEngine
         self.hud = hud
@@ -85,8 +85,8 @@ final class ShortcutsRegistry {
     /// drive it directly without faking a global key event.
     func dispatch(_ action: ShortcutAction) {
         switch action {
-        case .togglePopup:
-            popupController.toggle()
+        case .togglePanel:
+            panelController.toggle()
         case .targetAppVolumeUp:
             adjustTargetVolume(direction: +1)
         case .targetAppVolumeDown:
@@ -171,7 +171,7 @@ final class ShortcutsRegistry {
     }
 
     /// Idempotent. Subsequent calls are no-ops. Safe to call from a SwiftUI
-    /// `.task` modifier on the popup content.
+    /// `.task` modifier on the panel content.
     func start() {
         guard !didStart else { return }
         didStart = true
@@ -225,7 +225,7 @@ final class ShortcutsRegistry {
 
     private func stableID(for action: ShortcutAction) -> String {
         switch action {
-        case .togglePopup: "toggle-popup"
+        case .togglePanel: "toggle-popup"
         case .targetAppVolumeUp: "frontmost-app-volume-up"
         case .targetAppVolumeDown: "frontmost-app-volume-down"
         case .targetAppMuteToggle: "frontmost-app-mute-toggle"

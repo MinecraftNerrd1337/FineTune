@@ -65,7 +65,7 @@ enum AppearancePreference: String, Codable, CaseIterable, Identifiable, CustomSt
 extension AppearancePreference {
     /// AppKit appearance override. `nil` means "inherit from window or app".
     /// Apply via `nsView.window?.appearance = value` for any `NSWindow`/`NSPanel`
-    /// the app hosts (popup, popover, HUD).
+    /// the app hosts (panel, popover, HUD).
     /// `.aqua` available since macOS 10.9; `.darkAqua` since 10.14.
     var nsAppearance: NSAppearance? {
         switch self {
@@ -76,9 +76,9 @@ extension AppearancePreference {
     }
 }
 
-// MARK: - Menu Bar Popup Size
+// MARK: - Menu Bar Panel Size
 
-enum MenuBarPopupSize: String, Codable, CaseIterable, Identifiable, CustomStringConvertible {
+enum MenuBarPanelSize: String, Codable, CaseIterable, Identifiable, CustomStringConvertible {
     case compact
     case comfortable
     case spacious
@@ -94,32 +94,32 @@ enum MenuBarPopupSize: String, Codable, CaseIterable, Identifiable, CustomString
     }
 }
 
-struct PopupDimensions: Equatable {
+struct PanelDimensions: Equatable {
     let width: CGFloat
     let contentPadding: CGFloat
     /// Ceiling on the scrollable body. Sized to stay within a 13" MacBook Air's
     /// usable height after the menu bar, since FluidMenuBarExtra does not clamp
-    /// the popup against `screen.visibleFrame` vertically.
+    /// the panel against `screen.visibleFrame` vertically.
     let maxContentHeight: CGFloat
 }
 
-extension MenuBarPopupSize {
-    var dimensions: PopupDimensions {
+extension MenuBarPanelSize {
+    var dimensions: PanelDimensions {
         switch self {
         case .compact:
-            return PopupDimensions(
+            return PanelDimensions(
                 width: 470,
                 contentPadding: 12,
                 maxContentHeight: 560
             )
         case .comfortable:
-            return PopupDimensions(
+            return PanelDimensions(
                 width: 510,
                 contentPadding: 16,
                 maxContentHeight: 660
             )
         case .spacious:
-            return PopupDimensions(
+            return PanelDimensions(
                 width: 560,
                 contentPadding: 20,
                 maxContentHeight: 760

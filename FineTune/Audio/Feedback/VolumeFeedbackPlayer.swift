@@ -11,10 +11,10 @@ enum VolumeFeedback {
     }
 
     /// The pop bypasses FineTune's taps. Software-tier devices attenuate inside the taps,
-    /// so the pop self-scales with the same mapping; hardware/DDC attenuate in the device.
+    /// so the pop self-scales with the same mapping; hardware/DDC/plugin attenuate in the device.
     static func gain(tier: VolumeControlTier, sliderFraction: Double) -> Float {
         switch tier {
-        case .hardware, .ddc:
+        case .hardware, .ddc, .plugin:
             return 1.0
         case .software:
             return VolumeMapping.systemGain(forSliderFraction: sliderFraction, tier: .software)

@@ -21,9 +21,28 @@ final class AudioEngine {
 
     #if !APP_STORE
     let ddcController: DDCController
+    /// Hardware volume for DACs macOS can't set, through plugins the user adds
+    let volumePlugins: VolumePluginController
     #endif
 
+    /// A device's level or mute changed on the device itself, such as with a DAC's own buttons
+    /// that a volume plugin reports
+    @ObservationIgnored var onLevelChangedOnDevice: ((AudioDeviceID) -> Void)?
+
     private var taps: [pid_t: any ProcessTapControlling] = [:]
+
+    /// The per-DAC mixers of the per-DAC routing mode (`AppSettings.perDeviceMixingEnabled`).
+    private let mixerRegistry: DeviceMixerRegistry
+    /// Mutes apps from their first sample until their tap carries them. Nil in tests.
+    private let startGuard: StartGuard?
+    private var startGuardState = StartGuardPolicy.State()
+    private var startGuardPending = false
+    private var startGuardTask: Task<Void, Never>?
+    /// Set by `startGuardIfNeeded`, cleared by `stopStartGuard`: nothing else starts the guard.
+    private var startGuardActive = false
+    private var routingRebuildTask: Task<Void, Never>?
+    /// deviceUID → what the device plays during a preview (nil: no correction).
+    private var autoEQPreviews: [String: AutoEQProfile?] = [:]
 
     /// Factory for creating tap controllers. Overridable for testing.
     private let tapFactory: @MainActor (AudioApp, [String], String?) throws -> any ProcessTapControlling
@@ -109,6 +128,12 @@ final class AudioEngine {
         sorted.append(contentsOf: remaining)
 
         return sorted
+    }
+
+    /// Whether the menu bar panel leaves an output device out: hidden in its device list, unless
+    /// it is the default output.
+    func isOutputDeviceHiddenFromPanel(_ device: AudioDevice) -> Bool {
+        device.uid != deviceVolumeMonitor.defaultDeviceUID && settingsManager.isOutputDeviceHidden(device.uid)
     }
 
     /// Input devices sorted by user-defined priority order.
@@ -209,13 +234,20 @@ final class AudioEngine {
         #if !APP_STORE
         let ddc = DDCController(settingsManager: manager)
         self.ddcController = ddc
+        let plugins = VolumePluginController(settingsManager: manager, deviceProvider: resolvedDeviceProvider)
+        self.volumePlugins = plugins
         if let dvMonitor = deviceVolumeMonitor {
             self.deviceVolumeMonitor = dvMonitor
         } else {
             guard let realDeviceMonitor else {
                 preconditionFailure("AudioEngine: must provide deviceVolumeMonitor when deviceProvider is not AudioDeviceMonitor")
             }
-            self.deviceVolumeMonitor = DeviceVolumeMonitor(deviceMonitor: realDeviceMonitor, settingsManager: manager, ddcController: ddc)
+            self.deviceVolumeMonitor = DeviceVolumeMonitor(
+                deviceMonitor: realDeviceMonitor,
+                settingsManager: manager,
+                ddcController: ddc,
+                pluginController: plugins
+            )
         }
         #else
         if let dvMonitor = deviceVolumeMonitor {
@@ -230,11 +262,28 @@ final class AudioEngine {
 
         self.deviceKeepAlive = DeviceKeepAliveService(settingsManager: manager, deviceProvider: resolvedDeviceProvider)
 
+        let registry = DeviceMixerRegistry(deviceMonitor: realDeviceMonitor)
+        self.mixerRegistry = registry
+        // Real taps only, in the running app: tests never mute the Mac they run on
+        self.startGuard = tapFactory == nil && startMonitorsAutomatically
+            ? StartGuard() : nil
+
         // Tap factory: use provided factory or default to ProcessTapController
         if let factory = tapFactory {
             self.tapFactory = factory
         } else {
             self.tapFactory = { app, deviceUIDs, preferredSource in
+                // Per-DAC routing: the app shares its device's aggregate (AutoEQ once per DAC)
+                // where it can, and keeps its own elsewhere
+                if manager.appSettings.perDeviceMixingEnabled {
+                    return MixedTapController(
+                        app: app,
+                        targetDeviceUIDs: deviceUIDs,
+                        registry: registry,
+                        deviceMonitor: realDeviceMonitor,
+                        preferredTapSourceDeviceUID: preferredSource
+                    )
+                }
                 if deviceUIDs.count == 1 {
                     return ProcessTapController(
                         app: app,
@@ -266,6 +315,25 @@ final class AudioEngine {
         // Wire callbacks — needed for both test and production mode
         wireCallbacks()
 
+        #if !APP_STORE
+        // Set here rather than in the start-up task below, which holds self strongly
+        ddc.onProbeCompleted = { [weak self] in
+            self?.deviceVolumeMonitor.refreshAfterDDCProbe()
+            self?.refreshAllTapOutputStates()
+        }
+        // A device that became plugin-backed drops its software gain to unity, and back
+        plugins.onBindingsChanged = { [weak self] in
+            self?.deviceVolumeMonitor.refreshOutputDeviceStates()
+            self?.refreshAllTapOutputStates()
+        }
+        plugins.onDeviceStateChanged = { [weak self] deviceID, showsHUD in
+            self?.deviceVolumeMonitor.refreshOutputDeviceState(for: deviceID)
+            if showsHUD {
+                self?.onLevelChangedOnDevice?(deviceID)
+            }
+        }
+        #endif
+
         if startMonitorsAutomatically {
             Task { @MainActor in
                 if self.permission.status == .authorized {
@@ -277,16 +345,15 @@ final class AudioEngine {
                 self.deviceKeepAlive.start()
 
                 #if !APP_STORE
-                ddc.onProbeCompleted = { [weak self] in
-                    self?.deviceVolumeMonitor.refreshAfterDDCProbe()
-                    self?.refreshAllTapOutputStates()
-                }
                 ddc.start()
+                // A plugin only touches a device it was chosen for; none takes new DACs by default
+                plugins.start()
                 #endif
 
                 // Start device volume monitor AFTER deviceMonitor.start() populates devices
                 self.deviceVolumeMonitor.start()
 
+                self.startGuardIfNeeded()
                 self.applyPersistedSettings()
                 self.registerNewDevicesInPriority()
                 if manager.appSettings.lockInputDevice {
@@ -309,6 +376,7 @@ final class AudioEngine {
                 guard let self else { return }
                 if self.permission.status == .authorized {
                     self.processMonitor.start()
+                    self.startGuardIfNeeded()
                     self.applyPersistedSettings()
                     self.startHealthMonitor()
                     self.logger.info("Audio capture authorized — process monitor started")
@@ -326,6 +394,9 @@ final class AudioEngine {
             guard let self else { return }
             guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
             let loudnessEnabled = self.settingsManager.appSettings.loudnessCompensationEnabled
+            if self.outputVolumeBackend(for: deviceID) == .software {
+                self.refreshOutputGain(for: deviceUID)
+            }
             for (_, tap) in self.taps {
                 if tap.currentDeviceUID == deviceUID {
                     tap.currentDeviceVolume = newVolume
@@ -344,6 +415,9 @@ final class AudioEngine {
         deviceVolumeMonitor.onMuteChanged = { [weak self] deviceID, isMuted in
             guard let self else { return }
             guard let deviceUID = self.deviceMonitor.outputDevices.first(where: { $0.id == deviceID })?.uid else { return }
+            if self.outputVolumeBackend(for: deviceID) == .software {
+                self.refreshOutputGain(for: deviceUID)
+            }
             for (_, tap) in self.taps {
                 if tap.currentDeviceUID == deviceUID {
                     tap.isDeviceMuted = isMuted
@@ -491,6 +565,7 @@ final class AudioEngine {
         appDeviceRouting.removeValue(forKey: app.id)
         followsDefault.remove(app.id)
         appliedPIDs.remove(app.id)
+        reconcileStartGuard()
     }
 
     // MARK: - Call Passthrough
@@ -529,6 +604,103 @@ final class AudioEngine {
     func reconcileCallPassthrough() {
         releaseCallPassthroughTaps()
         applyPersistedSettings()
+    }
+
+    /// Rebuilds every tap after the routing mode changed (per app or per DAC). Routing state
+    /// is kept; each app is re-tapped on the same devices with the new kind of controller.
+    ///
+    /// With the start guard on, every tapped app is first taken back under the guard, so it
+    /// stays silent between its old tap and its new one instead of playing directly.
+    func reconcileRoutingMode() {
+        routingRebuildTask?.cancel()
+        routingRebuildTask = nil
+        guard let startGuard, startGuard.isRunning, !taps.isEmpty else {
+            rebuildTapsForRoutingMode()
+            return
+        }
+        startGuardState.forced.formUnion(taps.keys)
+        reconcileStartGuard()
+        routingRebuildTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: StartGuard.holdDelay)
+            guard let self, !Task.isCancelled else { return }
+            self.routingRebuildTask = nil
+            self.rebuildTapsForRoutingMode()
+        }
+    }
+
+    private func rebuildTapsForRoutingMode() {
+        for (pid, tap) in taps {
+            tap.invalidate()
+            appliedPIDs.remove(pid)
+        }
+        taps.removeAll()
+        mixerRegistry.invalidateAll()
+        // The new taps let their apps go as soon as they carry them
+        startGuardState.forced.removeAll()
+        applyPersistedSettings()
+        logger.info("Routing mode: \(self.settingsManager.appSettings.perDeviceMixingEnabled ? "per DAC" : "per app", privacy: .public)")
+    }
+
+    // MARK: - Start Guard
+
+    /// Starts the start guard when it is enabled and taps can be made.
+    func startGuardIfNeeded() {
+        guard startGuard != nil, settingsManager.appSettings.startGuardEnabled,
+              permission.status == .authorized else { return }
+        startGuardActive = true
+        reconcileStartGuard()
+        guard startGuardTask == nil else { return }
+        startGuardTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                // Often while an app is held as it plays (its tap confirmation, the fail-safe),
+                // else only for the guard's watchdog
+                let pending = self?.startGuardPending ?? false
+                try? await Task.sleep(for: pending ? .milliseconds(100) : .seconds(1))
+                guard let self, !Task.isCancelled else { return }
+                self.reconcileStartGuard()
+            }
+        }
+    }
+
+    /// Stops the start guard: every app it held plays directly again.
+    func stopStartGuard() {
+        startGuardActive = false
+        startGuardTask?.cancel()
+        startGuardTask = nil
+        startGuard?.invalidate()
+        startGuardState = StartGuardPolicy.State()
+        startGuardPending = false
+    }
+
+    /// Settings → Audio → Protect App Starts.
+    func setStartGuardEnabled(_ enabled: Bool) {
+        if enabled { startGuardIfNeeded() } else { stopStartGuard() }
+    }
+
+    /// Holds every app FineTune will tap and has no tap carrying yet, lets the rest go.
+    private func reconcileStartGuard() {
+        guard let startGuard, startGuardActive,
+              settingsManager.appSettings.startGuardEnabled,
+              permission.status == .authorized else { return }
+        let apps = processMonitor.activeApps.map { app in
+            StartGuardPolicy.App(
+                pid: app.id,
+                processes: app.processObjectIDs,
+                isEligible: !settingsManager.isIgnored(app.persistenceIdentifier) && !isCallPassthrough(app),
+                isStreaming: processMonitor.isStreaming(app),
+                lastCapturedHostTime: taps[app.id]?.lastCapturedAudioHostTime ?? 0
+            )
+        }
+        let decision = StartGuardPolicy.decide(
+            apps: apps, state: startGuardState, now: mach_absolute_time(),
+            failSafeTicks: StartGuardPolicy.ticks(seconds: StartGuard.failSafeSeconds))
+        startGuardState = decision.state
+        startGuardPending = decision.isPending
+        for pid in decision.newlyReleased {
+            let name = processMonitor.activeApps.first { $0.id == pid }?.name ?? "PID \(pid)"
+            logger.warning("Start guard: \(name, privacy: .public) played \(StartGuard.failSafeSeconds)s with no tap carrying it, let go")
+        }
+        startGuard.update(held: decision.held, allProcesses: (try? AudioObjectID.readProcessList()) ?? [])
     }
 
     /// Unhide an app by its persistence identifier.
@@ -626,6 +798,7 @@ final class AudioEngine {
             processMonitor.start()
         }
         deviceMonitor.start()
+        startGuardIfNeeded()
         applyPersistedSettings()
         if permission.status == .authorized {
             startHealthMonitor()
@@ -641,12 +814,16 @@ final class AudioEngine {
 
     func stop() {
         stopHealthMonitor()
+        routingRebuildTask?.cancel()
+        routingRebuildTask = nil
+        stopStartGuard()
         processMonitor.stop()
         deviceMonitor.stop()
         for tap in taps.values {
             tap.invalidate()
         }
         taps.removeAll()
+        mixerRegistry.invalidateAll()
         logger.info("AudioEngine stopped")
     }
 
@@ -664,8 +841,11 @@ final class AudioEngine {
     /// Resets all persisted settings and synchronizes in-memory engine state.
     /// Active taps are kept alive but reverted to defaults (unity volume, unmuted, flat EQ).
     func handleSettingsReset() {
+        let wasPerDeviceMixing = settingsManager.appSettings.perDeviceMixingEnabled
+
         // 1. Clear persisted state
         settingsManager.resetAllSettings()
+        setStartGuardEnabled(settingsManager.appSettings.startGuardEnabled)
 
         // 2. Clear in-memory routing and tracking state
         appliedPIDs.removeAll()
@@ -674,6 +854,11 @@ final class AudioEngine {
 
         // 3. Clear cached per-app audio state
         volumeState.resetAll()
+
+        #if !APP_STORE
+        // The reset forgot which plugin each device uses: let go of the devices they drove
+        volumePlugins.reload(force: true)
+        #endif
 
         // 4. Refresh output state caches so software-backed devices reset to defaults.
         deviceVolumeMonitor.refreshOutputDeviceStates()
@@ -689,6 +874,11 @@ final class AudioEngine {
         // 6. Re-apply from clean settings (re-establishes routing to system default)
         applyPersistedSettings()
 
+        // 7. The reset turned per-DAC routing off: rebuild the taps it had made
+        if wasPerDeviceMixing && !settingsManager.appSettings.perDeviceMixingEnabled {
+            reconcileRoutingMode()
+        }
+
         logger.info("Settings reset: engine state synchronized")
     }
 
@@ -697,15 +887,17 @@ final class AudioEngine {
     /// Master volume (0...1) of an output device, remembered per device: a software gain on top
     /// of the device's own hardware, DDC or software volume. Applied like a software-backed
     /// device's volume: folded into the gain of each tap playing on that device alone, so it adds
-    /// no processing stage (1.0 changes nothing). A tap fanned out to several devices sends them
-    /// the same buffer, so it keeps the app gain alone rather than one device's master volume.
-    /// Audio FineTune doesn't tap (system sounds, ignored apps, apps on a call) is not affected.
+    /// no processing stage (1.0 changes nothing). A tap playing on several devices renders each
+    /// device's buffer separately and applies each device's own master volume there
+    /// (`setOutputGain`). Audio FineTune doesn't tap (system sounds, ignored apps, apps on a
+    /// call) is not affected.
     func deviceMasterVolume(for deviceUID: String) -> Float {
         settingsManager.getDeviceMasterVolume(for: deviceUID)
     }
 
     func setDeviceMasterVolume(_ volume: Float, for deviceUID: String) {
         settingsManager.setDeviceMasterVolume(for: deviceUID, to: volume)
+        refreshOutputGain(for: deviceUID)
         let loudnessEnabled = settingsManager.appSettings.loudnessCompensationEnabled
         for tap in taps.values where tap.currentDeviceUIDs == [deviceUID] {
             tap.volume = effectiveVolume(for: tap.app.id, deviceUIDs: tap.currentDeviceUIDs)
@@ -761,8 +953,8 @@ final class AudioEngine {
 
     /// Effective gain for ProcessTapController: app volume × boost, plus the single
     /// device's master volume and, for software-backed devices, its software output gain.
-    /// Multi-destination routing keeps `appGain` alone because a per-device gain has no
-    /// unambiguous meaning across fan-out (every device gets the same buffer).
+    /// Multi-destination routing keeps `appGain` alone: the tap applies each device's
+    /// `outputGain` to that device's buffer.
     private func effectiveVolume(for pid: pid_t, deviceUIDs: [String]? = nil) -> Float {
         let appGain = volumeState.getVolume(for: pid) * volumeState.getBoost(for: pid).rawValue
 
@@ -789,9 +981,57 @@ final class AudioEngine {
         return tap.currentDeviceVolume * master * volumeState.getVolume(for: tap.app.id)
     }
 
+    /// Gain a device applies on top of the app's in a multi-device tap: its master volume and,
+    /// for a software-backed device, its software output gain (what `effectiveVolume` folds in
+    /// for a tap on that device alone).
+    private func outputGain(for deviceUID: String) -> Float {
+        let master = deviceMasterVolume(for: deviceUID)
+        guard let device = deviceMonitor.device(for: deviceUID),
+              outputVolumeBackend(for: device.id) == .software else {
+            return master
+        }
+        return master * deviceVolumeMonitor.outputProcessingGain(for: device.id)
+    }
+
+    /// Hands every tap the new gain of a device. Every tap, not only those on the device now:
+    /// a tap keeps the gains it was given to build the chains of the devices it moves to.
+    private func refreshOutputGain(for deviceUID: String) {
+        let gain = outputGain(for: deviceUID)
+        for tap in taps.values {
+            tap.setOutputGain(gain, for: deviceUID)
+        }
+    }
+
+    /// Hands a tap the gain and, when it is known without loading, the AutoEQ profile of each
+    /// device it is about to play on, so that a multi-device aggregate built for them starts
+    /// with the right ones (the profiles are applied again once the devices are in place).
+    private func prepareOutputs(of tap: any ProcessTapControlling, for deviceUIDs: [String]) {
+        for uid in deviceUIDs {
+            tap.setOutputGain(outputGain(for: uid), for: uid)
+            if let known = immediateAutoEQProfile(for: uid) {
+                tap.updateAutoEQProfile(known, for: uid)
+            }
+        }
+    }
+
+    /// The AutoEQ profile of a device when it is known without loading: `.some(nil)` when the
+    /// device has no correction, nil when the device is unknown or its profile still loading.
+    private func immediateAutoEQProfile(for deviceUID: String) -> AutoEQProfile?? {
+        guard let device = deviceMonitor.device(for: deviceUID) else { return nil }
+        if device.supportsAutoEQ, let preview = autoEQPreviews[deviceUID] { return .some(preview) }
+        guard device.supportsAutoEQ, let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
+            return .some(nil)
+        }
+        guard let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
+        return .some(activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
+    }
+
     private func applyTapOutputState(to tap: any ProcessTapControlling, for pid: pid_t, deviceUIDs: [String]? = nil) {
         let resolvedUIDs = deviceUIDs ?? tap.currentDeviceUIDs
         tap.volume = effectiveVolume(for: pid, deviceUIDs: resolvedUIDs)
+        for uid in resolvedUIDs {
+            tap.setOutputGain(outputGain(for: uid), for: uid)
+        }
         tap.isMuted = volumeState.getMute(for: pid)
 
         if let primaryUID = resolvedUIDs.first,
@@ -878,6 +1118,41 @@ final class AudioEngine {
         settingsManager.getAutoEQSelection(for: deviceUID)
     }
 
+    /// Make the devices that use one profile use another: a preset made from the template they
+    /// used. Each device keeps its correction on or off.
+    func switchAutoEQProfile(from oldID: String, to newID: String, onDevices deviceUIDs: [String]) {
+        for uid in deviceUIDs {
+            guard let selection = settingsManager.getAutoEQSelection(for: uid), selection.profileID == oldID else { continue }
+            settingsManager.setAutoEQSelection(for: uid, to: AutoEQSelection(profileID: newID, isEnabled: selection.isEnabled))
+            applyAutoEQToTaps(for: uid)
+        }
+    }
+
+    // MARK: - AutoEQ Preview
+
+    /// Makes a device play `profile` (nil: no correction) instead of its stored AutoEQ, until
+    /// `endAutoEQPreview(on:)`. Nothing is stored, so a profile can be heard saved or not.
+    func previewAutoEQ(_ profile: AutoEQProfile?, on deviceUID: String) {
+        if let current = autoEQPreviews[deviceUID], current == profile { return }
+        autoEQPreviews.updateValue(profile, forKey: deviceUID)
+        applyAutoEQToTaps(for: deviceUID)
+    }
+
+    /// The device plays its stored AutoEQ again.
+    func endAutoEQPreview(on deviceUID: String) {
+        guard autoEQPreviews.removeValue(forKey: deviceUID) != nil else { return }
+        applyAutoEQToTaps(for: deviceUID)
+    }
+
+    /// Re-apply a preset to every tap whose device uses it (after it was edited and saved).
+    func reapplyAutoEQProfile(id profileID: String) {
+        for tap in taps.values {
+            guard let deviceUID = tap.currentDeviceUID,
+                  settingsManager.getAutoEQSelection(for: deviceUID)?.profileID == profileID else { continue }
+            applyAutoEQToTap(tap)
+        }
+    }
+
     var autoEQPreampEnabled: Bool {
         settingsManager.autoEQPreampEnabled
     }
@@ -906,7 +1181,7 @@ final class AudioEngine {
     /// Apply AutoEQ profile to all taps currently routed to the given device.
     private func applyAutoEQToTaps(for deviceUID: String) {
         for tap in taps.values {
-            guard tap.currentDeviceUID == deviceUID else { continue }
+            guard tap.currentDeviceUIDs.contains(deviceUID) else { continue }
             applyAutoEQToTap(tap)
         }
     }
@@ -914,8 +1189,41 @@ final class AudioEngine {
     /// Synchronous in-memory AutoEQ profile lookup. nil = not yet cached.
     private func autoEQProfileForActivation(deviceUID: String) -> AutoEQProfile? {
         guard let device = deviceMonitor.device(for: deviceUID), device.supportsAutoEQ else { return nil }
-        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID), selection.isEnabled else { return nil }
-        return autoEQProfileManager.profile(for: selection.profileID)
+        if let preview = autoEQPreviews[deviceUID] { return preview }
+        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
+              let profile = autoEQProfileManager.profile(for: selection.profileID) else { return nil }
+        return activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled)
+    }
+
+    /// The profile handed to the processor. With the correction switched off, the filters are
+    /// dropped but the preamp stays. With `levelMatched`, the level the correction takes away
+    /// (or adds) is applied too (`levelMatchDB`), so switching the correction on and off keeps
+    /// the same perceived level. The preset itself is left as it is.
+    static func activeAutoEQProfile(
+        _ profile: AutoEQProfile, correctionEnabled: Bool, levelMatched: Bool
+    ) -> AutoEQProfile {
+        guard !correctionEnabled else { return profile }
+        var preampOnly = profile
+        if levelMatched, let change = AutoEQResponse.perceivedLevelChangeDB(profile) {
+            preampOnly.levelMatchDB = Float(change)
+        }
+        preampOnly.filters = []
+        preampOnly.curve = []
+        return preampOnly
+    }
+
+    /// `activeAutoEQProfile` with the level matching chosen in Settings.
+    func activeAutoEQProfile(_ profile: AutoEQProfile, correctionEnabled: Bool) -> AutoEQProfile {
+        Self.activeAutoEQProfile(
+            profile, correctionEnabled: correctionEnabled,
+            levelMatched: settingsManager.appSettings.autoEQLevelMatchEnabled)
+    }
+
+    /// Re-applies AutoEQ to every tap (after the level matching setting changed).
+    func reapplyAllAutoEQ() {
+        for tap in taps.values {
+            applyAutoEQToTap(tap)
+        }
     }
 
     private func tapInitialState(forApp app: AudioApp, primaryDeviceUID: String, deviceVolume: Float) -> TapInitialState {
@@ -931,45 +1239,66 @@ final class AudioEngine {
         )
     }
 
+    /// Applies the AutoEQ of the tap's devices: the first device's to the tap's main chain, and
+    /// each device's to its own buffer (a tap on several devices renders each separately).
     /// Skips AutoEQ entirely for devices that don't support it (speakers, HDMI, etc.).
-    /// If the profile isn't loaded yet, triggers an async fetch and applies when ready.
+    /// If a profile isn't loaded yet, triggers an async fetch and applies it when ready.
     private func applyAutoEQToTap(_ tap: any ProcessTapControlling) {
-        guard let deviceUID = tap.currentDeviceUID else { return }
+        guard let primaryUID = tap.currentDeviceUID else { return }
+        applyAutoEQ(of: primaryUID, to: tap, stillApplies: { tap.currentDeviceUID == primaryUID }) { profile in
+            tap.updateAutoEQProfile(profile)
+        }
+        for uid in tap.currentDeviceUIDs {
+            applyAutoEQ(of: uid, to: tap, stillApplies: { tap.currentDeviceUIDs.contains(uid) }) { profile in
+                tap.updateAutoEQProfile(profile, for: uid)
+            }
+        }
+    }
 
+    private func applyAutoEQ(
+        of deviceUID: String,
+        to tap: any ProcessTapControlling,
+        stillApplies: @escaping @MainActor () -> Bool,
+        apply: @escaping @MainActor (AutoEQProfile?) -> Void
+    ) {
         // Skip AutoEQ for non-headphone devices (or if device not found in monitor)
         guard let device = deviceMonitor.device(for: deviceUID) else {
             logger.debug("AutoEQ skip for \(tap.app.name): device \(deviceUID) not found in monitor")
             return
         }
         guard device.supportsAutoEQ else {
-            tap.updateAutoEQProfile(nil)
+            apply(nil)
             logger.debug("AutoEQ skip for \(tap.app.name): \(device.name) doesn't support AutoEQ")
             return
         }
 
-        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID),
-              selection.isEnabled else {
-            tap.updateAutoEQProfile(nil)
-            logger.debug("AutoEQ skip for \(tap.app.name): no selection or disabled for \(device.name)")
+        // A preview on this device: it plays the profile it was given
+        if let preview = autoEQPreviews[deviceUID] {
+            apply(preview)
+            return
+        }
+
+        guard let selection = settingsManager.getAutoEQSelection(for: deviceUID) else {
+            apply(nil)
+            logger.debug("AutoEQ skip for \(tap.app.name): no selection for \(device.name)")
             return
         }
 
         // Try in-memory first (instant)
         if let profile = autoEQProfileManager.profile(for: selection.profileID) {
-            tap.updateAutoEQProfile(profile)
+            apply(activeAutoEQProfile(profile, correctionEnabled: selection.isEnabled))
             return
         }
 
         // Profile not loaded yet — fetch asynchronously
-        tap.updateAutoEQProfile(nil)
+        apply(nil)
         Task { @MainActor in
             guard let profile = await autoEQProfileManager.resolveProfile(for: selection.profileID) else { return }
-            // Verify tap still exists and is still routed to the same device
-            guard tap.currentDeviceUID == deviceUID else { return }
+            // Verify the tap is still routed to the same device
+            guard stillApplies() else { return }
             guard let latestSelection = settingsManager.getAutoEQSelection(for: deviceUID),
-                  latestSelection.profileID == selection.profileID,
-                  latestSelection.isEnabled else { return }
-            tap.updateAutoEQProfile(profile)
+                  latestSelection.profileID == selection.profileID else { return }
+            apply(self.activeAutoEQProfile(profile, correctionEnabled: latestSelection.isEnabled))
         }
     }
 
@@ -1059,6 +1388,23 @@ final class AudioEngine {
         followsDefault.contains(app.id)
     }
 
+    /// True while an app plays on its own multi-device selection (multi mode with at least one
+    /// selected device connected). Those outputs were chosen explicitly, so a change of the
+    /// default output device does not concern the app: its tap is left exactly as it is.
+    /// False for a multi-mode app that fell back to the default because every selected device
+    /// is gone; that one follows the default like a single-device app.
+    func isMultiRouted(_ pid: pid_t) -> Bool {
+        guard volumeState.getDeviceSelectionMode(for: pid) == .multi else { return false }
+        return volumeState.getSelectedDeviceUIDs(for: pid).contains { deviceMonitor.device(for: $0) != nil }
+    }
+
+    /// Whether an app's tap may capture the default device's own stream (see
+    /// `preferredTapSourceDeviceUID`). Never for a multi-routed app: its tap must survive
+    /// default changes untouched, which only the device-independent mixdown capture does.
+    private func tapSourceFollowsDefault(_ pid: pid_t) -> Bool {
+        followsDefault.contains(pid) && !isMultiRouted(pid)
+    }
+
     // MARK: - Multi-Device Selection
 
     /// Gets the device selection mode for an app
@@ -1107,6 +1453,8 @@ final class AudioEngine {
         case .single:
             if isFollowingDefault(for: app), let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
                 deviceUIDs = [defaultUID]
+                // Default changes were not applied to this app while it was multi-routed
+                appDeviceRouting[app.id] = defaultUID
             } else if let deviceUID = appDeviceRouting[app.id] {
                 deviceUIDs = [deviceUID]
             } else if let defaultUID = deviceVolumeMonitor.defaultDeviceUID {
@@ -1117,7 +1465,11 @@ final class AudioEngine {
             }
 
         case .multi:
-            let selectedUIDs = getSelectedDeviceUIDs(for: app).sorted()
+            // Connected devices only: the selection keeps a device that is unplugged while
+            // the app falls back to the default, and an aggregate cannot include it.
+            let selectedUIDs = getSelectedDeviceUIDs(for: app)
+                .filter { deviceMonitor.device(for: $0) != nil }
+                .sorted()
             if selectedUIDs.isEmpty {
                 return
             }
@@ -1129,9 +1481,11 @@ final class AudioEngine {
             // Tap exists - update devices
             if tap.currentDeviceUIDs != deviceUIDs {
                 do {
-                    let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
+                    let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: tapSourceFollowsDefault(app.id))
+                    prepareOutputs(of: tap, for: deviceUIDs)
                     try await tap.updateDevices(to: deviceUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID)
                     applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
+                    applyAutoEQToTap(tap)
                     logger.debug("Updated \(app.name) to \(deviceUIDs.count) device(s)")
                 } catch {
                     logger.error("Failed to update devices for \(app.name): \(error.localizedDescription)")
@@ -1151,10 +1505,11 @@ final class AudioEngine {
         guard !isCallPassthrough(app) else { return }
         releaseStaleTaps(conflictingWith: app)
 
-        let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: followsDefault.contains(app.id))
+        let preferredTapSourceUID = preferredTapSourceDeviceUID(forOutputUIDs: deviceUIDs, isFollowsDefault: tapSourceFollowsDefault(app.id))
         do {
             let tap = try tapFactory(app, deviceUIDs, preferredTapSourceUID)
             applyTapOutputState(to: tap, for: app.id, deviceUIDs: deviceUIDs)
+            prepareOutputs(of: tap, for: deviceUIDs)
 
             let initial = tapInitialState(
                 forApp: app,
@@ -1165,7 +1520,8 @@ final class AudioEngine {
             taps[app.id] = tap
 
             // Catalog AutoEQ may not have been cached yet — kick off async resolve.
-            if initial.autoEQProfile == nil {
+            // A tap on several devices also needs each device's own correction.
+            if initial.autoEQProfile == nil || deviceUIDs.count > 1 {
                 applyAutoEQToTap(tap)
             }
 
@@ -1177,6 +1533,8 @@ final class AudioEngine {
 
     func applyPersistedSettings() {
         guard permission.status == .authorized else { return }
+        // New taps, released ones and changed settings all change what the guard holds
+        defer { reconcileStartGuard() }
 
         // Warm the AutoEQ cache for every (app, device) selection so that subsequent
         // tap activations can apply correction synchronously inside activate(initial:)
@@ -1390,15 +1748,19 @@ final class AudioEngine {
     /// Routes all followsDefault apps to the given device UID and switches their taps.
     /// Early-exits if all apps are already routed to the target (avoids unnecessary tap switches).
     private func routeFollowsDefaultApps(to targetUID: String) {
-        guard !followsDefault.allSatisfy({ appDeviceRouting[$0] == targetUID }) else { return }
+        // An app playing on its own multi-device selection keeps it: re-routing it here would
+        // collapse its outputs to the new default alone. Its tap is not touched at all, so the
+        // default change does not disturb its audio.
+        let followers = followsDefault.filter { !isMultiRouted($0) }
+        guard !followers.allSatisfy({ appDeviceRouting[$0] == targetUID }) else { return }
 
-        for pid in followsDefault {
+        for pid in followers {
             appDeviceRouting[pid] = targetUID
         }
 
         var tapsToSwitch: [(app: AudioApp, tap: any ProcessTapControlling)] = []
         for app in apps {
-            guard followsDefault.contains(app.id), let tap = taps[app.id] else { continue }
+            guard followers.contains(app.id), let tap = taps[app.id] else { continue }
             tapsToSwitch.append((app, tap))
         }
         guard !tapsToSwitch.isEmpty else { return }
@@ -1497,9 +1859,12 @@ final class AudioEngine {
                 // Source device is dead, skip crossfade
                 for (tap, remainingUIDs) in multiModeTapsToUpdate {
                     do {
-                        let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: remainingUIDs, isFollowsDefault: self.followsDefault.contains(tap.app.id))
+                        let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: remainingUIDs, isFollowsDefault: self.tapSourceFollowsDefault(tap.app.id))
+                        self.prepareOutputs(of: tap, for: remainingUIDs)
                         try await tap.updateDevices(to: remainingUIDs, preferredTapSourceDeviceUID: preferredTapSourceUID, sourceDeviceDead: true)
                         self.applyTapOutputState(to: tap, for: tap.app.id, deviceUIDs: remainingUIDs)
+                        // The first device may have changed, and with it the main chain's correction
+                        self.applyAutoEQToTap(tap)
                         self.logger.debug("Removed \(deviceName) from \(tap.app.name) multi-device output")
                     } catch {
                         self.logger.error("Failed to update \(tap.app.name) devices: \(error.localizedDescription)")
@@ -1575,7 +1940,9 @@ final class AudioEngine {
             guard let persistedUIDs = settingsManager.getSelectedDeviceUIDs(for: app.persistenceIdentifier),
                   persistedUIDs.contains(deviceUID) else { continue }
             let currentUIDs = volumeState.getSelectedDeviceUIDs(for: app.id)
-            guard !currentUIDs.contains(deviceUID) else { continue }
+            // Already playing on it. (When every selected device was gone, the device stayed in
+            // the selection while the tap fell back to the default: that one must come back.)
+            guard !(currentUIDs.contains(deviceUID) && tap.currentDeviceUIDs.contains(deviceUID)) else { continue }
 
             // Add the reconnected device back to in-memory selection
             var updatedUIDs = currentUIDs
@@ -1756,7 +2123,7 @@ final class AudioEngine {
         }
 
         routeFollowsDefaultApps(to: newDefaultUID)
-        let affectedApps = apps.filter { followsDefault.contains($0.id) }
+        let affectedApps = apps.filter { followsDefault.contains($0.id) && !isMultiRouted($0.id) }
         if !affectedApps.isEmpty {
             logger.info("Default changed to \(newDevice.name), \(affectedApps.count) app(s) following")
             if settingsManager.appSettings.showDeviceDisconnectAlerts {
@@ -1868,6 +2235,8 @@ final class AudioEngine {
                 self.followsDefault.remove(pid)
                 self.appliedPIDs.remove(pid)  // Allow re-initialization if app resumes
                 self.pendingCleanup.removeValue(forKey: pid)
+                // Silent now, but held again before it plays
+                self.reconcileStartGuard()
             }
         }
 

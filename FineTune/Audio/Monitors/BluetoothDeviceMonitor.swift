@@ -92,7 +92,7 @@ final class BluetoothDeviceMonitor {
     // MARK: - Refresh
 
     /// Rebuilds `pairedDevices` from the current IOBluetooth snapshot.
-    /// Call on popup-appear and after any CoreAudio device list change.
+    /// Call on panel-appear and after any CoreAudio device list change.
     func refresh() {
         refreshTask?.cancel()
         refreshTask = Task {

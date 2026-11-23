@@ -10,12 +10,12 @@ import KeyboardShortcuts
 struct ShortcutsRegistryTests {
     // MARK: - dispatch
 
-    @Test("dispatch(.togglePopup) calls popupController.toggle() exactly once")
-    func dispatchTogglePopup() {
-        let recorder = RecordingPopupController()
-        let registry = makeRegistry(popupController: recorder)
+    @Test("dispatch(.togglePanel) calls panelController.toggle() exactly once")
+    func dispatchTogglePanel() {
+        let recorder = RecordingPanelController()
+        let registry = makeRegistry(panelController: recorder)
 
-        registry.dispatch(.togglePopup)
+        registry.dispatch(.togglePanel)
 
         #expect(recorder.toggleCount == 1)
     }
@@ -177,13 +177,13 @@ struct ShortcutsRegistryTests {
         #expect(ShortcutAction.targetAppVolumeUp.supportsRepeat == true)
         #expect(ShortcutAction.targetAppVolumeDown.supportsRepeat == true)
         #expect(ShortcutAction.targetAppMuteToggle.supportsRepeat == false)
-        #expect(ShortcutAction.togglePopup.supportsRepeat == false)
+        #expect(ShortcutAction.togglePanel.supportsRepeat == false)
     }
 
-    @Test("name(for: .togglePopup) is the stable persistence identifier")
+    @Test("name(for: .togglePanel) is the stable persistence identifier")
     func nameStable() {
         let registry = makeRegistry()
-        #expect(registry.name(for: .togglePopup).rawValue == "toggle-popup")
+        #expect(registry.name(for: .togglePanel).rawValue == "toggle-popup")
         #expect(registry.name(for: .targetAppVolumeUp).rawValue == "frontmost-app-volume-up")
         #expect(registry.name(for: .targetAppVolumeDown).rawValue == "frontmost-app-volume-down")
         #expect(registry.name(for: .targetAppMuteToggle).rawValue == "frontmost-app-mute-toggle")
@@ -196,17 +196,17 @@ struct ShortcutsRegistryTests {
         let settings = makeIsolatedSettings()
         let stored = ShortcutCodable(keyCode: 9, modifiers: 0x12_0000)
         var app = settings.appSettings
-        app.customShortcuts[ShortcutAction.togglePopup.rawValue] = stored
+        app.customShortcuts[ShortcutAction.togglePanel.rawValue] = stored
         settings.appSettings = app
 
         let registry = makeRegistry(settings: settings)
         registry.start()
 
-        let resolved = KeyboardShortcuts.getShortcut(for: registry.name(for: .togglePopup))
+        let resolved = KeyboardShortcuts.getShortcut(for: registry.name(for: .togglePanel))
         #expect(resolved?.carbonKeyCode == stored.keyCode)
         #expect(resolved?.carbonModifiers == stored.keyboardShortcut.carbonModifiers)
 
-        KeyboardShortcuts.setShortcut(nil, for: registry.name(for: .togglePopup))
+        KeyboardShortcuts.setShortcut(nil, for: registry.name(for: .togglePanel))
     }
 
     @Test("start() is idempotent")
@@ -217,14 +217,14 @@ struct ShortcutsRegistryTests {
         registry.start()
         registry.start()
 
-        let recorder = RecordingPopupController()
-        let registryWithRecorder = makeRegistry(settings: settings, popupController: recorder)
+        let recorder = RecordingPanelController()
+        let registryWithRecorder = makeRegistry(settings: settings, panelController: recorder)
         registryWithRecorder.start()
         registryWithRecorder.start()
-        registryWithRecorder.dispatch(.togglePopup)
+        registryWithRecorder.dispatch(.togglePanel)
         #expect(recorder.toggleCount == 1)
 
-        KeyboardShortcuts.setShortcut(nil, for: registry.name(for: .togglePopup))
+        KeyboardShortcuts.setShortcut(nil, for: registry.name(for: .togglePanel))
     }
 
     // MARK: - recordCallback: write-back path
@@ -234,11 +234,11 @@ struct ShortcutsRegistryTests {
         let settings = makeIsolatedSettings()
         let registry = makeRegistry(settings: settings)
 
-        let callback = registry.recordCallback(for: .togglePopup)
+        let callback = registry.recordCallback(for: .togglePanel)
         let newShortcut = KeyboardShortcuts.Shortcut(carbonKeyCode: 11, carbonModifiers: 0x12_0000)
         callback(newShortcut)
 
-        let stored = settings.appSettings.customShortcuts[ShortcutAction.togglePopup.rawValue]
+        let stored = settings.appSettings.customShortcuts[ShortcutAction.togglePanel.rawValue]
         #expect(stored?.keyCode == 11)
         #expect(stored?.modifiers == UInt(newShortcut.carbonModifiers))
     }
@@ -247,28 +247,28 @@ struct ShortcutsRegistryTests {
     func recordCallbackClearsOnNil() {
         let settings = makeIsolatedSettings()
         var app = settings.appSettings
-        app.customShortcuts[ShortcutAction.togglePopup.rawValue] = ShortcutCodable(keyCode: 9, modifiers: 0)
+        app.customShortcuts[ShortcutAction.togglePanel.rawValue] = ShortcutCodable(keyCode: 9, modifiers: 0)
         settings.appSettings = app
 
         let registry = makeRegistry(settings: settings)
-        let callback = registry.recordCallback(for: .togglePopup)
+        let callback = registry.recordCallback(for: .togglePanel)
         callback(nil)
 
-        #expect(settings.appSettings.customShortcuts[ShortcutAction.togglePopup.rawValue] == nil)
+        #expect(settings.appSettings.customShortcuts[ShortcutAction.togglePanel.rawValue] == nil)
     }
 
     // MARK: - Helpers
 
     private func makeRegistry(
         settings: SettingsManager? = nil,
-        popupController: (any MenuBarPopupControlling)? = nil,
+        panelController: (any MenuBarPanelControlling)? = nil,
         resolver: (any TargetAppResolving)? = nil,
         audioEngine: (any AudioEngineDispatching)? = nil,
         hud: (any PerAppHUDPresenting)? = nil
     ) -> ShortcutsRegistry {
         ShortcutsRegistry(
             settings: settings ?? makeIsolatedSettings(),
-            popupController: popupController ?? RecordingPopupController(),
+            panelController: panelController ?? RecordingPanelController(),
             resolver: resolver ?? StubTargetResolver(target: nil),
             audioEngine: audioEngine ?? RecordingAudioEngine(apps: []),
             hud: hud ?? RecordingHUDController()
@@ -294,7 +294,7 @@ struct ShortcutsRegistryTests {
 // MARK: - Test doubles
 
 @MainActor
-final class RecordingPopupController: MenuBarPopupControlling {
+final class RecordingPanelController: MenuBarPanelControlling {
     var toggleCount = 0
     func toggle() { toggleCount += 1 }
 }

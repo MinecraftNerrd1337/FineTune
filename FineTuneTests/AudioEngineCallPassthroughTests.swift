@@ -111,7 +111,7 @@ struct AudioEngineCallPassthroughTests {
         #expect(fix.lastTap() == nil)
     }
 
-    @Test("The popup passthrough state ends when input stops or the setting is disabled")
+    @Test("The panel passthrough state ends when input stops or the setting is disabled")
     func passthroughDisplayStateTracksInputAndSetting() {
         let onCall = makeApp(isRunningInput: true)
         let fix = makeFixture(activeApp: onCall)

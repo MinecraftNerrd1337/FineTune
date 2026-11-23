@@ -29,7 +29,7 @@ final class MediaKeyMonitor {
     private let settingsManager: SettingsManager
     private let accessibility: any AccessibilityTrustProviding
     private let hudController: MediaKeyHUDPresenting
-    private let popupVisibility: PopupVisibilityService
+    private let panelVisibility: PanelVisibilityService
     private let mediaKeyStatus: MediaKeyStatus
     private let logger = Logger(subsystem: "com.finetuneapp.FineTune", category: "MediaKeyMonitor")
 
@@ -69,7 +69,7 @@ final class MediaKeyMonitor {
         settingsManager: SettingsManager,
         accessibility: any AccessibilityTrustProviding,
         hudController: MediaKeyHUDPresenting,
-        popupVisibility: PopupVisibilityService,
+        panelVisibility: PanelVisibilityService,
         mediaKeyStatus: MediaKeyStatus
     ) {
         self.decoder = decoder
@@ -77,7 +77,7 @@ final class MediaKeyMonitor {
         self.settingsManager = settingsManager
         self.accessibility = accessibility
         self.hudController = hudController
-        self.popupVisibility = popupVisibility
+        self.panelVisibility = panelVisibility
         self.mediaKeyStatus = mediaKeyStatus
         subscribeToWorkspaceLifecycle()
     }
@@ -247,6 +247,11 @@ final class MediaKeyMonitor {
             logger.debug("Ignoring media key: no valid default output device")
             return
         }
+        // Until its plugin drives it, the device would be set in software, and the HUD show that
+        guard !volumeMonitor.isAwaitingPlugin(deviceID) else {
+            logger.debug("Ignoring media key: the default output device's plugin is starting")
+            return
+        }
         let tier = volumeMonitor.outputVolumeBackend(for: deviceID)
         let deviceName = audioEngine.deviceMonitor.outputDevices.first { $0.id == deviceID }?.name ?? ""
         handleCore(
@@ -270,7 +275,7 @@ final class MediaKeyMonitor {
 
     /// `.ddc` tier coalesces repeats to an 80 ms floor; hardware/software pass them through.
     /// Mute repeats are dropped upstream. Stepping operates on slider-position; HUD receives
-    /// the slider fraction so it always matches the popup device row.
+    /// the slider fraction so it always matches the panel device row.
     func handleCore(
         event: MediaKeyEvent,
         deviceID: AudioDeviceID,
@@ -282,7 +287,7 @@ final class MediaKeyMonitor {
         setMute: (AudioDeviceID, Bool) -> Void,
         playFeedback: (Float) -> Void = { _ in }
     ) {
-        let shouldShowHUD = !popupVisibility.isVisible
+        let shouldShowHUD = !panelVisibility.isVisible
         let sliderDelta = settingsManager.appSettings.volumeHotkeyStep.sliderDelta
         let currentSlider = VolumeMapping.sliderFraction(forSystemGain: currentVolume, tier: tier)
 
@@ -294,15 +299,16 @@ final class MediaKeyMonitor {
             }
             let nextSlider = min(1.0, currentSlider + sliderDelta)
             let newVolume = VolumeMapping.systemGain(forSliderFraction: nextSlider, tier: tier)
+            // The HUD first, so it shows without waiting for the device
+            if shouldShowHUD {
+                hudController.show(sliderFraction: nextSlider, mute: false, deviceName: deviceName)
+            }
             // Volume-up from muted unmutes (system HUD parity).
             if currentMute {
                 setMute(deviceID, false)
             }
             setVolume(deviceID, newVolume)
             playFeedback(VolumeFeedback.gain(tier: tier, sliderFraction: nextSlider))
-            if shouldShowHUD {
-                hudController.show(sliderFraction: nextSlider, mute: false, deviceName: deviceName)
-            }
             iconCoordinator?.flashDevice()
 
         case .volumeDown(let isRepeat):
@@ -313,6 +319,9 @@ final class MediaKeyMonitor {
             let nextSlider = max(0, currentSlider - sliderDelta)
             let newVolume = VolumeMapping.systemGain(forSliderFraction: nextSlider, tier: tier)
             let willBeSilent = nextSlider <= 0.001
+            if shouldShowHUD {
+                hudController.show(sliderFraction: nextSlider, mute: willBeSilent, deviceName: deviceName)
+            }
             // muted+audible → unmute; unmuted+silent → auto-mute (system HUD parity).
             if currentMute && !willBeSilent {
                 setMute(deviceID, false)
@@ -321,17 +330,14 @@ final class MediaKeyMonitor {
             }
             setVolume(deviceID, newVolume)
             playFeedback(VolumeFeedback.gain(tier: tier, sliderFraction: nextSlider))
-            if shouldShowHUD {
-                hudController.show(sliderFraction: nextSlider, mute: willBeSilent, deviceName: deviceName)
-            }
             iconCoordinator?.flashDevice()
 
         case .muteToggle:
             let newMute = !currentMute
-            setMute(deviceID, newMute)
             if shouldShowHUD {
                 hudController.show(sliderFraction: currentSlider, mute: newMute, deviceName: deviceName)
             }
+            setMute(deviceID, newMute)
             iconCoordinator?.flashDevice()
         }
     }

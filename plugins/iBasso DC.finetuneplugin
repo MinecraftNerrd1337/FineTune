@@ -1,0 +1,352 @@
+// iBasso DC: hardware volume for FineTune
+//
+// iBasso's USB DACs set their volume in their DAC chips, through the HID interface they expose
+// next to their audio, which is why macOS sees no volume control on them. This plugin sends the
+// commands iBasso's own app sends, for each model that app sets the volume of.
+//
+// The protocol facts below (report layouts, chip addresses, register offsets, command numbers, the
+// volume table, the reads of the controller's level and their answers, and the reports a DAC sends
+// when its own buttons change the level) come from
+// Re-ibassoUAC by Nayo-weiguang (https://github.com/Nayo-weiguang/Re-ibassoUAC, MIT License), which
+// documents them from an analysis of the iBasso UAC Android app. They were checked on a real
+// DC03 Pro there, and with FineTune on a DC06 Pro. On another model, try this plugin at a low
+// volume, with your headphones off, first.
+//
+// The models fall in four families:
+// - DC06 and DC06 Pro: register writes with a one-byte offset to the two ES9219 chips (0x90 left,
+//   0x92 right). The DC06 Pro then gives the level to its controller (0xA2) too, which its own
+//   buttons step from.
+// - DC03 Pro, DC04 Pro and Macaron: register writes with a four-byte offset to the two Cirrus
+//   chips (0x60 left, 0x62 right), and the level given to the controller (0xA2).
+// - DC07 Pro, DC-Tonfa and DC-Nunchaku: an 8-byte frame holding the step itself.
+// - DC04U, Macchiato and D18: a 64-byte frame holding the step itself.
+// The app sends no volume command to the DC-Elite, so neither does this plugin.
+//
+// On the models with a controller, the plugin starts by asking it for its level, so FineTune
+// starts from the level the DAC is at, even when it was changed on another computer or phone.
+// Without an answer in time, FineTune sets the level it last gave the DAC.
+//
+// The manifest below names the DACs FineTune offers this plugin for; the rest of the file is the
+// script FineTune runs for each of them.
+
+/* @manifest
+{
+  "id": "finetune.ibasso-dc",
+  "name": "iBasso DC",
+  "author": "FineTune",
+  "version": "2.2",
+  "description": "Hardware volume for iBasso's USB DACs: DC03 Pro, DC04 Pro, DC06, DC06 Pro, Macaron, DC07 Pro, DC-Tonfa, DC-Nunchaku, DC04U, Macchiato and D18. Tried with FineTune on the DC06 Pro only: on another model, start at a low volume, headphones off.",
+  "match": [
+    {
+      "vendorID": "0x262A",
+      "productNames": [
+        "iBasso-DC03-Pro", "iBasso-DC04-Pro", "iBasso-DC06", "iBasso-DC06-Pro", "Macaron",
+        "iBasso DC07 Pro", "iBasso DC-Tonfa", "iBasso DC-Nunchaku", "DC04U", "Macchiato", "D18"
+      ]
+    },
+    {
+      "vendorID": "0x262A",
+      "productIDs": ["0x187E"]
+    },
+    {
+      "vendorID": "0x2FC6",
+      "productNames": [
+        "iBasso-DC03-Pro", "iBasso-DC04-Pro", "iBasso-DC06", "iBasso-DC06-Pro", "Macaron",
+        "iBasso DC07 Pro", "iBasso DC-Tonfa", "iBasso DC-Nunchaku", "DC04U", "Macchiato", "D18"
+      ]
+    },
+    {
+      "vendorID": "0x0661",
+      "productNames": [
+        "iBasso-DC03-Pro", "iBasso-DC04-Pro", "iBasso-DC06", "iBasso-DC06-Pro", "Macaron",
+        "iBasso DC07 Pro", "iBasso DC-Tonfa", "iBasso DC-Nunchaku", "DC04U", "Macchiato", "D18"
+      ]
+    }
+  ]
+}
+*/
+
+// Attenuation of each of the app's 101 volume steps, in 0.5 dB units: step 100 is 0 dB, step 0 mutes
+const STEPS = [
+  255, 155, 150, 145, 140, 135, 130, 125, 120, 115, 110, 109, 108, 107, 106, 105, 104, 103, 102, 101,
+  100,  99,  98,  97,  96,  95,  94,  93,  92,  91,  90,  88,  86,  84,  82,  80,  78,  76,  74,  72,
+   70,  68,  66,  64,  62,  60,  58,  56,  54,  52,  50,  49,  48,  47,  46,  45,  44,  43,  42,  41,
+   40,  39,  38,  37,  36,  35,  34,  33,  32,  31,  30,  29,  28,  27,  26,  25,  24,  23,  22,  21,
+   20,  19,  18,  17,  16,  15,  14,  13,  12,  11,  10,   9,   8,   7,   6,   5,   4,   3,   2,   1,
+    0,
+];
+
+const MODELS = [
+  { name: "DC06 Pro", productNames: ["iBasso-DC06-Pro"], family: "dc06", givesLevelToController: true },
+  { name: "DC06", productNames: ["iBasso-DC06"], family: "dc06", givesLevelToController: false },
+  // A DC03 Pro has been seen with an empty product name, so it is also known by its product ID
+  { name: "DC03 Pro", productNames: ["iBasso-DC03-Pro"], productIDs: [0x187E], family: "dc03" },
+  { name: "DC04 Pro", productNames: ["iBasso-DC04-Pro"], family: "dc03" },
+  { name: "Macaron", productNames: ["Macaron"], family: "dc03" },
+  { name: "DC07 Pro", productNames: ["iBasso DC07 Pro"], family: "frame8" },
+  { name: "DC-Tonfa", productNames: ["iBasso DC-Tonfa"], family: "frame8" },
+  { name: "DC-Nunchaku", productNames: ["iBasso DC-Nunchaku"], family: "frame8" },
+  { name: "DC04U", productNames: ["DC04U"], family: "frame64" },
+  { name: "Macchiato", productNames: ["Macchiato"], family: "frame64" },
+  { name: "D18", productNames: ["D18"], family: "frame64" },
+];
+
+const IBASSO_VENDOR_ID = 0x262A;
+
+// The controller takes a while to keep a level, and drops a command that arrives meanwhile: with
+// no pause, a DC06 Pro kept the left channel's level but not the right one's, so its buttons moved
+// the right channel from an old level. iBasso's app waits for the DAC's reply after each command.
+const CONTROLLER_PAUSE_MS = 50;
+
+// The command numbers of the reads of the controller's level, left and right, which its answers
+// start with
+const READ_LEFT = 0x15;
+const READ_RIGHT = 0x16;
+// How long FineTune waits for the answers before it sets its own level
+const READ_WAIT_MS = 500;
+
+// Each DAC gets its own copy of this script, so these belong to one DAC
+let model = null;
+let muted = false;
+// The steps the controller answered with, while its level is being read
+let read = null;
+
+function onAttach(device) {
+  model = modelFor(device);
+  if (model === null) {
+    throw new Error("this plugin doesn't know the iBasso model “" + device.productName + "”");
+  }
+  log("driving an iBasso " + model.name);
+  if (hasController(model)) {
+    read = { left: null, right: null, until: Date.now() + READ_WAIT_MS };
+    readController(device, READ_LEFT, 0x0010);
+    sleep(CONTROLLER_PAUSE_MS);
+    readController(device, READ_RIGHT, 0x0011);
+    device.waitForLevel(READ_WAIT_MS);
+  }
+}
+
+// `volume` is FineTune's slider, from 0 to 1: each percent is one step of the app
+function setVolume(device, volume) {
+  muted = false;
+  read = null;
+  sendStep(device, Math.max(0, Math.min(100, Math.round(volume * 100))), true);
+}
+
+// The chips are muted, but the controller keeps its level, so the DAC's buttons go on from the
+// level before the mute. FineTune sends the level again right after unmuting.
+function setMute(device, isMuted) {
+  muted = isMuted;
+  read = null;
+  if (isMuted) {
+    sendStep(device, 0, false);
+  }
+}
+
+function onInputReport(device, reportID, bytes) {
+  if (read !== null && isReadAnswer(bytes)) {
+    takeReadAnswer(device, bytes);
+    return;
+  }
+  const step = reportedStep(bytes);
+  if (step === null) {
+    log("input report " + reportID + ":", hex(bytes));
+    return;
+  }
+  if (muted) {
+    // Below the mute nothing changes; above it, the DAC's buttons have unmuted it
+    if (step === 0) {
+      return;
+    }
+    muted = false;
+    device.reportMute(false);
+  }
+  device.reportVolume(step / 100);
+}
+
+// MARK: - Sending
+
+// `toController`: whether the register families also give the level to the controller. A mute
+// isn't given to it, so it keeps the level the DAC's buttons step from.
+function sendStep(device, step, toController) {
+  switch (model.family) {
+    case "dc06":
+      setDC06(device, STEPS[step], toController && model.givesLevelToController);
+      break;
+    case "dc03":
+      setDC03(device, STEPS[step], toController);
+      break;
+    case "frame8":
+      device.hid.sendOutputReport(0, [0x01, 0x10, 0xEF, step, step, 0x00, 0x00, 0x00]);
+      break;
+    case "frame64":
+      device.hid.sendOutputReport(0, padded([0x4B, 0x01, 0x3F, 0x08, 0x01, 0x10, step, step], 64));
+      break;
+  }
+}
+
+// Both registers of the left chip, then of the right one, then the controller's copy of each channel
+function setDC06(device, value, toController) {
+  writeOneByteOffset(device, 1, 0x90, 0x10, value);
+  writeOneByteOffset(device, 2, 0x90, 0x0F, value);
+  writeOneByteOffset(device, 3, 0x92, 0x10, value);
+  writeOneByteOffset(device, 4, 0x92, 0x0F, value);
+  if (toController) {
+    writeController(device, 19, 0x0010, value);
+    writeController(device, 20, 0x0011, value);
+  }
+}
+
+// In the app's order: two PCM registers of each chip, the two DSD registers of the left chip and
+// the controller's left channel, then the same on the right
+function setDC03(device, value, toController) {
+  writeFourByteOffset(device, 1, 0x60, [0x09, 0x00, 0x01, 0x00], value);
+  writeFourByteOffset(device, 2, 0x60, [0x09, 0x00, 0x02, 0x00], value);
+  writeFourByteOffset(device, 3, 0x62, [0x09, 0x00, 0x01, 0x00], value);
+  writeFourByteOffset(device, 4, 0x62, [0x09, 0x00, 0x02, 0x00], value);
+  writeFourByteOffset(device, 9, 0x60, [0x07, 0x00, 0x00, 0x00], value);
+  writeFourByteOffset(device, 10, 0x60, [0x07, 0x00, 0x01, 0x00], value);
+  if (toController) {
+    writeController(device, 19, 0x0010, value);
+  }
+  writeFourByteOffset(device, 11, 0x62, [0x07, 0x00, 0x00, 0x00], value);
+  writeFourByteOffset(device, 12, 0x62, [0x07, 0x00, 0x01, 0x00], value);
+  if (toController) {
+    writeController(device, 20, 0x0011, value);
+  }
+}
+
+// One channel's level given to the controller (0xA2: 0x0010 left, 0x0011 right), then a pause
+// before the next command
+function writeController(device, command, offset, value) {
+  writeTwoByteOffset(device, command, 0xA2, offset, value);
+  sleep(CONTROLLER_PAUSE_MS);
+}
+
+// Asks the controller for one channel's level (0x0010 left, 0x0011 right): a 16-byte report with
+// 0x12 (read) where a write has 0x11, and the length, 1, last
+function readController(device, command, offset) {
+  sendRegisterReport(device, [command, 0x12, 0xE4, 0xA2, offset >> 8, offset & 0xFF, 0x01]);
+}
+
+// A register write is a 16-byte report: command, 0x11 (write), how the offset is given, chip,
+// then the offset, the length and the value
+function writeOneByteOffset(device, command, chip, offset, value) {
+  sendRegisterReport(device, [command, 0x11, 0x98, chip, offset, 0x00, 0x01, value]);
+}
+
+function writeTwoByteOffset(device, command, chip, offset, value) {
+  sendRegisterReport(device, [command, 0x11, 0xA0, chip, offset >> 8, offset & 0xFF, 0x01, value]);
+}
+
+function writeFourByteOffset(device, command, chip, offset, value) {
+  sendRegisterReport(device, [command, 0x11, 0x88, chip, 0x00, 0x00, 0x05, ...offset, value]);
+}
+
+function sendRegisterReport(device, bytes) {
+  device.hid.sendOutputReport(0, padded(bytes, 16));
+}
+
+function padded(bytes, length) {
+  return bytes.concat(new Array(length - bytes.length).fill(0));
+}
+
+// MARK: - Reading
+
+// Commands whose 8-byte frames carry a level
+const LEVEL_COMMANDS = [1, 2, 3, 4, 65, 66, 69, 70];
+
+function hasController(model) {
+  return model.family === "dc03" || (model.family === "dc06" && model.givesLevelToController);
+}
+
+// An answer to a read of the controller's level: a frame that starts with the read's command
+// number, with the attenuation in byte 4
+function isReadAnswer(bytes) {
+  return bytes.length >= 5 && (bytes[0] === READ_LEFT || bytes[0] === READ_RIGHT) && !isButtonReport(bytes);
+}
+
+// Once both channels have answered, their level is the DAC's. An answer that comes after FineTune
+// stopped waiting is out of date.
+function takeReadAnswer(device, bytes) {
+  log("level read from the DAC:", hex(bytes));
+  if (Date.now() > read.until) {
+    read = null;
+    return;
+  }
+  if (bytes[0] === READ_LEFT) {
+    read.left = stepFor(bytes[4]);
+  } else {
+    read.right = stepFor(bytes[4]);
+  }
+  if (read.left !== null && read.right !== null) {
+    log("level on the DAC: left step " + read.left + ", right step " + read.right);
+    device.reportVolume(Math.max(read.left, read.right) / 100);
+    read = null;
+  }
+}
+
+// A DC06 or DC03 family report of a level set with the DAC's buttons: bytes 4 and 5 are 0xFE 0x01,
+// with the left and right attenuation in bytes 8 and 9
+function isButtonReport(bytes) {
+  return bytes.length >= 10 && bytes[4] === 0xFE && bytes[5] === 0x01;
+}
+
+// The step a report from the DAC carries, or null for another report
+function reportedStep(bytes) {
+  switch (model.family) {
+    case "dc06":
+    case "dc03":
+      if (isButtonReport(bytes)) {
+        const left = stepFor(bytes[8]);
+        const right = stepFor(bytes[9]);
+        log("level set on the DAC: left step " + left + ", right step " + right);
+        return Math.max(left, right);
+      }
+      return null;
+    case "frame8":
+      // A level command, or a report (0) of the level (0x12), with the step in byte 4
+      if (bytes.length >= 8 && (LEVEL_COMMANDS.includes(bytes[0]) || (bytes[0] === 0 && bytes[1] === 0x12))) {
+        return Math.min(bytes[4], 100);
+      }
+      return null;
+    case "frame64":
+      // The volume group (0x10) in byte 5, the step in byte 6
+      if (bytes.length >= 64 && bytes[5] === 0x10) {
+        return Math.min(bytes[6], 100);
+      }
+      return null;
+  }
+  return null;
+}
+
+// The step whose attenuation is nearest to `value`
+function stepFor(value) {
+  let best = 0;
+  for (let step = 1; step < STEPS.length; step++) {
+    if (Math.abs(STEPS[step] - value) < Math.abs(STEPS[best] - value)) {
+      best = step;
+    }
+  }
+  return best;
+}
+
+function modelFor(device) {
+  const name = normalized(device.productName);
+  const byName = MODELS.find((candidate) => candidate.productNames.some((known) => normalized(known) === name));
+  if (byName !== undefined) {
+    return byName;
+  }
+  const byID = MODELS.find((candidate) =>
+    device.vendorID === IBASSO_VENDOR_ID && (candidate.productIDs || []).includes(device.productID));
+  return byID === undefined ? null : byID;
+}
+
+function hex(bytes) {
+  return bytes.map((byte) => byte.toString(16).padStart(2, "0")).join(" ");
+}
+
+// Lowercase letters and digits only, as FineTune compares product names
+function normalized(text) {
+  return String(text || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}

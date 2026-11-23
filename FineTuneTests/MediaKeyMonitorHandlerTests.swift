@@ -28,8 +28,8 @@ struct MediaKeyMonitorHandlerTests {
 
     private func makeMonitor(
         hudController: HUDWindowController? = nil,
-        popupVisible: Bool = false
-    ) -> (monitor: MediaKeyMonitor, hud: HUDWindowController, popup: PopupVisibilityService, settingsManager: SettingsManager) {
+        panelVisible: Bool = false
+    ) -> (monitor: MediaKeyMonitor, hud: HUDWindowController, menuBarPanel: PanelVisibilityService, settingsManager: SettingsManager) {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         let settings = SettingsManager(directory: tempDir)
@@ -49,9 +49,9 @@ struct MediaKeyMonitorHandlerTests {
         )
 
         let mediaKeyStatus = MediaKeyStatus()
-        let popup = PopupVisibilityService()
-        popup.isVisible = popupVisible
-        let hud = hudController ?? HUDWindowController(settingsManager: settings, mediaKeyStatus: mediaKeyStatus, popupVisibility: popup)
+        let menuBarPanel = PanelVisibilityService()
+        menuBarPanel.isVisible = panelVisible
+        let hud = hudController ?? HUDWindowController(settingsManager: settings, mediaKeyStatus: mediaKeyStatus, panelVisibility: menuBarPanel)
         // Replace frameProvider to avoid NSScreen access in unit tests.
         hud.frameProvider = { NSRect(x: 0, y: 0, width: 1440, height: 900) }
 
@@ -61,10 +61,10 @@ struct MediaKeyMonitorHandlerTests {
             settingsManager: settings,
             accessibility: MockAccessibilityTrustProviding(isTrusted: true),
             hudController: hud,
-            popupVisibility: popup,
+            panelVisibility: menuBarPanel,
             mediaKeyStatus: mediaKeyStatus
         )
-        return (monitor, hud, popup, settings)
+        return (monitor, hud, menuBarPanel, settings)
     }
 
     // MARK: - Volume step arithmetic
@@ -426,9 +426,9 @@ struct MediaKeyMonitorHandlerTests {
 
     // MARK: - HUD show count
 
-    @Test("handleCore calls HUD show once when popup is not visible")
-    func hudShowCalledWhenPopupHidden() {
-        let (monitor, hud, _, _) = makeMonitor(popupVisible: false)
+    @Test("handleCore calls HUD show once when the menu bar panel is not visible")
+    func hudShowCalledWhenMenuBarPanelHidden() {
+        let (monitor, hud, _, _) = makeMonitor(panelVisible: false)
         let deviceID: AudioDeviceID = 1
         #expect(hud.showCallCount == 0)
         monitor.handleCore(
@@ -444,9 +444,9 @@ struct MediaKeyMonitorHandlerTests {
         #expect(hud.showCallCount == 1)
     }
 
-    @Test("handleCore does not call HUD show when popup is visible")
-    func hudNotShownWhenPopupVisible() {
-        let (monitor, hud, _, _) = makeMonitor(popupVisible: true)
+    @Test("handleCore does not call HUD show when the menu bar panel is visible")
+    func hudNotShownWhenMenuBarPanelVisible() {
+        let (monitor, hud, _, _) = makeMonitor(panelVisible: true)
         let deviceID: AudioDeviceID = 1
         monitor.handleCore(
             event: .volumeUp(isRepeat: false),
@@ -461,9 +461,9 @@ struct MediaKeyMonitorHandlerTests {
         #expect(hud.showCallCount == 0)
     }
 
-    @Test("handleCore calls HUD show for repeat volumeUp when popup hidden (AC #7 per-call)")
+    @Test("handleCore calls HUD show for repeat volumeUp when the menu bar panel is hidden (AC #7 per-call)")
     func hudShownForRepeat() {
-        let (monitor, hud, _, _) = makeMonitor(popupVisible: false)
+        let (monitor, hud, _, _) = makeMonitor(panelVisible: false)
         let deviceID: AudioDeviceID = 1
         monitor.handleCore(
             event: .volumeUp(isRepeat: true),

@@ -1,22 +1,34 @@
 // FineTune/Views/HUD/ClassicStyleHUD.swift
 import SwiftUI
 
-/// 200×200 pre-Tahoe-style volume HUD: 80 pt glyph + 16-tile segment row. Stateless.
+/// 200×200 pre-Tahoe-style volume HUD: 80 pt glyph, 16-tile segment row and the percentage.
+/// As in macOS's own, the tiles are light on a dark strip and fill by quarters: a level between
+/// two tiles lights part of the next one. Stateless.
 struct ClassicStyleHUD: View {
     let sliderFraction: Float
     let mute: Bool
 
     // MARK: - Constants
 
-    static let hasPercentageLabel: Bool = false
+    static let hasPercentageLabel: Bool = true
 
     private static let tileCount: Int = 16
     private static let frameSize: CGFloat = 200
-    private static let cornerRadius: CGFloat = 16
+    /// Also the corner of the blur AppKit draws behind it
+    static let cornerRadius: CGFloat = 16
     private static let iconSize: CGFloat = 80
-    private static let tileSize: CGFloat = 7.5
-    private static let tileSpacing: CGFloat = 2
-    private static let tileSideInset: CGFloat = 20
+    private static let tileSize: CGFloat = 8.25
+    /// The strip between the tiles and around them
+    private static let tileGap: CGFloat = 1.5
+    /// A tile lights by quarters, as in macOS's own HUD
+    private static let tileSteps: Float = 4
+
+    @Environment(\.hudOnGlass) private var onGlass
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: HUDPalette {
+        HUDPalette(onGlass: onGlass, colorScheme: colorScheme)
+    }
 
     // MARK: - Derived state
 
@@ -28,8 +40,11 @@ struct ClassicStyleHUD: View {
         Int((displayValue * 100).rounded())
     }
 
-    private var filledTileCount: Int {
-        Int((displayValue * Float(Self.tileCount)).rounded())
+    /// How much of a tile is lit, from 0 to 1, by quarters.
+    private func litFraction(ofTile index: Int) -> CGFloat {
+        let quarters = (displayValue * Float(Self.tileCount) * Self.tileSteps).rounded()
+        let lit = quarters / Self.tileSteps - Float(index)
+        return CGFloat(max(0, min(1, lit)))
     }
 
     private var waveIconName: String {
@@ -63,14 +78,7 @@ struct ClassicStyleHUD: View {
             tileSection
         }
         .frame(width: Self.frameSize, height: Self.frameSize)
-        .background {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .fill(.regularMaterial)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: Self.cornerRadius)
-                .strokeBorder(DesignTokens.Colors.hudBorder, lineWidth: 1)
-        }
+        .hudOutline(cornerRadius: Self.cornerRadius)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
     }
@@ -81,7 +89,7 @@ struct ClassicStyleHUD: View {
             // Hard-swap — symbolEffect(.replace.*) cross-fades the whole wave glyph on every bin change.
             Image(systemName: mute ? "speaker.slash.fill" : waveIconName)
                 .font(.system(size: Self.iconSize, weight: .medium))
-                .foregroundStyle(DesignTokens.Colors.hudTileActive)
+                .foregroundStyle(palette.text)
                 .offset(y: iconYOffset)
             Spacer()
         }
@@ -90,19 +98,22 @@ struct ClassicStyleHUD: View {
 
     private var tileSection: some View {
         VStack(spacing: 0) {
-            Spacer().frame(height: 40)
-            HStack(spacing: Self.tileSpacing) {
-                Spacer().frame(width: Self.tileSideInset)
+            Spacer().frame(height: 26)
+            HStack(spacing: Self.tileGap) {
                 ForEach(0..<Self.tileCount, id: \.self) { index in
                     Rectangle()
-                        .fill(index < filledTileCount
-                              ? DesignTokens.Colors.hudTileActive
-                              : DesignTokens.Colors.hudTileInactive)
-                        .frame(width: Self.tileSize, height: Self.tileSize)
+                        .fill(palette.litTile)
+                        .frame(width: Self.tileSize * litFraction(ofTile: index), height: Self.tileSize)
+                        .frame(width: Self.tileSize, alignment: .leading)
                 }
-                Spacer().frame(width: Self.tileSideInset)
             }
-            .animation(DesignTokens.Animation.quick, value: filledTileCount)
+            .padding(Self.tileGap)
+            .background(Rectangle().fill(palette.tileStrip))
+            Text(mute ? "Muted" : "\(displayedPercent)%")
+                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                .foregroundStyle(palette.text)
+                .padding(.top, 10)
+            Spacer(minLength: 0)
         }
         .frame(height: 80)
     }

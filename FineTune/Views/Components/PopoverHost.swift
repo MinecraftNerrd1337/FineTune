@@ -1,6 +1,7 @@
 // FineTune/Views/Components/PopoverHost.swift
 import SwiftUI
 import AppKit
+import FluidMenuBarExtra
 
 /// Borderless panels return `canBecomeKey == false` by default,
 /// which prevents text fields from receiving focus/keyboard input.
@@ -118,7 +119,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
 
             // Make panel key so text fields can receive focus.
             // Temporarily suppress the parent's delegate to prevent
-            // FluidMenuBarExtra from dismissing the popup on resign-key.
+            // FluidMenuBarExtra from dismissing the menu bar panel on resign-key.
             let savedDelegate = parentWindow.delegate
             parentWindow.delegate = nil
             panel.makeKeyAndOrderFront(nil)
@@ -128,6 +129,9 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
 
             // Get trigger button frame in screen coordinates
             let triggerFrame = parentWindow.convertToScreen(parentView.convert(parentView.bounds, to: nil))
+            // A dropdown of a window (the EQ Manager), or of a dropdown of one, closes like a
+            // menu whatever "Keep Panel Open" says: that setting is about the menu bar panel.
+            let closesLikeMenu = Self.opensFromAppWindow(parentWindow)
 
             // Local monitor: clicks within our app (outside panel AND outside trigger)
             localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
@@ -135,17 +139,34 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
                 let mouseLocation = NSEvent.mouseLocation
                 let isInPanel = panel.frame.contains(mouseLocation)
                 let isInTrigger = triggerFrame.contains(mouseLocation)
+                // A dropdown opened from this one (an AutoEQ wand in a device list) is part of it
+                let isInChild = panel.childWindows?.contains { $0.frame.contains(mouseLocation) } ?? false
+                // With "Keep Panel Open", clicks in Settings or the EQ Manager leave this
+                // dropdown open, like the menu bar panel; only clicks in the menu bar panel close it.
+                let isInAppWindow = event.window.map {
+                    !($0 is NSPanel) && $0.styleMask.contains(.titled)
+                } ?? false
+                if isInAppWindow && !closesLikeMenu && !FluidMenuBarExtraBehavior.dismissesOnFocusLoss {
+                    return event
+                }
                 // Only dismiss if click is outside both panel and trigger button
                 // Let the trigger button handle its own clicks (toggle behavior)
-                if !isInPanel && !isInTrigger {
+                if !isInPanel && !isInTrigger && !isInChild {
                     self.dismissPanel()
                 }
                 return event  // Don't consume
             }
 
+            // With "Keep Panel Open", the dropdown stays up like the menu bar panel when
+            // the user clicks in another app or switches apps.
+            guard closesLikeMenu || FluidMenuBarExtraBehavior.dismissesOnFocusLoss else { return }
+            // The window a menu-like dropdown belongs to stays as it is (it is not the menu bar
+            // panel, which closes with its dropdown)
+            let reKeyParent = closesLikeMenu
+
             // Global monitor: clicks in OTHER apps (dismisses panel + parent)
             globalEventMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-                self?.dismissPanel(reKeyParent: false)
+                self?.dismissPanel(reKeyParent: reKeyParent)
             }
 
             // Dismiss when app loses focus (Command-Tab, click other app, quit, etc.)
@@ -155,9 +176,17 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.dismissPanel(reKeyParent: false)
+                    self?.dismissPanel(reKeyParent: reKeyParent)
                 }
             }
+        }
+
+        /// Whether `window` is a titled window of FineTune (Settings, the EQ Manager), or a
+        /// dropdown opened from one, rather than the menu bar panel.
+        private static func opensFromAppWindow(_ window: NSWindow) -> Bool {
+            var root = window
+            while let parent = root.parent { root = parent }
+            return !(root is NSPanel) && root.styleMask.contains(.titled)
         }
 
         func updateContent<V: View>(
@@ -230,7 +259,7 @@ struct PopoverHost<Content: View>: NSViewRepresentable {
 
             if let parentWindow = parentWindow {
                 if reKeyParent {
-                    // Restore key status — parent popup stays visible
+                    // Restore key status — the menu bar panel stays visible
                     parentWindow.makeKey()
                 } else {
                     // External dismiss — re-key then resign so FluidMenuBarExtra

@@ -44,12 +44,13 @@ enum VolumeMapping {
     }
 
     /// `.software` is linear PCM; `.hardware` / `.ddc` scalars are already audio-tapered
-    /// by the driver/firmware (see the top-level docstring on this enum).
+    /// by the driver/firmware (see the top-level docstring on this enum), and a `.plugin`
+    /// maps the slider to the device's own steps itself.
     static func sliderFraction(forSystemGain gain: Float, tier: VolumeControlTier) -> Double {
         switch tier {
         case .software:
             return gainToSlider(gain)
-        case .hardware, .ddc:
+        case .hardware, .ddc, .plugin:
             return Double(max(0, min(1, gain)))
         }
     }
@@ -58,7 +59,7 @@ enum VolumeMapping {
         switch tier {
         case .software:
             return sliderToGain(fraction)
-        case .hardware, .ddc:
+        case .hardware, .ddc, .plugin:
             return Float(max(0, min(1, fraction)))
         }
     }

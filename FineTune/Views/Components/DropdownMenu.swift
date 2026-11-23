@@ -8,6 +8,8 @@ struct DropdownMenu<Item: Identifiable, Label: View, ItemContent: View>: View wh
     let maxVisibleItems: Int?
     let width: CGFloat
     let popoverWidth: CGFloat?
+    /// A line of small, pale text under the items, which can't be picked
+    var footnote: String? = nil
     let onSelect: (Item) -> Void
     @ViewBuilder let label: (Item?) -> Label
     @ViewBuilder let itemContent: (Item, Bool) -> ItemContent
@@ -20,6 +22,7 @@ struct DropdownMenu<Item: Identifiable, Label: View, ItemContent: View>: View wh
     // Configuration
     private let itemHeight: CGFloat = 26
     private let itemSpacing: CGFloat = 2
+    private let footnoteHeight: CGFloat = 18
     private let verticalPadding: CGFloat = 12  // 6 top + 6 bottom
     private let cornerRadius: CGFloat = 8
     private let animationDuration: Double = 0.15
@@ -31,12 +34,13 @@ struct DropdownMenu<Item: Identifiable, Label: View, ItemContent: View>: View wh
     private var menuHeight: CGFloat {
         let itemCount = CGFloat(items.count)
         let totalSpacing = itemSpacing * Swift.max(0, itemCount - 1)
+        let footnoteSpace = footnote == nil ? 0 : footnoteHeight + itemSpacing
         if let maxItems = maxVisibleItems {
             let visibleCount = min(itemCount, CGFloat(maxItems))
             let visibleSpacing = itemSpacing * Swift.max(0, visibleCount - 1)
-            return visibleCount * itemHeight + visibleSpacing + verticalPadding
+            return visibleCount * itemHeight + visibleSpacing + verticalPadding + footnoteSpace
         }
-        return itemCount * itemHeight + totalSpacing + verticalPadding
+        return itemCount * itemHeight + totalSpacing + verticalPadding + footnoteSpace
     }
 
     // MARK: - Trigger Button
@@ -97,6 +101,8 @@ struct DropdownMenu<Item: Identifiable, Label: View, ItemContent: View>: View wh
                         itemHeight: itemHeight,
                         itemSpacing: itemSpacing,
                         cornerRadius: cornerRadius,
+                        footnote: footnote,
+                        footnoteHeight: footnoteHeight,
                         onSelect: { item in
                             onSelect(item)
                             withAnimation(.easeOut(duration: animationDuration)) {
@@ -120,6 +126,8 @@ private struct DropdownContentView<Item: Identifiable, ItemContent: View>: View 
     let itemHeight: CGFloat
     let itemSpacing: CGFloat
     let cornerRadius: CGFloat
+    let footnote: String?
+    let footnoteHeight: CGFloat
     let onSelect: (Item) -> Void
     @ViewBuilder let itemContent: (Item, Bool) -> ItemContent
 
@@ -135,6 +143,15 @@ private struct DropdownContentView<Item: Identifiable, ItemContent: View>: View 
                         itemContent: itemContent
                     )
                     .id(item.id)
+                }
+                if let footnote {
+                    Text(footnote)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .frame(height: footnoteHeight)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(.vertical, 6)

@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// A mute button with pulse animation on toggle. Unmuted wave bucket mirrors
-/// TahoeStyleHUD.waveIconName so the popup, menu-bar icon, and on-screen HUD agree.
+/// TahoeStyleHUD.waveIconName so the panel, menu-bar icon, and on-screen HUD agree.
 struct MuteButton: View {
     let isMuted: Bool
     let levelFraction: Double

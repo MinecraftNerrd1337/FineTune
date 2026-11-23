@@ -1,7 +1,7 @@
 // FineTune/Views/Settings/Components/SystemSoundsDevicePicker.swift
 import SwiftUI
 
-/// Trailing-slot wrapper around the popup's `DevicePicker` (single-mode)
+/// Trailing-slot wrapper around the panel's `DevicePicker` (single-mode)
 /// for the system-sounds output selector. Keeps the existing dropdown
 /// behavior (System Audio + per-device entries) while letting `CardRow`
 /// own the icon, title, and description.

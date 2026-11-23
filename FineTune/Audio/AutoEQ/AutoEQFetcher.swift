@@ -146,7 +146,8 @@ final class AutoEQFetcher {
             preampDB: profile.preampDB,
             filters: profile.filters,
             measuredBy: entry.measuredBy,
-            optimizedSampleRate: 48000
+            // AutoEQ optimises its published filters as biquads at 44.1 kHz
+            optimizedSampleRate: AutoEQBaseRate.autoEQDefault
         )
 
         // Cache the .txt to disk for offline use
@@ -313,7 +314,7 @@ final class AutoEQFetcher {
             preampDB: profile.preampDB,
             filters: profile.filters,
             measuredBy: measuredBy,
-            optimizedSampleRate: 48000
+            optimizedSampleRate: AutoEQBaseRate.autoEQDefault
         )
     }
 

@@ -16,7 +16,7 @@ struct AppRowWithLevelPolling: View {
     let boost: BoostLevel
     let onBoostChange: (BoostLevel) -> Void
     let getAudioLevel: () -> Float
-    let isPopupVisible: Bool
+    let isPanelVisible: Bool
     let onVolumeChange: (Float) -> Void
     let onMuteChange: (Bool) -> Void
     let onDeviceSelected: (String) -> Void
@@ -52,7 +52,7 @@ struct AppRowWithLevelPolling: View {
         boost: BoostLevel = .x1,
         onBoostChange: @escaping (BoostLevel) -> Void = { _ in },
         getAudioLevel: @escaping () -> Float,
-        isPopupVisible: Bool = true,
+        isPanelVisible: Bool = true,
         onVolumeChange: @escaping (Float) -> Void,
         onMuteChange: @escaping (Bool) -> Void,
         onDeviceSelected: @escaping (String) -> Void,
@@ -84,7 +84,7 @@ struct AppRowWithLevelPolling: View {
         self.boost = boost
         self.onBoostChange = onBoostChange
         self.getAudioLevel = getAudioLevel
-        self.isPopupVisible = isPopupVisible
+        self.isPanelVisible = isPanelVisible
         self.onVolumeChange = onVolumeChange
         self.onMuteChange = onMuteChange
         self.onDeviceSelected = onDeviceSelected
@@ -138,14 +138,14 @@ struct AppRowWithLevelPolling: View {
             isFocused: isFocused
         )
         .onAppear {
-            if isPopupVisible {
+            if isPanelVisible {
                 startLevelPolling()
             }
         }
         .onDisappear {
             stopLevelPolling()
         }
-        .onChange(of: isPopupVisible) { _, visible in
+        .onChange(of: isPanelVisible) { _, visible in
             if visible {
                 startLevelPolling()
             } else {

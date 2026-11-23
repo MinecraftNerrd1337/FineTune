@@ -108,16 +108,16 @@ private struct MockWindow: View {
     }
 }
 
-// MARK: - Popup size tile picker
+// MARK: - Panel size tile picker
 
 @MainActor
-struct PopupSizeTilePicker: View {
-    @Binding var selection: MenuBarPopupSize
+struct PanelSizeTilePicker: View {
+    @Binding var selection: MenuBarPanelSize
 
     var body: some View {
         HStack(spacing: 12) {
-            ForEach(MenuBarPopupSize.allCases) { size in
-                PopupSizeTile(
+            ForEach(MenuBarPanelSize.allCases) { size in
+                PanelSizeTile(
                     size: size,
                     isSelected: selection == size,
                     onTap: { selection = size }
@@ -127,8 +127,8 @@ struct PopupSizeTilePicker: View {
     }
 }
 
-private struct PopupSizeTile: View {
-    let size: MenuBarPopupSize
+private struct PanelSizeTile: View {
+    let size: MenuBarPanelSize
     let isSelected: Bool
     let onTap: () -> Void
 
@@ -136,7 +136,7 @@ private struct PopupSizeTile: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            PopupSizeMockup(size: size)
+            PanelSizeMockup(size: size)
                 .frame(width: 72, height: 46)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 .overlay {
@@ -162,10 +162,10 @@ private struct PopupSizeTile: View {
 
 /// Three rows in every variant so the comparison is honest: only width
 /// and breathing room change between size options.
-private struct PopupSizeMockup: View {
-    let size: MenuBarPopupSize
+private struct PanelSizeMockup: View {
+    let size: MenuBarPanelSize
 
-    private var popupWidth: CGFloat {
+    private var panelWidth: CGFloat {
         switch size {
         case .compact:     return 52
         case .comfortable: return 62
@@ -207,7 +207,7 @@ private struct PopupSizeMockup: View {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
                 }
-                .frame(width: popupWidth)
+                .frame(width: panelWidth)
                 .overlay {
                     VStack(spacing: rowSpacing) {
                         MockDeviceRow()
@@ -216,7 +216,7 @@ private struct PopupSizeMockup: View {
                     }
                     .padding(.horizontal, horizontalPadding)
                     .padding(.vertical, verticalPadding)
-                    .frame(width: popupWidth)
+                    .frame(width: panelWidth)
                 }
         }
     }
@@ -253,13 +253,13 @@ private struct MockDeviceRow: View {
     }
 }
 
-#Preview("Popup Size Tiles") {
-    @Previewable @State var dark: MenuBarPopupSize = .comfortable
-    @Previewable @State var light: MenuBarPopupSize = .comfortable
+#Preview("Panel Size Tiles") {
+    @Previewable @State var dark: MenuBarPanelSize = .comfortable
+    @Previewable @State var light: MenuBarPanelSize = .comfortable
     return VStack(spacing: 24) {
         VStack(alignment: .leading, spacing: 8) {
             Text("Dark").font(.caption).foregroundStyle(.secondary)
-            PopupSizeTilePicker(selection: $dark)
+            PanelSizeTilePicker(selection: $dark)
         }
         .padding(16)
         .background(Color(white: 0.10))
@@ -267,7 +267,7 @@ private struct MockDeviceRow: View {
 
         VStack(alignment: .leading, spacing: 8) {
             Text("Light").font(.caption).foregroundStyle(.secondary)
-            PopupSizeTilePicker(selection: $light)
+            PanelSizeTilePicker(selection: $light)
         }
         .padding(16)
         .background(Color(white: 0.96))

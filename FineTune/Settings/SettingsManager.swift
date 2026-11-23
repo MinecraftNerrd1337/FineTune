@@ -40,6 +40,12 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Audio Processing
     var loudnessCompensationEnabled: Bool = false  // ISO 226:2023 equal-loudness contour compensation
     var loudnessEqualizationEnabled: Bool = false  // Real-time loudness equalization
+    // Per-DAC routing: the apps of each plain stereo output device share one aggregate, so
+    // AutoEQ runs once per device on their sum (`DeviceMixer`). Off = one aggregate per app.
+    var perDeviceMixingEnabled: Bool = false
+    // Start guard: mute an app from its first sample until FineTune's tap carries it, so the
+    // start of its sound never plays without FineTune's volume (`StartGuard`).
+    var startGuardEnabled: Bool = true
 
     // Call Passthrough
     // Leave apps untapped while they capture audio input (voice/video calls).
@@ -50,6 +56,9 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Media Keys & HUD
     var hudStyle: HUDStyle = .tahoe                // Visual style of the volume HUD
     var mediaKeyControlEnabled: Bool = true        // Intercept F10/F11/F12 to drive the default output device
+    var fineTuneHUDEnabled: Bool = true            // FineTune's HUD for the default output device, else none
+    var hudAbsolutePosition: Bool = false          // Under macOS Zoom, the HUD in the part of the screen shown
+    var hudLiquidGlass: Bool = true                // The HUD on Liquid Glass (macOS 26+), else on a blur
     var volumeHotkeyStep: VolumeHotkeyStep = .normal  // Slider-domain step per keypress; user-configurable
 
     // Global Hotkeys
@@ -60,8 +69,18 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Appearance
     var appearance: AppearancePreference = .system  // Follow system appearance, or lock light/dark
 
-    // Popup
-    var popupSize: MenuBarPopupSize = .comfortable  // Overall menu bar popup size and density
+    // Panel
+    var panelSize: MenuBarPanelSize = .comfortable  // Overall menu bar panel size and density
+    var keepPanelOpen: Bool = false  // Panel stays open when clicking elsewhere; closed by the menu bar icon
+
+    // EQ Manager presets
+    var confirmPresetSaves: Bool = true  // Ask before a save replaces the stored version of a preset
+    var presetHistoryLimit: Int = AutoEQPresetHistoryStore.defaultLimit  // Earlier versions kept per preset (0 = none)
+
+    // AutoEQ
+    // With the correction off, play the level the correction takes away (or adds), so switching
+    // it on and off keeps the same perceived level (`AutoEQResponse.perceivedLevelChangeDB`).
+    var autoEQLevelMatchEnabled: Bool = true
 
     init() {}
 
@@ -80,14 +99,46 @@ nonisolated struct AppSettings: Codable, Equatable {
         showDeviceDisconnectAlerts = try c.decodeIfPresent(Bool.self, forKey: .showDeviceDisconnectAlerts) ?? true
         loudnessCompensationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessCompensationEnabled) ?? false
         loudnessEqualizationEnabled = try c.decodeIfPresent(Bool.self, forKey: .loudnessEqualizationEnabled) ?? false
+        perDeviceMixingEnabled = try c.decodeIfPresent(Bool.self, forKey: .perDeviceMixingEnabled) ?? false
+        startGuardEnabled = try c.decodeIfPresent(Bool.self, forKey: .startGuardEnabled) ?? true
         callPassthroughEnabled = try c.decodeIfPresent(Bool.self, forKey: .callPassthroughEnabled) ?? true
         hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .tahoe
         mediaKeyControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediaKeyControlEnabled) ?? true
+        fineTuneHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .fineTuneHUDEnabled) ?? true
+        hudAbsolutePosition = try c.decodeIfPresent(Bool.self, forKey: .hudAbsolutePosition) ?? false
+        hudLiquidGlass = try c.decodeIfPresent(Bool.self, forKey: .hudLiquidGlass) ?? true
         volumeHotkeyStep = try c.decodeIfPresent(VolumeHotkeyStep.self, forKey: .volumeHotkeyStep) ?? .normal
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system
-        popupSize = try c.decodeIfPresent(MenuBarPopupSize.self, forKey: .popupSize) ?? .comfortable
+        // settings.json written before the popup → panel rename uses the old keys.
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        panelSize = try c.decodeIfPresent(MenuBarPanelSize.self, forKey: .panelSize)
+            ?? legacy.decodeIfPresent(MenuBarPanelSize.self, forKey: .popupSize)
+            ?? .comfortable
+        keepPanelOpen = try c.decodeIfPresent(Bool.self, forKey: .keepPanelOpen)
+            ?? legacy.decodeIfPresent(Bool.self, forKey: .keepPopupOpen)
+            ?? false
+        confirmPresetSaves = try c.decodeIfPresent(Bool.self, forKey: .confirmPresetSaves) ?? true
+        let limitRange = AutoEQPresetHistoryStore.limitRange
+        let storedLimit = try c.decodeIfPresent(Int.self, forKey: .presetHistoryLimit) ?? AutoEQPresetHistoryStore.defaultLimit
+        presetHistoryLimit = min(max(storedLimit, limitRange.lowerBound), limitRange.upperBound)
+        autoEQLevelMatchEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoEQLevelMatchEnabled) ?? true
     }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case popupSize
+        case keepPopupOpen
+    }
+}
+
+// MARK: - Volume plugin choice
+
+/// The volume plugin a device uses (see `VolumePluginController`)
+nonisolated enum VolumePluginChoice: Equatable, Sendable {
+    /// No plugin, even one written for the device
+    case noPlugin
+    /// The plugin with this id
+    case plugin(String)
 }
 
 // MARK: - Settings Manager
@@ -123,6 +174,12 @@ final class SettingsManager {
         var ddcMuteStates: [String: Bool] = [:]   // device UID → software mute state
         var ddcSavedVolumes: [String: Int] = [:]  // device UID → volume before mute
 
+        // Volume plugins: hardware volume through a DAC's own USB commands (see VolumePluginController)
+        var volumePluginChoices: [String: String] = [:]   // device UID → id of its plugin, "" for none
+        var automaticVolumePlugins: Set<String> = []      // ids of the plugins that take new DACs
+        var pluginDeviceVolumes: [String: Float] = [:]    // device UID → slider position (0.0-1.0)
+        var pluginDeviceMuteStates: [String: Bool] = [:]  // device UID → mute state
+
         // Software-backed output volumes for devices without native volume control
         var softwareDeviceVolumes: [String: Float] = [:]      // device UID → visible volume (0.0-1.0)
         var softwareDeviceMuteStates: [String: Bool] = [:]    // device UID → software mute state
@@ -152,6 +209,8 @@ final class SettingsManager {
         var deviceAutoEQ: [String: AutoEQSelection] = [:]  // deviceUID → selection
         var favoriteAutoEQProfiles: Set<String> = []  // profile IDs
         var autoEQPreampEnabled: Bool = true  // Use profile preamp vs bypass (rely on limiter)
+        var autoEQUserProfiles: [String: AutoEQProfile] = [:]  // profile ID → preset created or edited in the EQ Manager
+        var eqManagerWindowFrame: String? = nil  // NSWindow frame descriptor of the EQ Manager window
 
         // User-created EQ presets (named EQ curves)
         var userEQPresets: [UserEQPreset] = []
@@ -186,6 +245,12 @@ final class SettingsManager {
             ddcVolumes = try c.decodeIfPresent([String: Int].self, forKey: .ddcVolumes) ?? [:]
             ddcMuteStates = try c.decodeIfPresent([String: Bool].self, forKey: .ddcMuteStates) ?? [:]
             ddcSavedVolumes = try c.decodeIfPresent([String: Int].self, forKey: .ddcSavedVolumes) ?? [:]
+            volumePluginChoices = try c.decodeIfPresent([String: String].self, forKey: .volumePluginChoices) ?? [:]
+            automaticVolumePlugins = try c.decodeIfPresent(Set<String>.self, forKey: .automaticVolumePlugins) ?? []
+            pluginDeviceVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .pluginDeviceVolumes) ?? [:])
+                .filter { $0.value.isFinite && $0.value >= 0 }
+                .mapValues { min($0, 1.0) }
+            pluginDeviceMuteStates = try c.decodeIfPresent([String: Bool].self, forKey: .pluginDeviceMuteStates) ?? [:]
             softwareDeviceVolumes = (try c.decodeIfPresent([String: Float].self, forKey: .softwareDeviceVolumes) ?? [:])
                 .filter { $0.value.isFinite && $0.value >= 0 }
                 .mapValues { min($0, 1.0) }
@@ -206,6 +271,8 @@ final class SettingsManager {
             deviceAutoEQ = try c.decodeIfPresent([String: AutoEQSelection].self, forKey: .deviceAutoEQ) ?? [:]
             favoriteAutoEQProfiles = try c.decodeIfPresent(Set<String>.self, forKey: .favoriteAutoEQProfiles) ?? []
             autoEQPreampEnabled = try c.decodeIfPresent(Bool.self, forKey: .autoEQPreampEnabled) ?? true
+            autoEQUserProfiles = try c.decodeIfPresent([String: AutoEQProfile].self, forKey: .autoEQUserProfiles) ?? [:]
+            eqManagerWindowFrame = try c.decodeIfPresent(String.self, forKey: .eqManagerWindowFrame)
             userEQPresets = try c.decodeIfPresent([UserEQPreset].self, forKey: .userEQPresets) ?? []
         }
     }
@@ -414,6 +481,58 @@ final class SettingsManager {
 
     func setDDCSavedVolume(for deviceUID: String, to volume: Int) {
         settings.ddcSavedVolumes[deviceUID] = volume
+        scheduleSave()
+    }
+
+    // MARK: - Volume Plugins
+
+    /// The volume plugin of a device, or nil while neither the user nor a plugin that takes new
+    /// DACs chose for it
+    func volumePluginChoice(for deviceUID: String) -> VolumePluginChoice? {
+        guard let pluginID = settings.volumePluginChoices[deviceUID] else { return nil }
+        return pluginID.isEmpty ? .noPlugin : .plugin(pluginID)
+    }
+
+    func setVolumePluginChoice(_ choice: VolumePluginChoice?, for deviceUID: String) {
+        switch choice {
+        case nil: settings.volumePluginChoices[deviceUID] = nil
+        case .noPlugin?: settings.volumePluginChoices[deviceUID] = ""
+        case .plugin(let pluginID)?: settings.volumePluginChoices[deviceUID] = pluginID
+        }
+        scheduleSave()
+    }
+
+    /// Whether a volume plugin takes the new DACs it is written for (off until the user turns it on)
+    func isVolumePluginAutomatic(_ pluginID: String) -> Bool {
+        settings.automaticVolumePlugins.contains(pluginID)
+    }
+
+    func setVolumePluginAutomatic(_ pluginID: String, _ automatic: Bool) {
+        if automatic {
+            settings.automaticVolumePlugins.insert(pluginID)
+        } else {
+            settings.automaticVolumePlugins.remove(pluginID)
+        }
+        scheduleSave()
+    }
+
+    /// Slider position (0.0-1.0) of a device driven by a volume plugin
+    func getPluginDeviceVolume(for deviceUID: String) -> Float? {
+        settings.pluginDeviceVolumes[deviceUID]
+    }
+
+    func setPluginDeviceVolume(for deviceUID: String, to volume: Float) {
+        settings.pluginDeviceVolumes[deviceUID] = normalizedDeviceVolume(volume)
+        scheduleSave()
+    }
+
+    /// nil until a volume plugin has driven the device
+    func getPluginDeviceMuteState(for deviceUID: String) -> Bool? {
+        settings.pluginDeviceMuteStates[deviceUID]
+    }
+
+    func setPluginDeviceMuteState(for deviceUID: String, to muted: Bool) {
+        settings.pluginDeviceMuteStates[deviceUID] = muted
         scheduleSave()
     }
 
@@ -777,10 +896,59 @@ final class SettingsManager {
         settings.favoriteAutoEQProfiles
     }
 
+    /// Devices whose AutoEQ selection is this profile.
+    func deviceUIDs(usingAutoEQProfile profileID: String) -> [String] {
+        settings.deviceAutoEQ.filter { $0.value.profileID == profileID }.keys.sorted()
+    }
+
+    /// Point the device selections and the favorite of a profile to another one (when a
+    /// preset takes over from the template it was made from). On/off states are kept.
+    func remapAutoEQProfile(from oldID: String, to newID: String) {
+        var changed = false
+        for (uid, selection) in settings.deviceAutoEQ where selection.profileID == oldID {
+            settings.deviceAutoEQ[uid] = AutoEQSelection(profileID: newID, isEnabled: selection.isEnabled)
+            changed = true
+        }
+        if settings.favoriteAutoEQProfiles.remove(oldID) != nil {
+            settings.favoriteAutoEQProfiles.insert(newID)
+            changed = true
+        }
+        if changed { scheduleSave() }
+    }
+
     var autoEQPreampEnabled: Bool {
         get { settings.autoEQPreampEnabled }
         set {
             settings.autoEQPreampEnabled = newValue
+            scheduleSave()
+        }
+    }
+
+    // MARK: - AutoEQ User Presets
+
+    /// Presets created or edited in the EQ Manager.
+    var autoEQUserProfiles: [AutoEQProfile] {
+        Array(settings.autoEQUserProfiles.values)
+    }
+
+    func saveAutoEQUserProfile(_ profile: AutoEQProfile) {
+        settings.autoEQUserProfiles[profile.id] = profile
+        scheduleSave()
+    }
+
+    func removeAutoEQUserProfile(id: String) {
+        guard settings.autoEQUserProfiles.removeValue(forKey: id) != nil else { return }
+        scheduleSave()
+    }
+
+    // MARK: - EQ Manager Window
+
+    /// Last frame of the EQ Manager window (`NSWindow.frameDescriptor`).
+    var eqManagerWindowFrame: String? {
+        get { settings.eqManagerWindowFrame }
+        set {
+            guard newValue != settings.eqManagerWindowFrame else { return }
+            settings.eqManagerWindowFrame = newValue
             scheduleSave()
         }
     }
@@ -902,6 +1070,10 @@ final class SettingsManager {
         settings.ddcVolumes.removeAll()
         settings.ddcMuteStates.removeAll()
         settings.ddcSavedVolumes.removeAll()
+        settings.volumePluginChoices.removeAll()
+        settings.automaticVolumePlugins.removeAll()
+        settings.pluginDeviceVolumes.removeAll()
+        settings.pluginDeviceMuteStates.removeAll()
         settings.softwareDeviceVolumes.removeAll()
         settings.softwareDeviceMuteStates.removeAll()
         settings.softwareDeviceSavedVolumes.removeAll()
@@ -916,6 +1088,9 @@ final class SettingsManager {
         settings.autoEQPreampEnabled = true
         settings.deviceAutoEQ.removeAll()
         settings.favoriteAutoEQProfiles.removeAll()
+        // The user's presets and templates are not settings: they are kept (deleting one is a
+        // separate, explicit action)
+        settings.eqManagerWindowFrame = nil
         settings.appDeviceSelectionMode.removeAll()
         settings.appSelectedDeviceUIDs.removeAll()
         settings.userEQPresets.removeAll()

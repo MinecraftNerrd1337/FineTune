@@ -130,18 +130,32 @@ enum BiquadMath {
     /// - Parameters:
     ///   - filters: Filter parameters from an AutoEQ profile.
     ///   - sampleRate: Device's actual sample rate (Hz).
-    ///   - profileOptimizedRate: Sample rate the profile was optimized for (Hz).
-    ///     When different from `sampleRate`, filter frequencies are pre-warped to
-    ///     compensate for the bilinear transform's frequency warping.
+    ///   - profileOptimizedRate: Sample rate the profile was optimized for (Hz), or 0 for
+    ///     analog filters. When different from `sampleRate`, filter frequencies are
+    ///     pre-warped to compensate for the bilinear transform's frequency warping.
+    ///   - exact: Fit each biquad to the band's exact curve at `profileOptimizedRate`
+    ///     (`exactCoefficients`) instead of pre-warping the cookbook design.
     static func coefficientsForAutoEQFilters(
         _ filters: [AutoEQFilter],
         sampleRate: Double,
-        profileOptimizedRate: Double = 48000
+        profileOptimizedRate: Double = 48000,
+        exact: Bool = false
     ) -> [Double] {
         var allCoeffs: [Double] = []
         allCoeffs.reserveCapacity(filters.count * 5)
 
-        let needsPreWarp = abs(profileOptimizedRate - sampleRate) > 1.0
+        if exact {
+            for filter in filters {
+                allCoeffs.append(contentsOf: exactCoefficients(
+                    type: filter.type, frequency: filter.frequency, gainDB: filter.gainDB,
+                    q: filter.q, sampleRate: sampleRate,
+                    baseRate: profileOptimizedRate > 0 ? profileOptimizedRate : nil))
+            }
+            return allCoeffs
+        }
+
+        // A rate of 0 means analog filters: nothing to re-tune
+        let needsPreWarp = profileOptimizedRate > 0 && abs(profileOptimizedRate - sampleRate) > 1.0
 
         for filter in filters {
             var frequency = filter.frequency

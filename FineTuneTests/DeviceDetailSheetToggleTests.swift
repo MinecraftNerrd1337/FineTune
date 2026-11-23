@@ -2,8 +2,8 @@
 // AC #1–#5 for the binary software-volume toggle.
 //
 // Strategy: DeviceDetailSheet is a pure SwiftUI view; the load-bearing logic is
-// the binding-to-tier mapping (useSoftwareBinding) and the visibility predicate
-// (shouldShowToggle). These are a static helper and a synthesized Binding —
+// the binding-to-tier mapping (useSoftwareBinding) and the enabled predicate
+// (canChooseSoftware). These are a static helper and a synthesized Binding —
 // unit-testable without rendering.
 //
 // We construct a minimal DeviceDetailSheet with captured onOverrideChange to
@@ -44,23 +44,23 @@ struct DeviceDetailSheetToggleTests {
         )
     }
 
-    // MARK: - AC #1: Toggle visible iff autoDetectedTier != .software
+    // MARK: - AC #1: Toggle enabled iff autoDetectedTier != .software
 
-    @Test("AC #1: shouldShowToggle returns true when auto tier is .hardware")
-    func toggleVisibleWhenAutoIsHardware() {
-        #expect(DeviceDetailSheet.shouldShowToggle(autoTier: .hardware) == true)
+    @Test("AC #1: canChooseSoftware returns true when auto tier is .hardware")
+    func toggleEnabledWhenAutoIsHardware() {
+        #expect(DeviceDetailSheet.canChooseSoftware(autoTier: .hardware) == true)
     }
 
-    @Test("AC #1: shouldShowToggle returns true when auto tier is .ddc")
-    func toggleVisibleWhenAutoIsDDC() {
-        #expect(DeviceDetailSheet.shouldShowToggle(autoTier: .ddc) == true)
+    @Test("AC #1: canChooseSoftware returns true when auto tier is .ddc")
+    func toggleEnabledWhenAutoIsDDC() {
+        #expect(DeviceDetailSheet.canChooseSoftware(autoTier: .ddc) == true)
     }
 
-    // MARK: - AC #2: Toggle hidden iff autoDetectedTier == .software
+    // MARK: - AC #2: No toggle iff autoDetectedTier == .software
 
-    @Test("AC #2: shouldShowToggle returns false when auto tier is already .software")
+    @Test("AC #2: canChooseSoftware returns false when auto tier is already .software")
     func toggleHiddenWhenAutoIsSoftware() {
-        #expect(DeviceDetailSheet.shouldShowToggle(autoTier: .software) == false)
+        #expect(DeviceDetailSheet.canChooseSoftware(autoTier: .software) == false)
     }
 
     // MARK: - AC #3: Toggle ON ⇒ onOverrideChange(.some(.software))

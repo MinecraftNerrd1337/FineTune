@@ -1,18 +1,17 @@
 <img src="assets/icon.png" width="170" height="170" alt="FineTune 应用图标" align="left"/>
 
-<h3>FineTune</h3>
+<h3>FineTune - ZebraPaw's Fork</h3>
 
-为每一个 App 单独控制音量、把过轻的声音最高放大 4 倍、把音频路由到不同的扬声器，再用 EQ 和耳机曲线把声音调到自己喜欢的样子。常驻菜单栏，免费且开源。
+按 App 调节音量、增益与路由，再为每台输出设备从头到尾打造自己的 EQ：参数滤波器或 GraphicEQ 曲线（Wavelet 与 Equalizer APO 使用的格式），以 Biquad 或卷积方式运行。常驻菜单栏，免费且开源。
 
-<a href="https://github.com/ronitsingh10/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="下载 macOS 版本" height="48"/></a>
+<a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="下载 macOS 版本" height="48"/></a>
 
 <br clear="all"/>
 
 <p align="center">
-  <a href="https://github.com/ronitsingh10/FineTune/releases/latest"><img src="https://img.shields.io/github/v/release/ronitsingh10/FineTune?style=for-the-badge&labelColor=1c1c1e&color=0A84FF&logo=github&logoColor=white" alt="最新版本"></a>
-  <a href="https://github.com/ronitsingh10/FineTune/releases"><img src="https://img.shields.io/github/downloads/ronitsingh10/FineTune/total?style=for-the-badge&labelColor=1c1c1e&color=3a3a3c" alt="下载量"></a>
+  <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest"><img src="https://img.shields.io/github/v/release/MinecraftNerrd1337/FineTune?style=for-the-badge&labelColor=1c1c1e&color=0A84FF&logo=github&logoColor=white" alt="最新版本"></a>
+  <a href="https://github.com/MinecraftNerrd1337/FineTune/releases"><img src="https://img.shields.io/github/downloads/MinecraftNerrd1337/FineTune/total?style=for-the-badge&labelColor=1c1c1e&color=3a3a3c" alt="下载量"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-3a3a3c?style=for-the-badge&labelColor=1c1c1e" alt="许可证：GPL v3"></a>
-  <a href="https://ko-fi.com/ronitsingh10"><img src="https://img.shields.io/badge/Tip_on_Ko--fi-FF5E5B?style=for-the-badge&labelColor=1c1c1e&logo=ko-fi&logoColor=white" alt="在 Ko-fi 打赏"></a>
   <a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-14.2%2B-3a3a3c?style=for-the-badge&labelColor=1c1c1e&logo=apple&logoColor=white" alt="macOS 14.2+"></a>
 </p>
 
@@ -30,15 +29,65 @@
   <img src="assets/screenshot-eq.png" alt="FineTune：Brave 浏览器一行展开，EQ 面板打开，已选中「Vocal Clarity」预设" width="700">
 </p>
 
+## 这个 Fork 新增了什么
+
+Ronit Singh 的 [FineTune](https://github.com/ronitsingh10/FineTune) 在按 App 调节音量和路由方面已经做得很出色。我想在 EQ 上走得更远：不离开菜单栏，就能为自己的耳机和 DAC 打造并细调校正曲线。所以这个 fork 加入了完整的 EQ 编辑器、卷积引擎，以及一些为 DAC 用户准备的功能。
+
+- **真正的 EQ 编辑器** —— 也就是下面介绍的 EQ 管理器。
+- **卷积** —— 预设除了 Biquad，还可以用最小相位或线性相位 FIR 滤波器运行，GraphicEQ 曲线会完全按照画出的样子播放。
+- **Equalizer APO 文件，导入导出都行** —— 导入来自 AutoEQ、Wavelet 或 Equalizer APO 的 ParametricEQ.txt、GraphicEQ.txt，也能把自己的预设导出回去。
+- **为 macOS 控制不了的 DAC 提供真正的音量** —— 一个小小的音量插件使用 DAC 自己的协议，音量键调节的是 DAC 真实的音量，而不是衰减信号。第一个插件支持 iBasso 的 DAC，[指南](guide/volume-plugins.md)介绍了如何为你的 DAC 写一个。
+- **每台 DAC 一套校正** —— 一个 App 同时在多台输出设备上播放时，每台设备保留自己的 AutoEQ 预设和主音量。
+- **跟得上的音量 HUD** —— macOS 26 上的 Liquid Glass HUD，转动 DAC 本身的旋钮时也会出现，开启 macOS 缩放时会停在你正在看的位置。
+
+## EQ 管理器
+
+从菜单栏面板顶部的推子按钮打开。
+
+<p align="center">
+  <img src="assets/screenshot-eq-manager-edit-dark.png" alt="EQ 管理器正在编辑 Sony WH-1000XM4 预设：十个频段既是频响图上的点，也是类型、频率、增益与 Q 值的表格行" width="800">
+</p>
+
+### 逐个频段打造预设
+
+从一个空白预设开始，或者从数千条耳机曲线中的一条开始，然后慢慢塑造：在图上拖动一个点，或输入精确的频率、增益和 Q 值。最多 128 个频段（峰值、低架、高架），一个前级增益，以及滤波器设计时所用的采样率。更喜欢用曲线？预设也可以是一条 GraphicEQ 曲线，也就是 Wavelet 和 Equalizer APO 使用的格式，在那里做好的曲线可以直接拿来用。
+
+下载或导入的配置会作为模板保持原样：修改它们会把你的版本另存为新预设。
+
+### 边改边听
+
+所有改动都会在使用该预设的每台设备上实时播放，无需先保存。在 **Saved** 和 **Edited** 之间切换（或按 ⌘B），就能听出你到底改了什么。
+
+### 用耳朵对比两个预设
+
+把第二个预设放在第一个旁边：两条曲线画在同一张图上，点一下就能切换正在听的那个。FineTune 会自动匹配两者的响度，响一点的那个不会仅仅因为更响而胜出。对比时两个预设都可以编辑。
+
+<p align="center">
+  <img src="assets/screenshot-eq-manager-compare-dark.png" alt="EQ 管理器在同一张图上对比蓝色的 Sony WH-1000XM4 预设与橙色的 Apple AirPods Pro 2 预设" width="800">
+</p>
+
+### 选择播放方式
+
+- **Biquad** —— 经典的参数均衡器。无延迟。
+- **精确 Biquad** —— 同样的滤波器，经过修正，让频谱顶端也和你画出的曲线一致，无论 DAC 的采样率是多少。无延迟。
+- **最小相位 FIR** —— 用卷积精确还原曲线，相位特性与模拟 EQ 相同。无延迟。
+- **线性相位 FIR** —— 精确还原曲线，完全不改变相位，代价是一点延迟；精度由你决定。
+
+### 转换、回退、导出
+
+- **转换**：把曲线变成频段、把频段变成曲线、增减预设的频段数，或把滤波器换到另一个采样率。FineTune 会告诉你结果与原版相差多少。
+- **历史**：保留每次保存所替换的版本，随时可以回退。
+- **导出...**：在预设的右键菜单中，将其存为 ParametricEQ.txt 或 GraphicEQ.txt。
+
+所有细节见 [AutoEQ 指南](guide/autoeq.zh-CN.md)。
+
 ## 安装
 
-**Homebrew**（推荐）
+[下载最新版本](https://github.com/MinecraftNerrd1337/FineTune/releases/latest)，打开 DMG，把 FineTune 拖进「应用程序」文件夹即可。Apple 芯片和 Intel Mac 都原生运行。
 
-```bash
-brew install --cask finetune
-```
+第一次打开时，macOS 不会直接放行：这个 fork 使用自己的证书签名，而不是 Apple Developer ID，因此没有经过 Apple 公证。先尝试打开一次，然后前往 **系统设置 → 隐私与安全性**，点击 **仍要打开**。之后就能正常打开，更新也会自动安装。
 
-**手动安装** —— [下载最新版本](https://github.com/ronitsingh10/FineTune/releases/latest)
+> Homebrew 的 `finetune` cask 安装的是原版 FineTune，而不是这个 fork。
 
 ## 快速上手
 
@@ -73,9 +122,9 @@ brew install --cask finetune
 - **自动恢复** —— 设备重新接入后，相关 App 会自动回到这台设备，并保留原本的音量、路由与 EQ 设置
 
 ### 🎛 EQ 与校正
-- **10 段均衡器** —— 内置 5 大类、共 20 个预设
-- **自定义 EQ 预设** —— 可按 App 保存、重命名和管理你自己的 EQ 配置
-- **AutoEQ 耳机校正** —— 在数千条耳机曲线中搜索，或直接导入自己的 ParametricEQ.txt 文件，为每台设备进行频响校正
+- **EQ 管理器** —— 逐个频段或用一条曲线打造每台设备的 EQ，实时试听，用耳朵对比预设，并可导出。见 [EQ 管理器](#eq-管理器)
+- **AutoEQ 耳机校正** —— 以 AutoEQ 目录中的数千条耳机曲线为起点，可直接使用，也可作为你自己预设的模板
+- **App EQ** —— 为每个 App 提供快速的图示均衡器，内置 5 大类、共 20 个预设，也可保存你自己的预设
 - **响度补偿** —— 在低音量下，依据 ISO 226:2023 等响度曲线自动补偿低频和高频，并实时管理整体电平，让感知响度保持一致
 
 ### 🖥 设备与系统
@@ -104,13 +153,13 @@ brew install --cask finetune
 ## 参与贡献
 
 - **给本仓库点 Star** —— 帮助更多人发现 FineTune
-- **报告 Bug** —— [新建 issue](https://github.com/ronitsingh10/FineTune/issues)
+- **报告 Bug** —— [新建 issue](https://github.com/MinecraftNerrd1337/FineTune/issues)
 - **贡献代码** —— 见 [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ### 从源码构建
 
 ```bash
-git clone https://github.com/ronitsingh10/FineTune.git
+git clone https://github.com/MinecraftNerrd1337/FineTune.git
 cd FineTune
 open FineTune.xcodeproj
 ```
@@ -119,13 +168,6 @@ open FineTune.xcodeproj
 
 - macOS 14.2 (Sonoma) 或更高版本
 - 音频采集权限（首次启动时弹出请求）
-
-## 支持作者
-
-FineTune 永远免费且开源。如果它让你的一天稍微轻松了一点，可以请作者喝杯咖啡 —— 但完全不必勉强 🙏
-
-[![请我喝咖啡](https://img.shields.io/badge/Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/ronitsingh10)
-
 
 ## 许可证
 

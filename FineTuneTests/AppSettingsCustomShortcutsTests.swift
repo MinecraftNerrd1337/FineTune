@@ -9,7 +9,7 @@ struct AppSettingsCustomShortcutsTests {
     @Test("round-trips a custom shortcut")
     func roundTrip() throws {
         var settings = AppSettings()
-        settings.customShortcuts[ShortcutAction.togglePopup.rawValue] =
+        settings.customShortcuts[ShortcutAction.togglePanel.rawValue] =
             ShortcutCodable(keyCode: 9, modifiers: 0x12_0000)
 
         let data = try JSONEncoder().encode(settings)

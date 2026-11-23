@@ -75,7 +75,7 @@ struct AggregatePlanTests {
         #expect(plan.clockDeviceUID == "devA")
     }
 
-    @Test("Multi-device mirroring: stays stacked, order preserved")
+    @Test("Multi-device output: fanned out (one stream per device), order preserved")
     func multiDeviceMirroring() {
         let plan = ProcessTapController.planAggregate(
             outputUIDs: ["a", "b"],
@@ -83,7 +83,9 @@ struct AggregatePlanTests {
             outputStreamCount: { _ in 1 }
         )
         #expect(plan.subDeviceUIDs == ["a", "b"])
-        #expect(plan.isStacked == true)
+        // Each device renders its own buffer, with its own AutoEQ and master volume
+        #expect(plan.isStacked == false)
+        #expect(plan.isFannedOut == true)
         #expect(plan.clockDeviceUID == "a")
     }
 

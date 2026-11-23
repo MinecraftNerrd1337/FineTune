@@ -35,8 +35,8 @@ struct MediaKeyTapDisabledTests {
         )
 
         let status = MediaKeyStatus()
-        let popup = PopupVisibilityService()
-        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, popupVisibility: popup)
+        let menuBarPanel = PanelVisibilityService()
+        let hud = HUDWindowController(settingsManager: settings, mediaKeyStatus: status, panelVisibility: menuBarPanel)
         hud.frameProvider = { NSRect(x: 0, y: 0, width: 1440, height: 900) }
         let accessibility = MockAccessibilityTrustProviding(isTrusted: isTrusted)
         let monitor = MediaKeyMonitor(
@@ -45,7 +45,7 @@ struct MediaKeyTapDisabledTests {
             settingsManager: settings,
             accessibility: accessibility,
             hudController: hud,
-            popupVisibility: popup,
+            panelVisibility: menuBarPanel,
             mediaKeyStatus: status
         )
         return (monitor, status, accessibility)

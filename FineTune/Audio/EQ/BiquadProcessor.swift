@@ -168,6 +168,30 @@ class BiquadProcessor: @unchecked Sendable, BiquadProcessable {
         logger.info("Sample rate: \(oldRate, format: .fixed(precision: 0))Hz → \(newRate, format: .fixed(precision: 0))Hz")
     }
 
+    // MARK: - Cascade for Subclasses
+
+    /// The setup the cascade runs, for a subclass that reads it together with its other
+    /// settings (RT-safe read). Kept valid 500 ms after it is replaced.
+    var cascadeSetup: vDSP_biquad_Setup? { _eqSetup }
+
+    /// Runs `setup` in place on stereo interleaved audio, without the bypass and
+    /// pre-processing of `process`. Audio thread only. RT-safe.
+    func runCascade(_ samples: UnsafeMutablePointer<Float>, frameCount: Int, setup: vDSP_biquad_Setup) {
+        vDSP_biquad(setup, delayBufferL, samples, 2, samples, 2, vDSP_Length(frameCount))
+        vDSP_biquad(setup, delayBufferR, samples.advanced(by: 1), 2, samples.advanced(by: 1), 2, vDSP_Length(frameCount))
+        if samples[0].isNaN || samples[1].isNaN {
+            clearCascadeState()
+            memset(samples, 0, frameCount * 2 * MemoryLayout<Float>.size)
+        }
+    }
+
+    /// Clears the delay buffers from the audio thread, before the cascade plays again after a
+    /// pause (they still hold the audio from when it last played). Audio thread only. RT-safe.
+    func clearCascadeState() {
+        memset(delayBufferL, 0, delayBufferSize * MemoryLayout<Float>.size)
+        memset(delayBufferR, 0, delayBufferSize * MemoryLayout<Float>.size)
+    }
+
     // MARK: - Subclass Hooks
 
     /// Override to provide coefficients for the current state at the current sample rate.

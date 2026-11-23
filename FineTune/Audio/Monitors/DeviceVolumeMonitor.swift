@@ -71,6 +71,7 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
 
     #if !APP_STORE
     private let ddcController: DDCController?
+    private let pluginController: VolumePluginController?
     #endif
 
     /// Volume listeners for each tracked output device
@@ -144,10 +145,16 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
     )
 
     #if !APP_STORE
-    init(deviceMonitor: AudioDeviceMonitor, settingsManager: SettingsManager, ddcController: DDCController? = nil) {
+    init(
+        deviceMonitor: AudioDeviceMonitor,
+        settingsManager: SettingsManager,
+        ddcController: DDCController? = nil,
+        pluginController: VolumePluginController? = nil
+    ) {
         self.deviceMonitor = deviceMonitor
         self.settingsManager = settingsManager
         self.ddcController = ddcController
+        self.pluginController = pluginController
     }
     #else
     init(deviceMonitor: AudioDeviceMonitor, settingsManager: SettingsManager) {
@@ -165,6 +172,24 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
         return autoDetectBackend(for: deviceID)
     }
 
+    func isAwaitingPlugin(_ deviceID: AudioDeviceID) -> Bool {
+        #if !APP_STORE
+        guard deviceID.isValid, let pluginController else { return false }
+        // A tier the user set isn't the plugin's
+        if let uid = deviceMonitor.device(for: deviceID)?.uid,
+           settingsManager.getDeviceVolumeTierOverride(for: uid) != nil {
+            return false
+        }
+        // The device's own volume is used until a plugin drives it, and is no software level
+        if !pluginController.isPluginBacked(deviceID), deviceID.hasOutputVolumeControl() {
+            return false
+        }
+        return pluginController.isAwaitingPlugin(deviceID)
+        #else
+        return false
+        #endif
+    }
+
     /// Returns the tier that auto-detection would pick, ignoring any saved override.
     /// Used by the detail sheet to display the "Auto: <tier>" badge.
     func autoDetectedOutputVolumeBackend(for deviceID: AudioDeviceID) -> VolumeControlTier {
@@ -173,6 +198,13 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
     }
 
     private func autoDetectBackend(for deviceID: AudioDeviceID) -> VolumeControlTier {
+        #if !APP_STORE
+        // A plugin only drives a device once it was chosen for it, by the user or as a new DAC
+        if let pluginController, pluginController.isPluginBacked(deviceID) {
+            return .plugin
+        }
+        #endif
+
         if deviceID.hasOutputVolumeControl() {
             return .hardware
         }
@@ -350,12 +382,12 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
 
     /// Software gain rides the x² curve (`VolumeMapping`), so sub-1% is the bottom ~10%
     /// of slider travel; flooring it would trap that range, since the step path re-derives
-    /// the slider from the stored gain. Hardware/DDC scalars are ~linear — safe to floor.
+    /// the slider from the stored gain. Hardware/DDC/plugin scalars are ~linear — safe to floor.
     nonisolated static func storedVolume(_ volume: Float, tier: VolumeControlTier) -> Float {
         switch tier {
         case .software:
             return volume
-        case .hardware, .ddc:
+        case .hardware, .ddc, .plugin:
             return volume < 0.01 ? 0 : volume
         }
     }
@@ -389,6 +421,20 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
             }
             #else
             logger.warning("DDC volume not available on device \(deviceID)")
+            #endif
+
+        case .plugin:
+            #if !APP_STORE
+            if let pluginController {
+                pluginController.setVolume(for: deviceID, to: clamped)
+                volumes[deviceID] = clamped
+                // As a hardware volume listener would: taps follow the device's level
+                onVolumeChanged?(deviceID, clamped)
+            } else {
+                logger.warning("Failed to set plugin volume on device \(deviceID)")
+            }
+            #else
+            logger.warning("Plugin volume not available on device \(deviceID)")
             #endif
 
         case .software:
@@ -452,6 +498,19 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
             logger.warning("DDC mute not available on device \(deviceID)")
             #endif
 
+        case .plugin:
+            #if !APP_STORE
+            if let pluginController {
+                pluginController.setMute(for: deviceID, to: muted)
+                muteStates[deviceID] = muted
+                onMuteChanged?(deviceID, muted)
+            } else {
+                logger.warning("Failed to set plugin mute on device \(deviceID)")
+            }
+            #else
+            logger.warning("Plugin mute not available on device \(deviceID)")
+            #endif
+
         case .software:
             guard let deviceUID = outputDeviceUID(for: deviceID) else {
                 logger.warning("Cannot persist software mute: missing device UID for \(deviceID)")
@@ -492,6 +551,21 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
         refreshOutputDeviceStates()
     }
     #endif
+
+    /// Re-reads one device's state after it changed by itself, and tells the taps, as the
+    /// hardware volume and mute listeners do.
+    func refreshOutputDeviceState(for deviceID: AudioDeviceID) {
+        guard let device = deviceMonitor.device(for: deviceID) else { return }
+        let previousVolume = volumes[deviceID]
+        let previousMute = muteStates[deviceID]
+        readOneState(for: deviceID, device: device)
+        if let volume = volumes[deviceID], volume != previousVolume {
+            onVolumeChanged?(deviceID, volume)
+        }
+        if let muted = muteStates[deviceID], muted != previousMute {
+            onMuteChanged?(deviceID, muted)
+        }
+    }
 
     // MARK: - Input Device Control
 
@@ -870,7 +944,9 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
     private func handleVolumeChanged(for deviceID: AudioDeviceID) {
         guard deviceID.isValid else { return }
 
-        if outputVolumeBackend(for: deviceID) == .software { return }
+        // Software and plugin levels are FineTune's own; CoreAudio's reading isn't theirs
+        let backend = outputVolumeBackend(for: deviceID)
+        if backend == .software || backend == .plugin { return }
 
         #if !APP_STORE
         // DDC-backed devices don't have real CoreAudio volume changes;
@@ -936,7 +1012,9 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
 
     private func handleMuteChanged(for deviceID: AudioDeviceID) {
         guard deviceID.isValid else { return }
-        if outputVolumeBackend(for: deviceID) == .software { return }
+        // Software and plugin levels are FineTune's own; CoreAudio's reading isn't theirs
+        let backend = outputVolumeBackend(for: deviceID)
+        if backend == .software || backend == .plugin { return }
         let newMuteState = deviceID.readMuteState()
         muteStates[deviceID] = newMuteState
         onMuteChanged?(deviceID, newMuteState)
@@ -971,6 +1049,13 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
         }
 
         #if !APP_STORE
+        // For plugin-backed devices, the level FineTune last sent or the plugin last read
+        if backend == .plugin, let pluginController {
+            volumes[deviceID] = pluginController.getVolume(for: deviceID) ?? 0.5
+            muteStates[deviceID] = pluginController.isMuted(for: deviceID)
+            return
+        }
+
         // For DDC-backed devices, use cached DDC volume instead of CoreAudio
         if backend == .ddc, let ddcController {
             if let ddcVolume = ddcController.getVolume(for: deviceID) {
@@ -1012,8 +1097,14 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
             settingsManager.setSoftwareDeviceMuteState(for: device.uid, to: previousMute)
             if previousMute {
                 _ = deviceID.setMuteState(false)
+                #if !APP_STORE
+                // A plugin-muted DAC would stay silent under the software path
+                if let pluginController, pluginController.isPluginBacked(deviceID) {
+                    pluginController.setMute(for: deviceID, to: false)
+                }
+                #endif
             }
-        case .hardware, .ddc:
+        case .hardware, .ddc, .plugin:
             // Revert to hardware/DDC: if the software path was muted, re-apply
             // that mute at the hardware/DDC layer so the user's mute intent
             // doesn't silently get dropped when the software attenuator is no
@@ -1026,6 +1117,9 @@ final class DeviceVolumeMonitor: DeviceVolumeProviding {
                 #if !APP_STORE
                 if newBackend == .ddc, let ddcController {
                     ddcController.mute(for: deviceID)
+                }
+                if newBackend == .plugin, let pluginController {
+                    pluginController.setMute(for: deviceID, to: true)
                 }
                 #endif
             }

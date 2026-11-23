@@ -1,19 +1,17 @@
 <img src="assets/icon.png" width="170" height="170" alt="FineTune app icon" align="left"/>
 
-<h3>FineTune</h3>
+<h3>FineTune - ZebraPaw's Fork</h3>
 
-Control the volume of every app independently, boost quiet ones up to 4x, route audio to different speakers, and shape your sound with EQ and headphone correction. Lives in your menu bar. Free and open-source.
+Per-app volume, boost and routing, and an EQ for each output device that you build from top to bottom: parametric filters or GraphicEQ curves (as used by Wavelet and Equalizer APO), run as biquads or by convolution. Lives in your menu bar. Free and open-source.
 
-<a href="https://github.com/ronitsingh10/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
+<a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest/download/FineTune.dmg"><img src="assets/download-badge.svg" alt="Download for macOS" height="48"/></a>
 
 <br clear="all"/>
 
 <p align="center">
-  <a href="https://github.com/ronitsingh10/FineTune/releases/latest"><img src="https://img.shields.io/github/v/release/ronitsingh10/FineTune?style=for-the-badge&labelColor=1c1c1e&color=0A84FF&logo=github&logoColor=white" alt="Latest Release"></a>
-  <a href="https://github.com/ronitsingh10/FineTune/releases"><img src="https://img.shields.io/github/downloads/ronitsingh10/FineTune/total?style=for-the-badge&labelColor=1c1c1e&color=3a3a3c" alt="Downloads"></a>
+  <a href="https://github.com/MinecraftNerrd1337/FineTune/releases/latest"><img src="https://img.shields.io/github/v/release/MinecraftNerrd1337/FineTune?style=for-the-badge&labelColor=1c1c1e&color=0A84FF&logo=github&logoColor=white" alt="Latest Release"></a>
+  <a href="https://github.com/MinecraftNerrd1337/FineTune/releases"><img src="https://img.shields.io/github/downloads/MinecraftNerrd1337/FineTune/total?style=for-the-badge&labelColor=1c1c1e&color=3a3a3c" alt="Downloads"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-3a3a3c?style=for-the-badge&labelColor=1c1c1e" alt="License: GPL v3"></a>
-  <a href="https://ko-fi.com/ronitsingh10"><img src="https://img.shields.io/badge/Tip_on_Ko--fi-FF5E5B?style=for-the-badge&labelColor=1c1c1e&logo=ko-fi&logoColor=white" alt="Tip on
-  Ko-fi"></a>
   <a href="https://www.apple.com/macos/"><img src="https://img.shields.io/badge/macOS-14.2%2B-3a3a3c?style=for-the-badge&labelColor=1c1c1e&logo=apple&logoColor=white" alt="macOS 14.2+"></a>
 </p>
 
@@ -28,15 +26,65 @@ Control the volume of every app independently, boost quiet ones up to 4x, route 
   <img src="assets/screenshot-eq.png" alt="FineTune showing the Brave Browser app row expanded with the EQ panel open and a Vocal Clarity preset selected" width="700">
 </p>
 
+## What This Fork Adds
+
+[FineTune](https://github.com/ronitsingh10/FineTune) by Ronit Singh already handles per-app volume and routing beautifully. I wanted more from the EQ side: to build and fine-tune corrections for my own headphones and DACs without leaving the menu bar. So this fork adds a full EQ editor, convolution engines, and a few things for DAC owners.
+
+- **A real EQ editor** — The EQ Manager, below.
+- **Convolution** — Presets can run as minimum-phase or linear-phase FIR filters, not only as biquads, and GraphicEQ curves play exactly as drawn.
+- **Equalizer APO files, both ways** — Bring in a ParametricEQ.txt or GraphicEQ.txt from AutoEQ, Wavelet or Equalizer APO, and export your own presets back to them.
+- **Real volume on DACs macOS can't control** — A small volume plugin speaks the DAC's own protocol, so the volume keys move the DAC's actual level instead of attenuating the signal. The first plugin is for iBasso DACs, and the [guide](guide/volume-plugins.md) shows how to write one for yours.
+- **One correction per DAC** — When an app plays on several outputs at once, each output keeps its own AutoEQ preset and its own master volume.
+- **A volume HUD that keeps up** — A Liquid Glass HUD on macOS 26, which also shows up when you turn the knob on the DAC itself, and stays where you're looking while macOS Zoom is on.
+
+## EQ Manager
+
+Open it from the sliders button at the top of the menu bar panel.
+
+<p align="center">
+  <img src="assets/screenshot-eq-manager-edit-dark.png" alt="The EQ Manager editing the Sony WH-1000XM4 preset: its ten bands as points on the frequency response graph and as rows of type, frequency, gain and Q" width="800">
+</p>
+
+### Build your presets band by band
+
+Start from an empty preset or from one of thousands of headphone profiles, then shape it: drag a point on the graph, or type the exact frequency, gain and Q. Up to 128 bands (peak, low shelf, high shelf), a preamp, and the sample rate the filters were designed for. Rather work with a curve? A preset can also be a GraphicEQ curve, the format Wavelet and Equalizer APO use, so a curve made there plays here as is.
+
+Profiles you download or import stay untouched as templates: changing one saves your version as a new preset.
+
+### Hear it while you edit
+
+Your changes play live on every device that uses the preset, before you save anything. Switch between **Saved** and **Edited** (or press ⌘B) to hear exactly what you changed.
+
+### Compare two presets by ear
+
+Put a second preset beside the first: both curves on one graph, and a click to switch which one you hear. FineTune matches their loudness on its own, so the louder one doesn't win just for being louder. You can edit either while comparing.
+
+<p align="center">
+  <img src="assets/screenshot-eq-manager-compare-dark.png" alt="The EQ Manager comparing the Sony WH-1000XM4 preset, in blue, with the Apple AirPods Pro 2 preset, in orange, on the same graph" width="800">
+</p>
+
+### Choose how it's played
+
+- **Biquad** — The classic parametric EQ. No latency.
+- **Exact biquad** — The same filters, corrected so the top of the spectrum matches the curve you drew, whatever your DAC's sample rate. No latency.
+- **Minimum-phase FIR** — The exact curve, by convolution, with the phase of an analog EQ. No latency.
+- **Linear-phase FIR** — The exact curve with no phase change at all, for a little latency; you choose how precise it is.
+
+### Convert, go back, export
+
+- **Convert** a curve into bands, bands into a curve, a preset to fewer or more bands, or filters to another sample rate. FineTune tells you how far the result strays from the original.
+- **History** keeps the versions each save replaces, so you can always go back.
+- **Export...**, in a preset's right-click menu, saves it as a ParametricEQ.txt or GraphicEQ.txt.
+
+All the details are in the [AutoEQ guide](guide/autoeq.md).
+
 ## Install
 
-**Homebrew** (recommended)
+[Download the latest release](https://github.com/MinecraftNerrd1337/FineTune/releases/latest), open the DMG and drag FineTune to your Applications folder. It runs natively on both Apple silicon and Intel Macs.
 
-```bash
-brew install --cask finetune
-```
+The first time, macOS won't open it right away: this fork is signed with its own certificate rather than an Apple Developer ID, so Apple hasn't notarized it. Open it once, then go to **System Settings → Privacy & Security** and click **Open Anyway**. After that it opens normally, and updates install on their own.
 
-**Manual** — [Download latest release](https://github.com/ronitsingh10/FineTune/releases/latest)
+> The `finetune` Homebrew cask installs the original FineTune, not this fork.
 
 ## Quick Start
 
@@ -71,9 +119,9 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 - **Auto-restore** — When a device reconnects, apps automatically return to it with their volume, routing, and EQ intact
 
 ### 🎛 EQ & Correction
-- **10-band EQ** — 20 presets across 5 categories
-- **User EQ presets** — Save, rename, and manage custom EQ configurations per app
-- **AutoEQ headphone correction** — Search thousands of headphone profiles or import your own ParametricEQ.txt files for per-device frequency response correction
+- **EQ Manager** — Build each device's EQ band by band or as a curve, hear it live, compare presets by ear, and export them. See [EQ Manager](#eq-manager)
+- **AutoEQ headphone correction** — Start from thousands of headphone profiles from the AutoEQ catalog, used as they are or as templates for your own presets
+- **Per-app EQ** — A quick graphic EQ for each app, with 20 presets across 5 categories and your own presets
 - **Loudness compensation** — Automatic bass and treble correction at low volumes using ISO 226:2023 equal-loudness contours, with real-time level management to keep perceived loudness consistent
 
 ### 🖥 Devices & System
@@ -98,19 +146,20 @@ That's it. Adjust sliders, route audio, and explore EQ from the menu bar.
 ## Documentation
 
 - **[AutoEQ & Headphone Correction](guide/autoeq.md)** — Apply frequency correction from the [AutoEQ](https://github.com/jaakkopasanen/AutoEq) project, import [EqualizerAPO](https://sourceforge.net/projects/equalizerapo/) profiles, or browse [autoeq.app](https://www.autoeq.app/)
+- **[Volume Plugins](guide/volume-plugins.md)** — Hardware volume for DACs whose level macOS can't set, through a small plugin that sends the DAC's own commands
 - **[URL Schemes](guide/url-schemes.md)** — Automate FineTune from Terminal, [Shortcuts](https://support.apple.com/guide/shortcuts-mac), [Raycast](https://raycast.com), or scripts
 - **[Troubleshooting](guide/troubleshooting.md)** — Permission issues, missing apps, audio problems
 
 ## Contributing
 
 - **Star this repo** — Help others discover FineTune
-- **Report bugs** — [Open an issue](https://github.com/ronitsingh10/FineTune/issues)
+- **Report bugs** — [Open an issue](https://github.com/MinecraftNerrd1337/FineTune/issues)
 - **Contribute code** — See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/ronitsingh10/FineTune.git
+git clone https://github.com/MinecraftNerrd1337/FineTune.git
 cd FineTune
 open FineTune.xcodeproj
 ```
@@ -119,13 +168,6 @@ open FineTune.xcodeproj
 
 - macOS 14.2 (Sonoma) or later
 - Audio capture permission (prompted on first launch)
-
-## Support
-
-FineTune is free and open source, forever. If it made your day a little easier, you can buy me a coffee — but genuinely not expected 🙏
-
-[![Buy me a coffee](https://img.shields.io/badge/Buy_me_a_coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/ronitsingh10)
-
 
 ## License
 

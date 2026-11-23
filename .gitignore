@@ -37,3 +37,9 @@ scripts/spikes/
 
 # Brainstorming session artifacts
 .superpowers/
+
+# Xcode state of local packages
+**/.swiftpm/xcode/xcuserdata/
+
+# Pictures painted by scripts/snapshots.sh: copy the ones the README uses into assets
+assets/snapshots/
