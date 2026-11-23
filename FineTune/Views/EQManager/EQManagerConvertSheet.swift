@@ -197,9 +197,6 @@ struct EQManagerConvertSheet: View {
         .onAppear(perform: setUp)
         .onDisappear { run.cancel() }
         .onChange(of: settings) { _, _ in settingsChanged() }
-        .onChange(of: run.result?.profile.filters.count) { _, _ in
-            if !isNameEdited { name = suggestedName }
-        }
     }
 
     // MARK: - Options
@@ -350,9 +347,11 @@ struct EQManagerConvertSheet: View {
         switch kind {
         case .toGraphic:
             return "\(source.name) (Graphic)"
-        case .toParametric, .changeBandCount:
-            let count = run.result?.profile.filters.count ?? bandCount
-            return "\(source.name) (\(count == 1 ? "1 band" : "\(count) bands"))"
+        // No band count: the result may have another number of bands than the one asked for
+        case .toParametric:
+            return "\(source.name) (Parametric)"
+        case .changeBandCount:
+            return "\(source.name) (Refitted)"
         case .changeBaseRate:
             return "\(source.name) (\(AutoEQBaseRate.label(baseRate)))"
         }
