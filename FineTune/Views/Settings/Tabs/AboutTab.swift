@@ -8,10 +8,6 @@ struct AboutTab: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 
-    private var buildNumber: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-    }
-
     private var yearText: String {
         let startYear = 2026
         let currentYear = Calendar.current.component(.year, from: .now)
@@ -32,7 +28,7 @@ struct AboutTab: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(DesignTokens.Colors.textPrimary)
 
-                Text("Version \(versionShort) (\(buildNumber))")
+                Text("Version \(versionShort)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
