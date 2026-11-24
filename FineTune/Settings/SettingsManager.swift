@@ -61,6 +61,7 @@ nonisolated struct AppSettings: Codable, Equatable {
     var fineTuneHUDEnabled: Bool = true            // FineTune's HUD for the default output device, else none
     var hudAbsolutePosition: Bool = false          // Under macOS Zoom, the HUD in the part of the screen shown
     var hudLiquidGlass: Bool = true                // The HUD on Liquid Glass (macOS 26+), else on a blur
+    var hudDisplay: HUDDisplay = .active          // The screen the HUD shows on
     var volumeHotkeyStep: VolumeHotkeyStep = .normal  // Slider-domain step per keypress; user-configurable
 
     // Global Hotkeys
@@ -110,6 +111,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         fineTuneHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .fineTuneHUDEnabled) ?? true
         hudAbsolutePosition = try c.decodeIfPresent(Bool.self, forKey: .hudAbsolutePosition) ?? false
         hudLiquidGlass = try c.decodeIfPresent(Bool.self, forKey: .hudLiquidGlass) ?? true
+        hudDisplay = try c.decodeIfPresent(HUDDisplay.self, forKey: .hudDisplay) ?? .active
         volumeHotkeyStep = try c.decodeIfPresent(VolumeHotkeyStep.self, forKey: .volumeHotkeyStep) ?? .normal
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system

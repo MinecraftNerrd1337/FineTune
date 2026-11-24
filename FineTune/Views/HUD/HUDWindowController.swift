@@ -46,7 +46,8 @@ final class HUDWindowController: MediaKeyHUDPresenting {
     private nonisolated(unsafe) var settingsChangedObserver: NSObjectProtocol?
 
     var hideDelayOverride: Duration?
-    var frameProvider: () -> NSRect? = { NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame }
+    /// The visible frame the HUD is placed in; nil uses the screen chosen in Settings (tests set it)
+    var frameProvider: (() -> NSRect?)?
     var zoomProvider: () -> ZoomViewport.Area? = { ZoomViewport.current() }
     private(set) var showCallCount: Int = 0
     private(set) var showDidUpdatePanel: Bool = false
@@ -412,7 +413,9 @@ final class HUDWindowController: MediaKeyHUDPresenting {
                 marginScale: zoom.factor
             )
         }
-        let frame = frameProvider() ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let frame = frameProvider?()
+            ?? Self.screen(for: settingsManager.appSettings.hudDisplay)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         return Self.computePosition(
             style: style,
             size: size,
@@ -542,6 +545,16 @@ final class HUDWindowController: MediaKeyHUDPresenting {
 
     private func reduceMotionEnabled() -> Bool {
         NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    /// The screen for `display`. `NSScreen.main` is the one with the focused window and the
+    /// active menu bar; the first screen is the main display, which holds the menu bar
+    /// when every display does not have its own.
+    static func screen(for display: HUDDisplay) -> NSScreen? {
+        switch display {
+        case .active: return NSScreen.main ?? NSScreen.screens.first
+        case .main:   return NSScreen.screens.first ?? NSScreen.main
+        }
     }
 
     // MARK: - Fullscreen guard
