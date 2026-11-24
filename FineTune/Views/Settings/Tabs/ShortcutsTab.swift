@@ -99,6 +99,21 @@ struct ShortcutsTab: View {
 
                 SettingsRowDivider()
                 SettingsRow(
+                    "Display",
+                    description: "The screen the HUD shows on: the one you are working on, or the main display"
+                ) {
+                    Picker("", selection: $settings.appSettings.hudDisplay) {
+                        ForEach(HUDDisplay.allCases) { display in
+                            Text(display.description).tag(display)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+
+                SettingsRowDivider()
+                SettingsRow(
                     "Absolute Position",
                     description: "While macOS Zoom magnifies the screen, show the HUD in the part you see"
                 ) {

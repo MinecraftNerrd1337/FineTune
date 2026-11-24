@@ -23,5 +23,13 @@
       <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
     </item>
     -->
+        <item>
+            <title>2.0.0</title>
+            <pubDate>Mon, 23 Nov 2026 20:54:00 +0100</pubDate>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>2.0.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/MinecraftNerrd1337/FineTune/releases/download/v2.0.0/FineTune.dmg" length="7237110" type="application/octet-stream" sparkle:edSignature="grBv+Y8vb+DZ2b3T1yFFx3QqpmFciRtK/wlIqAnMRCFA88salypm0AEktKZp6z/oushR0GtkCYaqd+5XgudLAw=="/>
+        </item>
     </channel>
 </rss>

@@ -52,6 +52,8 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Tapping a call app desyncs macOS's acoustic echo canceller reference,
     // which leaks echo to the far end and ducks the call's output (#113, #404).
     var callPassthroughEnabled: Bool = true
+    // Keep FineTune's output at full level while a call app ducks the Mac (`CallDuckingGuard`).
+    var keepVolumeDuringCalls: Bool = true
 
     // Media Keys & HUD
     var hudStyle: HUDStyle = .tahoe                // Visual style of the volume HUD
@@ -59,6 +61,7 @@ nonisolated struct AppSettings: Codable, Equatable {
     var fineTuneHUDEnabled: Bool = true            // FineTune's HUD for the default output device, else none
     var hudAbsolutePosition: Bool = false          // Under macOS Zoom, the HUD in the part of the screen shown
     var hudLiquidGlass: Bool = true                // The HUD on Liquid Glass (macOS 26+), else on a blur
+    var hudDisplay: HUDDisplay = .active          // The screen the HUD shows on
     var volumeHotkeyStep: VolumeHotkeyStep = .normal  // Slider-domain step per keypress; user-configurable
 
     // Global Hotkeys
@@ -102,11 +105,13 @@ nonisolated struct AppSettings: Codable, Equatable {
         perDeviceMixingEnabled = try c.decodeIfPresent(Bool.self, forKey: .perDeviceMixingEnabled) ?? false
         startGuardEnabled = try c.decodeIfPresent(Bool.self, forKey: .startGuardEnabled) ?? true
         callPassthroughEnabled = try c.decodeIfPresent(Bool.self, forKey: .callPassthroughEnabled) ?? true
+        keepVolumeDuringCalls = try c.decodeIfPresent(Bool.self, forKey: .keepVolumeDuringCalls) ?? true
         hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .tahoe
         mediaKeyControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediaKeyControlEnabled) ?? true
         fineTuneHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .fineTuneHUDEnabled) ?? true
         hudAbsolutePosition = try c.decodeIfPresent(Bool.self, forKey: .hudAbsolutePosition) ?? false
         hudLiquidGlass = try c.decodeIfPresent(Bool.self, forKey: .hudLiquidGlass) ?? true
+        hudDisplay = try c.decodeIfPresent(HUDDisplay.self, forKey: .hudDisplay) ?? .active
         volumeHotkeyStep = try c.decodeIfPresent(VolumeHotkeyStep.self, forKey: .volumeHotkeyStep) ?? .normal
         customShortcuts = try c.decodeIfPresent([String: ShortcutCodable].self, forKey: .customShortcuts) ?? [:]
         appearance = try c.decodeIfPresent(AppearancePreference.self, forKey: .appearance) ?? .system

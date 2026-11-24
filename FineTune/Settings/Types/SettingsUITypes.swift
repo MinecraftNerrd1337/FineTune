@@ -30,6 +30,25 @@ enum MenuBarIconStyle: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - HUD Display
+
+/// The screen the HUD shows on.
+enum HUDDisplay: String, Codable, CaseIterable, Identifiable, CustomStringConvertible {
+    /// The screen you are working on: the one with the focused window and the active menu bar
+    case active
+    /// The main display, the one set to show the menu bar in System Settings
+    case main
+
+    var id: String { rawValue }
+
+    var description: String {
+        switch self {
+        case .active: return "Active Display"
+        case .main:   return "Main Display"
+        }
+    }
+}
+
 // MARK: - HUD Style
 
 /// Style of the on-screen HUD shown when media keys drive FineTune's volume.
