@@ -1758,10 +1758,14 @@ final class AudioEngine {
             appDeviceRouting[pid] = targetUID
         }
 
+        // Every live tap, not only the apps streaming right now. An app often stops its output
+        // for a moment while the devices change (AirPods connecting, for instance): it leaves
+        // `apps`, but keeps its tap for the cleanup grace period. Skipped here, that tap came
+        // back on the old device once the app played again, and stayed there, silent on the
+        // new default, until the user switched outputs by hand.
         var tapsToSwitch: [(app: AudioApp, tap: any ProcessTapControlling)] = []
-        for app in apps {
-            guard followers.contains(app.id), let tap = taps[app.id] else { continue }
-            tapsToSwitch.append((app, tap))
+        for (pid, tap) in taps where followers.contains(pid) {
+            tapsToSwitch.append((tap.app, tap))
         }
         guard !tapsToSwitch.isEmpty else { return }
 
@@ -2152,13 +2156,37 @@ final class AudioEngine {
     }
 
     /// Returns the preferred tap source device UID for stream-specific capture.
+    /// See `streamTapSourceUID` for which apps get one.
+    private func preferredTapSourceDeviceUID(forOutputUIDs outputUIDs: [String], isFollowsDefault: Bool) -> String? {
+        Self.streamTapSourceUID(
+            forOutputUIDs: outputUIDs,
+            isFollowsDefault: isFollowsDefault,
+            defaultUID: deviceVolumeMonitor.defaultDeviceUID,
+            isBluetooth: { self.deviceMonitor.device(for: $0)?.id.isBluetoothDevice() ?? false }
+        )
+    }
+
+    /// The device whose own stream an app's tap captures, or nil for the stereo mixdown.
+    ///
     /// Only follows-default apps use stream-specific taps (multichannel preserved, tap always
     /// valid because the app switches device when default changes). Explicitly-routed apps
     /// always use stereo mixdown (nil) — their tap never goes stale when the default changes.
-    private func preferredTapSourceDeviceUID(forOutputUIDs outputUIDs: [String], isFollowsDefault: Bool) -> String? {
+    ///
+    /// A Bluetooth default gets the mixdown too. It is stereo, so its own stream holds nothing
+    /// the mixdown loses, and that stream can be empty: AirPods Max on a USB-C cable stay the
+    /// Bluetooth device in the output list, but macOS plays their audio through a hidden USB
+    /// device. A tap on the Bluetooth stream then captures silence while it still mutes the app,
+    /// and every app goes quiet (ronitsingh10/FineTune#491). The mixdown follows the app's audio
+    /// to whichever device actually plays it.
+    static func streamTapSourceUID(
+        forOutputUIDs outputUIDs: [String],
+        isFollowsDefault: Bool,
+        defaultUID: String?,
+        isBluetooth: (String) -> Bool
+    ) -> String? {
         guard isFollowsDefault else { return nil }
-        guard let defaultUID = deviceVolumeMonitor.defaultDeviceUID else { return nil }
-        return outputUIDs.contains(defaultUID) ? defaultUID : nil
+        guard let defaultUID, outputUIDs.contains(defaultUID) else { return nil }
+        return isBluetooth(defaultUID) ? nil : defaultUID
     }
 
     /// Internal rather than private so tests can run a stale pass without waiting out the debounce.
@@ -2197,8 +2225,8 @@ final class AudioEngine {
             // Don't remove from appliedPIDs — the tap is still alive and the aggregate
             // device is still running. The process just transiently stopped audio I/O
             // during a device change (kAudioProcessPropertyIsRunning flicker).
-            // Device routing is already handled by routeFollowsDefaultApps (follows-default)
-            // or stays put (explicit routing). Re-processing would cause an unnecessary
+            // Device routing is already handled by routeFollowsDefaultApps (follows-default,
+            // which switches pending taps too) or stays put (explicit routing). Re-processing would cause an unnecessary
             // crossfade that interrupts audio.
             logger.debug("Cancelled pending cleanup for PID \(pid) - app reappeared")
         }
