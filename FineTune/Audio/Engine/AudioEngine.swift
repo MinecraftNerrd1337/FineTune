@@ -35,6 +35,8 @@ final class AudioEngine {
     private let mixerRegistry: DeviceMixerRegistry
     /// Mutes apps from their first sample until their tap carries them. Nil in tests.
     private let startGuard: StartGuard?
+    /// Keeps the output of tapped apps at full level while a call app ducks the Mac.
+    let callDuckingGuard: CallDuckingGuard
     private var startGuardState = StartGuardPolicy.State()
     private var startGuardPending = false
     private var startGuardTask: Task<Void, Never>?
@@ -267,6 +269,11 @@ final class AudioEngine {
         // Real taps only, in the running app: tests never mute the Mac they run on
         self.startGuard = tapFactory == nil && startMonitorsAutomatically
             ? StartGuard() : nil
+        // Same rule: tests never send duck requests to the Mac's devices
+        self.callDuckingGuard = CallDuckingGuard(
+            isEnabled: manager.appSettings.keepVolumeDuringCalls,
+            duck: tapFactory == nil && startMonitorsAutomatically ? CallDuckingGuard.systemDuckFunction() : nil
+        )
 
         // Tap factory: use provided factory or default to ProcessTapController
         if let factory = tapFactory {
@@ -458,11 +465,13 @@ final class AudioEngine {
 
         deviceMonitor.onDeviceDisconnected = { [weak self] deviceUID, deviceName in
             self?.handleDeviceDisconnected(deviceUID, name: deviceName)
+            self?.refreshCallDuckingGuard()
             self?.bluetoothDeviceMonitor.refresh()
         }
 
         deviceMonitor.onDeviceConnected = { [weak self] deviceUID, deviceName in
             self?.handleDeviceConnected(deviceUID, name: deviceName)
+            self?.refreshCallDuckingGuard()
             self?.bluetoothDeviceMonitor.notifyDeviceAppearedInCoreAudio()
         }
 
@@ -677,6 +686,18 @@ final class AudioEngine {
         if enabled { startGuardIfNeeded() } else { stopStartGuard() }
     }
 
+    // MARK: - Call Ducking
+
+    func setKeepVolumeDuringCalls(_ enabled: Bool) {
+        callDuckingGuard.setEnabled(enabled)
+        refreshCallDuckingGuard()
+    }
+
+    /// Holds the guard's request on every output device, and only those.
+    private func refreshCallDuckingGuard() {
+        callDuckingGuard.update(outputDeviceIDs: outputDevices.map(\.id))
+    }
+
     /// Holds every app FineTune will tap and has no tap carrying yet, lets the rest go.
     private func reconcileStartGuard() {
         guard let startGuard, startGuardActive,
@@ -800,6 +821,7 @@ final class AudioEngine {
         deviceMonitor.start()
         startGuardIfNeeded()
         applyPersistedSettings()
+        refreshCallDuckingGuard()
         if permission.status == .authorized {
             startHealthMonitor()
         }
@@ -814,6 +836,7 @@ final class AudioEngine {
 
     func stop() {
         stopHealthMonitor()
+        callDuckingGuard.releaseAll()
         routingRebuildTask?.cancel()
         routingRebuildTask = nil
         stopStartGuard()
@@ -846,6 +869,7 @@ final class AudioEngine {
         // 1. Clear persisted state
         settingsManager.resetAllSettings()
         setStartGuardEnabled(settingsManager.appSettings.startGuardEnabled)
+        setKeepVolumeDuringCalls(settingsManager.appSettings.keepVolumeDuringCalls)
 
         // 2. Clear in-memory routing and tracking state
         appliedPIDs.removeAll()
@@ -2357,6 +2381,9 @@ final class AudioEngine {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
+
+                // A device whose ID changed without a connect event gets its request back
+                self.refreshCallDuckingGuard()
 
                 // Skip entirely when no taps exist — avoids unnecessary work at idle (#176)
                 guard !self.taps.isEmpty else { continue }

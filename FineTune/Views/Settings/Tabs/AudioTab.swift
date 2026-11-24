@@ -52,6 +52,9 @@ struct AudioTab: View {
         .onChange(of: settings.appSettings.callPassthroughEnabled) { _, _ in
             audioEngine.reconcileCallPassthrough()
         }
+        .onChange(of: settings.appSettings.keepVolumeDuringCalls) { _, newValue in
+            audioEngine.setKeepVolumeDuringCalls(newValue)
+        }
         .onChange(of: settings.appSettings.perDeviceMixingEnabled) { _, _ in
             audioEngine.reconcileRoutingMode()
         }
@@ -93,6 +96,16 @@ struct AudioTab: View {
                 description: "Leave apps untouched while they use the microphone — fixes quiet call audio and echo"
             ) {
                 Toggle("", isOn: $settings.appSettings.callPassthroughEnabled)
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .labelsHidden()
+            }
+            SettingsRowDivider()
+            SettingsRow(
+                "Keep Volume During Calls",
+                description: "Stop FaceTime and other calls from turning your other apps down"
+            ) {
+                Toggle("", isOn: $settings.appSettings.keepVolumeDuringCalls)
                     .toggleStyle(.switch)
                     .controlSize(.small)
                     .labelsHidden()

@@ -52,6 +52,8 @@ nonisolated struct AppSettings: Codable, Equatable {
     // Tapping a call app desyncs macOS's acoustic echo canceller reference,
     // which leaks echo to the far end and ducks the call's output (#113, #404).
     var callPassthroughEnabled: Bool = true
+    // Keep FineTune's output at full level while a call app ducks the Mac (`CallDuckingGuard`).
+    var keepVolumeDuringCalls: Bool = true
 
     // Media Keys & HUD
     var hudStyle: HUDStyle = .tahoe                // Visual style of the volume HUD
@@ -102,6 +104,7 @@ nonisolated struct AppSettings: Codable, Equatable {
         perDeviceMixingEnabled = try c.decodeIfPresent(Bool.self, forKey: .perDeviceMixingEnabled) ?? false
         startGuardEnabled = try c.decodeIfPresent(Bool.self, forKey: .startGuardEnabled) ?? true
         callPassthroughEnabled = try c.decodeIfPresent(Bool.self, forKey: .callPassthroughEnabled) ?? true
+        keepVolumeDuringCalls = try c.decodeIfPresent(Bool.self, forKey: .keepVolumeDuringCalls) ?? true
         hudStyle = try c.decodeIfPresent(HUDStyle.self, forKey: .hudStyle) ?? .tahoe
         mediaKeyControlEnabled = try c.decodeIfPresent(Bool.self, forKey: .mediaKeyControlEnabled) ?? true
         fineTuneHUDEnabled = try c.decodeIfPresent(Bool.self, forKey: .fineTuneHUDEnabled) ?? true
