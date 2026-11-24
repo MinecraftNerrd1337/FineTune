@@ -1460,6 +1460,13 @@ final class ProcessTapController: ProcessTapControlling {
         targetDeviceUIDs = outputUIDs
         currentDeviceUIDs = outputUIDs
 
+        // The new device's own correction from its first buffer, when the engine gave it
+        // beforehand: the previous device's (often none) could play there until the engine
+        // applies it after the switch, louder with a negative preamp.
+        if let first = outputUIDs.first, let known = autoEQProfilesByDevice[first] {
+            autoEQProcessor?.updateProfile(known)
+        }
+
         if let deviceSampleRate = try? primaryResources.aggregateDeviceID.readNominalSampleRate() {
             rampCoefficient = 1 - exp(-1 / (Float(deviceSampleRate) * 0.030))
             eqProcessor?.updateSampleRate(deviceSampleRate)

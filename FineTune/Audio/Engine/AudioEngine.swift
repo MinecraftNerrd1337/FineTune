@@ -1366,6 +1366,8 @@ final class AudioEngine {
         if let tap = taps[app.id] {
             Task {
                 do {
+                    // Its correction and gain, before it plays there
+                    self.prepareOutputs(of: tap, for: [targetUID])
                     try await tap.switchDevice(to: targetUID, preferredTapSourceDeviceUID: preferredTapSourceUID)
                     self.applyTapOutputState(to: tap, for: app.id, deviceUIDs: [targetUID])
                     self.applyAutoEQToTap(tap)
@@ -1637,6 +1639,8 @@ final class AudioEngine {
                 let preferredSource = preferredTapSourceDeviceUID(forOutputUIDs: [deviceUID], isFollowsDefault: followsDefault.contains(app.id))
                 Task {
                     do {
+                        // Its correction and gain, before it plays there
+                        self.prepareOutputs(of: existingTap, for: [deviceUID])
                         try await existingTap.switchDevice(to: deviceUID, preferredTapSourceDeviceUID: preferredSource)
                         self.applyTapOutputState(to: existingTap, for: app.id, deviceUIDs: [deviceUID])
                         self.applyAutoEQToTap(existingTap)
@@ -1773,6 +1777,8 @@ final class AudioEngine {
             for (app, tap) in tapsToSwitch {
                 do {
                     let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: [targetUID], isFollowsDefault: true)
+                    // Its correction and gain, before it plays there
+                    self.prepareOutputs(of: tap, for: [targetUID])
                     try await tap.switchDevice(to: targetUID, preferredTapSourceDeviceUID: preferredTapSourceUID)
                     self.applyTapOutputState(to: tap, for: app.id, deviceUIDs: [targetUID])
                     self.applyAutoEQToTap(tap)
@@ -1851,6 +1857,8 @@ final class AudioEngine {
                 for (tap, fallbackUID) in singleModeTapsToSwitch {
                     do {
                         let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: [fallbackUID], isFollowsDefault: true)
+                        // Its correction and gain, before it plays there
+                        self.prepareOutputs(of: tap, for: [fallbackUID])
                         try await tap.switchDevice(to: fallbackUID, preferredTapSourceDeviceUID: preferredTapSourceUID, sourceDeviceDead: true)
                         self.applyTapOutputState(to: tap, for: tap.app.id, deviceUIDs: [fallbackUID])
                         self.applyAutoEQToTap(tap)
@@ -1926,6 +1934,8 @@ final class AudioEngine {
                 for tap in tapsToSwitch {
                     do {
                         let preferredTapSourceUID = self.preferredTapSourceDeviceUID(forOutputUIDs: [deviceUID], isFollowsDefault: false)
+                        // Its correction and gain, before it plays there
+                        self.prepareOutputs(of: tap, for: [deviceUID])
                         try await tap.switchDevice(to: deviceUID, preferredTapSourceDeviceUID: preferredTapSourceUID)
                         self.applyTapOutputState(to: tap, for: tap.app.id, deviceUIDs: [deviceUID])
                         self.applyAutoEQToTap(tap)

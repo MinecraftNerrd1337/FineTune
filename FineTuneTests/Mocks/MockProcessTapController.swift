@@ -128,8 +128,12 @@ final class MockProcessTapController: ProcessTapControlling {
             throw NSError(domain: "MockProcessTapController", code: -2)
         }
         events.append(.switchDevice(to: newDeviceUID, preferredTapSourceDeviceUID: preferredTapSourceDeviceUID, sourceDeviceDead: sourceDeviceDead))
+        profileIDsKnownAtLastSwitch = autoEQProfileIDsByDevice
         currentDeviceUIDs = [newDeviceUID]
     }
+
+    /// `autoEQProfileIDsByDevice` as it stood when the last `switchDevice` began.
+    private(set) var profileIDsKnownAtLastSwitch: [String: String?] = [:]
 
     func updateDevices(to newDeviceUIDs: [String], preferredTapSourceDeviceUID: String?, sourceDeviceDead: Bool) async throws {
         if switchShouldThrow {

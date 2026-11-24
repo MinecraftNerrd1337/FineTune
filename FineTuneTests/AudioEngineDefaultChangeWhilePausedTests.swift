@@ -3,7 +3,9 @@
 // An app often stops its output for a moment while the devices change (AirPods connecting,
 // for instance). It drops out of the engine's app list but keeps its tap for the cleanup grace
 // period. A default change during that moment must still move its tap; before, the tap came
-// back on the old device when the app played again, silent on the new default.
+// back on the old device when the app played again, silent on the new default. A switch also
+// hands the tap the new device's correction first, so its first buffers there are not played
+// without the preamp.
 
 import Testing
 import Foundation
@@ -102,5 +104,21 @@ struct AudioEngineDefaultChangeWhilePausedTests {
 
         #expect(tap.currentDeviceUIDs == [fix.b.uid])
         #expect(fix.engine.getDeviceUID(for: app) == fix.b.uid)
+    }
+
+    @Test("A tap knows the new device's correction before it switches, so its first buffers there are corrected")
+    func correctionKnownBeforeSwitch() async throws {
+        let app = AudioApp(id: 2201, processObjectIDs: [], name: "Player", icon: NSImage(), bundleID: "com.test.paused-default.eq")
+        let fix = makePausedFixture(app: app)
+        fix.engine.setDevice(for: app, deviceUID: nil)
+        await fix.settle()
+        let tap = try #require(fix.log.tap(forPID: 2201))
+
+        fix.changeDefault(to: fix.b)
+        await fix.settle()
+
+        // These test devices do not support AutoEQ: the tap is told "no correction" up front
+        let known = try #require(tap.profileIDsKnownAtLastSwitch[fix.b.uid])
+        #expect(known == nil)
     }
 }
