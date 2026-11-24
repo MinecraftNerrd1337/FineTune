@@ -24,6 +24,14 @@
     </item>
     -->
         <item>
+            <title>2.0.1</title>
+            <pubDate>Tue, 24 Nov 2026 13:36:56 +0100</pubDate>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>2.0.1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/MinecraftNerrd1337/FineTune/releases/download/v2.0.1/FineTune.dmg" length="7243828" type="application/octet-stream" sparkle:edSignature="TWF5buJYv9NGF6XjrlPK/NoeJnxtPb0NaxKzBHMQievlllmlxQGhL0wEXAhxCRMyzBDzwC3QTGqYuqsYC/j6Cw=="/>
+        </item>
+        <item>
             <title>2.0.0</title>
             <pubDate>Mon, 23 Nov 2026 20:54:00 +0100</pubDate>
             <sparkle:version>2</sparkle:version>
